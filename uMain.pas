@@ -66,12 +66,14 @@ type
     FLastRCtrlTime: DWORD;      // Время последнего нажатия ПРАВОГО Ctrl
     FRCtrlPressed: Boolean;     // Флаг ожидания второго ПРАВОГО Ctrl
     procedure WndProc(var Message: TMessage); override;
-    procedure DoConvertSelected;
+    procedure DoConvert;
     procedure DoChangeCase(ToUpper: Boolean);
     procedure DoInvertCase;
-    procedure DoConvert;          // Универсальная конвертация (слово или выделение)
     procedure SwitchGlobalLayout(ToLangID: Word);
     function HasSelectionInActiveWindow: Boolean;
+    function GetWordAtCursor(out Text: WideString): Boolean;
+    function TryGetTargetText(out Text: WideString; out IsSelection: Boolean): Boolean;
+    function VKBufferToString: WideString;
     procedure SimulateCopy;
     procedure SimulatePaste;
     function ConvertLayout(const S: WideString): WideString;
@@ -126,6 +128,23 @@ const
   RuChars: WideString = '''
   ё1234567890-=йцукенгшщзхъфывапролджэ\ячсмитьбю.Ё!"№;%:?*()_+ЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭ/ЯЧСМИТЬБЮ,
   ''';
+
+type
+  // Для GetGUIThreadInfo (координаты каретки)
+  TMyGUIThreadInfo = record
+    cbSize: DWORD;
+    flags: DWORD;
+    hwndActive: HWND;
+    hwndFocus: HWND;
+    hwndCapture: HWND;
+    hwndMenuOwner: HWND;
+    hwndMoveSize: HWND;
+    hwndCaret: HWND;
+    rcCaret: TRect;
+  end;
+
+function MyGetGUIThreadInfo(idThread: DWORD; var lpgui: TMyGUIThreadInfo): BOOL; stdcall;
+  external 'user32.dll' name 'GetGUIThreadInfo';
 
 procedure AddToStartup(const AppName, AppPath: string);
 var
@@ -304,39 +323,7 @@ begin
       end;
     end;
 
-//    // --- Горячие клавиши регистра (Ctrl+Shift+Up/Down) ---
-//    if wParam = WM_KEYDOWN then
-//    begin
-//      if (pkbhs^.vkCode = ord('U')) and
-//         (GetAsyncKeyState(VK_CONTROL) < 0) and
-//         (GetAsyncKeyState(VK_MENU) < 0) and
-//         (GetAsyncKeyState(VK_SHIFT) < 0) then
-//      begin
-//        if not IsConverting then
-//        begin
-//          IsConverting := True;
-//          PostMessage(FormMain.Handle, WM_DO_UPPERCASE, 0, 0);
-//        end;
-//        Result := 1;
-//        Exit;
-//      end;
-//
-//      if (pkbhs^.vkCode = ord('L')) and
-//         (GetAsyncKeyState(VK_CONTROL) < 0) and
-//         (GetAsyncKeyState(VK_MENU) < 0) and
-//         (GetAsyncKeyState(VK_SHIFT) < 0) then
-//      begin
-//        if not IsConverting then
-//        begin
-//          IsConverting := True;
-//          PostMessage(FormMain.Handle, WM_DO_LOWERCASE, 0, 0);
-//        end;
-//        Result := 1;
-//        Exit;
-//      end;
-//    end;
-
-    // --- ОБРАБОТКА ДВОЙНОГО CTRL (регистр) ---
+    // --- ДВОЙНОЙ CTRL ---
     if wParam = WM_KEYDOWN then
     begin
       // LCtrl + RCtrl (одновременно) — инвертирование регистра
@@ -714,7 +701,228 @@ begin
 end;
 
 //------------------------------------------------------------------------------
-// Clipboard
+// ДВОЙНОЙ КЛИК МЫШЬЮ в позиции каретки для выделения слова.
+// Если каретка недоступна — fallback на Ctrl+Shift+Left.
+//------------------------------------------------------------------------------
+function TFormMain.GetWordAtCursor(out Text: WideString): Boolean;
+var
+  OldClipboardText: WideString;
+  pt: TPoint;
+  hWnd: Windows.HWND;
+  guiInfo: TMyGUIThreadInfo;
+  cxScreen, cyScreen: Integer;
+  inputs: array[0..5] of TInput;
+begin
+  Result := False;
+  Text := '';
+
+  hWnd := GetForegroundWindow;
+  if hWnd = 0 then Exit;
+
+  // Пытаемся получить позицию каретки
+  ZeroMemory(@guiInfo, SizeOf(guiInfo));
+  guiInfo.cbSize := SizeOf(guiInfo);
+
+  if MyGetGUIThreadInfo(GetWindowThreadProcessId(hWnd, nil), guiInfo) and
+     (guiInfo.hwndCaret <> 0) then
+  begin
+    // --- Есть каретка: двойной клик мышью ---
+    hWnd := guiInfo.hwndCaret;
+    pt.X := guiInfo.rcCaret.Left + (guiInfo.rcCaret.Right - guiInfo.rcCaret.Left) div 2;
+    pt.Y := guiInfo.rcCaret.Top + (guiInfo.rcCaret.Bottom - guiInfo.rcCaret.Top) div 2;
+    Windows.ClientToScreen(hWnd, pt);
+
+    OldClipboardText := GetClipboardTextW;
+    SaveClipboard;
+
+    cxScreen := GetSystemMetrics(SM_CXSCREEN);
+    cyScreen := GetSystemMetrics(SM_CYSCREEN);
+
+    ZeroMemory(@inputs, SizeOf(inputs));
+
+    // Перемещаем мышь абсолютно
+    inputs[0].Itype := INPUT_MOUSE;
+    inputs[0].mi.dx := MulDiv(pt.X, 65535, cxScreen);
+    inputs[0].mi.dy := MulDiv(pt.Y, 65535, cyScreen);
+    inputs[0].mi.dwFlags := MOUSEEVENTF_ABSOLUTE or MOUSEEVENTF_MOVE;
+
+    // Первый клик
+    inputs[1].Itype := INPUT_MOUSE;
+    inputs[1].mi.dwFlags := MOUSEEVENTF_LEFTDOWN;
+    inputs[2].Itype := INPUT_MOUSE;
+    inputs[2].mi.dwFlags := MOUSEEVENTF_LEFTUP;
+
+    // Второй клик (double-click)
+    inputs[3].Itype := INPUT_MOUSE;
+    inputs[3].mi.dwFlags := MOUSEEVENTF_LEFTDOWN;
+    inputs[4].Itype := INPUT_MOUSE;
+    inputs[4].mi.dwFlags := MOUSEEVENTF_LEFTUP;
+
+    SendInput(5, @inputs[0], SizeOf(TInput));
+    Sleep(200);
+
+    SimulateCopy;
+    Text := GetClipboardTextW;
+
+    if (Text <> OldClipboardText) and (Text <> '') and
+       (Pos(' ', Text) = 0) and (Pos(#9, Text) = 0) and
+       (Pos(#10, Text) = 0) and (Pos(#13, Text) = 0) and
+       (Length(Text) < 100) then
+    begin
+      Result := True;
+      // Выделение активно, clipboard содержит слово
+      // Вызывающий код должен вызвать RestoreClipboard после обработки
+    end
+    else
+    begin
+      RestoreClipboard;
+      // Снимаем выделение одиночным кликом
+      inputs[0].Itype := INPUT_MOUSE;
+      inputs[0].mi.dx := MulDiv(pt.X, 65535, cxScreen);
+      inputs[0].mi.dy := MulDiv(pt.Y, 65535, cyScreen);
+      inputs[0].mi.dwFlags := MOUSEEVENTF_ABSOLUTE or MOUSEEVENTF_MOVE;
+      inputs[1].Itype := INPUT_MOUSE;
+      inputs[1].mi.dwFlags := MOUSEEVENTF_LEFTDOWN;
+      inputs[2].Itype := INPUT_MOUSE;
+      inputs[2].mi.dwFlags := MOUSEEVENTF_LEFTUP;
+      SendInput(3, @inputs[0], SizeOf(TInput));
+      Text := '';
+    end;
+    Exit;
+  end;
+
+  // --- Fallback: нет каретки — используем Ctrl+Shift+Left ---
+  OldClipboardText := GetClipboardTextW;
+  SaveClipboard;
+
+  keybd_event(VK_CONTROL, 0, 0, 0);
+  keybd_event(VK_SHIFT, 0, 0, 0);
+  keybd_event(VK_LEFT, 0, 0, 0);
+  keybd_event(VK_LEFT, 0, KEYEVENTF_KEYUP, 0);
+  keybd_event(VK_SHIFT, 0, KEYEVENTF_KEYUP, 0);
+  keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0);
+  Sleep(200);
+
+  SimulateCopy;
+  Text := GetClipboardTextW;
+
+  if (Text <> OldClipboardText) and (Text <> '') and
+     (Pos(' ', Text) = 0) and (Pos(#9, Text) = 0) and
+     (Pos(#10, Text) = 0) and (Pos(#13, Text) = 0) and
+     (Length(Text) < 100) then
+  begin
+    Result := True;
+  end
+  else
+  begin
+    RestoreClipboard;
+    keybd_event(VK_RIGHT, 0, 0, 0);
+    keybd_event(VK_RIGHT, 0, KEYEVENTF_KEYUP, 0);
+    Text := '';
+  end;
+end;
+
+//------------------------------------------------------------------------------
+// Сборка строки из FVKBuffer через текущую раскладку
+//------------------------------------------------------------------------------
+function TFormMain.VKBufferToString: WideString;
+var
+  i: Integer;
+  VK: Byte;
+  Shift: Boolean;
+  kbState: TKeyboardState;
+  buf: array[0..1] of WideChar;
+  hkl: Windows.HKL;
+  threadId: DWORD;
+  scanCode: UINT;
+  ret: Integer;
+begin
+  Result := '';
+  if Length(FVKBuffer) = 0 then Exit;
+
+  threadId := GetWindowThreadProcessId(GetForegroundWindow, nil);
+  hkl := GetKeyboardLayout(threadId);
+
+  for i := 0 to High(FVKBuffer) do
+  begin
+    VK := FVKBuffer[i].VK;
+    Shift := FVKBuffer[i].Shift;
+
+    ZeroMemory(@kbState, SizeOf(kbState));
+    if Shift then kbState[VK_SHIFT] := $80;
+    if (GetAsyncKeyState(VK_CAPITAL) and $0001) <> 0 then kbState[VK_CAPITAL] := $01;
+
+    scanCode := MapVirtualKey(VK, 0);
+    ret := MyToUnicodeEx(VK, scanCode, @kbState, @buf, 2, 0, hkl);
+    if ret > 0 then
+      Result := Result + buf[0];
+  end;
+end;
+
+//------------------------------------------------------------------------------
+// Универсальная функция получения целевого текста.
+// Priority: 1) Выделение  2) FVKBuffer  3) Слово под курсором
+// IsSelection=True  → текст уже выделен, замена через clipboard
+// IsSelection=False → нужно использовать Backspace (только для FVKBuffer)
+//------------------------------------------------------------------------------
+function TFormMain.TryGetTargetText(out Text: WideString; out IsSelection: Boolean): Boolean;
+var
+  OldClipboardText: WideString;
+begin
+  Result := False;
+  Text := '';
+  IsSelection := False;
+
+  // 1. Проверяем выделение через EM_GETSEL
+  if HasSelectionInActiveWindow then
+  begin
+    SaveClipboard;
+    SimulateCopy;
+    Text := GetClipboardTextW;
+    if Text <> '' then
+    begin
+      IsSelection := True;
+      Result := True;
+    end
+    else
+      RestoreClipboard;
+    Exit;
+  end;
+
+  // 2. Fallback: проверяем выделение через clipboard
+  OldClipboardText := GetClipboardTextW;
+  SaveClipboard;
+  SimulateCopy;
+  Text := GetClipboardTextW;
+
+  if (Text <> OldClipboardText) and (Text <> '') and (Length(Text) < 1000) then
+  begin
+    IsSelection := True;
+    Result := True;
+    Exit;
+  end;
+
+  // Не выделение — восстанавливаем буфер
+  RestoreClipboard;
+  Text := '';
+
+  // 3. Последнее введённое слово
+  if Length(FVKBuffer) > 0 then
+  begin
+    Result := True;
+    // IsSelection остаётся False → вызывающий код использует Backspace
+    Exit;
+  end;
+
+  // 4. Слово под курсором (двойной клик мышью или Ctrl+Shift+Left)
+  if GetWordAtCursor(Text) then
+  begin
+    IsSelection := True; // GetWordAtCursor уже выделил слово
+    Result := True;
+    // Вызывающий код должен вызвать RestoreClipboard после обработки
+  end;
+end;
+
 //------------------------------------------------------------------------------
 procedure TFormMain.SimulateCopy;
 begin
@@ -762,7 +970,7 @@ var
   hData: HGLOBAL;
   pData: Pointer;
   Len: Integer;
-  fmtExclude: UINT;  // ← Добавить
+  fmtExclude: UINT;
 begin
   if not OpenClipboard(0) then Exit;
   try
@@ -897,43 +1105,6 @@ begin
 end;
 
 //------------------------------------------------------------------------------
-// Конвертация раскладки и регистра
-//------------------------------------------------------------------------------
-//function TFormMain.ConvertLayout(const S: WideString): WideString;
-//var
-//  i, j: Integer;
-//  Ch: WideChar;
-//  Found: Boolean;
-//begin
-//  Result := '';
-//  for i := 1 to Length(S) do
-//  begin
-//    Ch := S[i];
-//    Found := False;
-//
-//    for j := 1 to Length(EnChars) do
-//      if EnChars[j] = Ch then
-//      begin
-//        Result := Result + RuChars[j];
-//        Found := True;
-//        Break;
-//      end;
-//
-//    if not Found then
-//      for j := 1 to Length(RuChars) do
-//        if RuChars[j] = Ch then
-//        begin
-//          Result := Result + EnChars[j];
-//          Found := True;
-//          Break;
-//        end;
-//
-//    if not Found then
-//      Result := Result + Ch;
-//  end;
-//end;
-
-// Конвертация с АВТООПРЕДЕЛЕНИЕМ направления по содержимому текста
 function TFormMain.ConvertLayout(const S: WideString): WideString;
 var
   i, j: Integer;
@@ -998,9 +1169,8 @@ var
   hForeground: HWND;
   threadId: DWORD;
   hklOriginal: HKL;
-  HasSelection: Boolean;
-  ClipboardText: WideString;
-  OldClipboardText: WideString;   // ← ДОПОЛНИТЕЛЬНАЯ ПЕРЕМЕННАЯ
+  Text: WideString;
+  IsSelection: Boolean;
   i: Integer;
   VK: Byte;
   Shift: Boolean;
@@ -1011,76 +1181,36 @@ var
   Count: Integer;
   ConvertedText: WideString;
   TargetLangID: Word;
-  ClipboardSaved: Boolean;       // ← ФЛАГ: был ли вызван SaveClipboard
 begin
   hForeground := GetForegroundWindow;
   if hForeground = 0 then Exit;
 
-  HasSelection := HasSelectionInActiveWindow;
-  ClipboardText := '';
-  ClipboardSaved := False;
+  if not TryGetTargetText(Text, IsSelection) then Exit;
 
-  // --- Fallback: проверяем через clipboard, сравнивая ДО и ПОСЛЕ ---
-  if not HasSelection then
+  // --- Сценарий 1: Выделение / слово под курсором ---
+  if IsSelection then
   begin
-    OldClipboardText := GetClipboardTextW;  // Запоминаем что было ДО операции
-    SaveClipboard;                          // Сохраняем оригинал для восстановления
-    ClipboardSaved := True;
-    SimulateCopy;
-    ClipboardText := GetClipboardTextW;     // Смотрим что стало ПОСЛЕ
-
-    // Буфер реально изменился — значит Ctrl+C скопировал выделение
-    if (ClipboardText <> OldClipboardText) and
-       (ClipboardText <> '') and
-       (Length(ClipboardText) < 1000) then
-    begin
-      HasSelection := True;
-      // Не восстанавливаем буфер здесь — пусть основной блок работает с актуальным выделением
-    end
-    else
-    begin
-      // Выделения не было — обязательно восстанавливаем буфер и идём в ветку последнего слова
-      RestoreClipboard;
-      ClipboardSaved := False;
-      ClipboardText := '';
-    end;
-  end;
-
-  // --- Конвертация выделенного текста ---
-  if HasSelection then
-  begin
-    // Если выделение определено через HasSelectionInActiveWindow — нужно скопировать
-    if ClipboardText = '' then
-    begin
-      SaveClipboard;
-      ClipboardSaved := True;
-      SimulateCopy;
-      ClipboardText := GetClipboardTextW;
-    end;
-
     try
-      if ClipboardText <> '' then
+      if Text <> '' then
       begin
-        ConvertedText := ConvertLayout(ClipboardText);
+        ConvertedText := ConvertLayout(Text);
         SetClipboardTextW(ConvertedText);
         SimulatePaste;
 
-        if IsCyrillicText(ClipboardText) then
-          TargetLangID := $0409   // Было Ru → переключаем на En
+        if IsCyrillicText(Text) then
+          TargetLangID := $0409
         else
-          TargetLangID := $0419;  // Было En → переключаем на Ru
+          TargetLangID := $0419;
 
         SwitchGlobalLayout(TargetLangID);
       end;
     finally
-      // Восстанавливаем исходный буфер в любом случае, даже если вставка не удалась
-      if ClipboardSaved then
-        RestoreClipboard;
+      RestoreClipboard;
     end;
     Exit;
   end;
 
-  // --- Конвертация последнего слова (clipboard не трогаем) ---
+  // --- Сценарий 2: Последнее введённое слово (FVKBuffer) ---
   Count := Length(FVKBuffer);
   if Count = 0 then Exit;
 
@@ -1150,147 +1280,170 @@ begin
   SwitchGlobalLayout(LangID);
 end;
 
-
-// Конвертация выделенного текста через clipboard
-procedure TFormMain.DoConvertSelected;
-var
-  Text: WideString;
-begin
-  SaveClipboard;
-  try
-    SimulateCopy;
-    Text := GetClipboardTextW;
-    if Text <> '' then
-    begin
-      SetClipboardTextW(ConvertLayout(Text));
-      SimulatePaste;
-    end;
-  finally
-    RestoreClipboard;
-  end;
-end;
-
-// Инвертирование регистра выделенного текста
-procedure TFormMain.DoInvertCase;
-var
-  Text, ResultText: WideString;
-  i: Integer;
-  Ch: WideChar;
-  OldClipboardText: WideString;
-  HasSelection: Boolean;
-  ClipboardSaved: Boolean;
-begin
-  HasSelection := HasSelectionInActiveWindow;
-  ClipboardSaved := False;
-
-  // Fallback-проверка: сравниваем clipboard до и после Ctrl+C
-  if not HasSelection then
-  begin
-    OldClipboardText := GetClipboardTextW;
-    SaveClipboard;
-    ClipboardSaved := True;
-    SimulateCopy;
-    Text := GetClipboardTextW;
-
-    // Буфер не изменился — значит выделения не было
-    if (Text = OldClipboardText) or (Text = '') then
-    begin
-      RestoreClipboard;
-      Exit;  // Ничего не делаем
-    end;
-
-    HasSelection := True;
-  end
-  else
-  begin
-    // Выделение определено через HasSelectionInActiveWindow
-    SaveClipboard;
-    ClipboardSaved := True;
-    SimulateCopy;
-    Text := GetClipboardTextW;
-  end;
-
-  try
-    if Text = '' then Exit;
-
-    ResultText := '';
-    for i := 1 to Length(Text) do
-    begin
-      Ch := Text[i];
-      if (Ch >= WideChar('a')) and (Ch <= WideChar('z')) then
-        ResultText := ResultText + WideChar(Ord(Ch) - Ord('a') + Ord('A'))
-      else if (Ch >= WideChar('A')) and (Ch <= WideChar('Z')) then
-        ResultText := ResultText + WideChar(Ord(Ch) - Ord('A') + Ord('a'))
-      else if (Ch >= WideChar('а')) and (Ch <= WideChar('я')) then
-        ResultText := ResultText + WideChar(Ord(Ch) - Ord('а') + Ord('А'))
-      else if (Ch >= WideChar('А')) and (Ch <= WideChar('Я')) then
-        ResultText := ResultText + WideChar(Ord(Ch) - Ord('А') + Ord('а'))
-      else if Ch = WideChar('ё') then
-        ResultText := ResultText + WideChar('Ё')
-      else if Ch = WideChar('Ё') then
-        ResultText := ResultText + WideChar('ё')
-      else
-        ResultText := ResultText + Ch;
-    end;
-
-    SetClipboardTextW(ResultText);
-    SimulatePaste;
-  finally
-    if ClipboardSaved then
-      RestoreClipboard;
-  end;
-end;
-
-// Регистр выделенного текста
+//------------------------------------------------------------------------------
+// ДВОЙНОЙ LCTRL / RCTRL: смена регистра
+//------------------------------------------------------------------------------
 procedure TFormMain.DoChangeCase(ToUpper: Boolean);
 var
   Text: WideString;
-  OldClipboardText: WideString;
-  HasSelection: Boolean;
-  ClipboardSaved: Boolean;
+  IsSelection: Boolean;
+  Count: Integer;
+  i: Integer;
+  scanCode: Byte;
 begin
-  HasSelection := HasSelectionInActiveWindow;
-  ClipboardSaved := False;
+  if not TryGetTargetText(Text, IsSelection) then Exit;
 
-  // Fallback-проверка: сравниваем clipboard до и после Ctrl+C
-  if not HasSelection then
+  // --- Сценарий 1: Выделение / слово под курсором ---
+  if IsSelection then
   begin
-    OldClipboardText := GetClipboardTextW;
-    SaveClipboard;
-    ClipboardSaved := True;
-    SimulateCopy;
-    Text := GetClipboardTextW;
-
-    // Буфер не изменился — значит выделения не было
-    if (Text = OldClipboardText) or (Text = '') then
-    begin
+    try
+      if Text <> '' then
+      begin
+        SetClipboardTextW(ChangeStringCase(Text, ToUpper));
+        SimulatePaste;
+      end;
+    finally
       RestoreClipboard;
-      Exit;  // Ничего не делаем
     end;
-
-    HasSelection := True;
-  end
-  else
-  begin
-    // Выделение определено через HasSelectionInActiveWindow
-    SaveClipboard;
-    ClipboardSaved := True;
-    SimulateCopy;
-    Text := GetClipboardTextW;
+    Exit;
   end;
 
+  // --- Сценарий 2: FVKBuffer ---
+  Count := Length(FVKBuffer);
+  if Count = 0 then Exit;
+
+  // Собираем строку из буфера клавиш
+  Text := VKBufferToString;
+  if Text = '' then
+  begin
+    SetLength(FVKBuffer, 0);
+    Exit;
+  end;
+
+  // Меняем регистр
+  Text := ChangeStringCase(Text, ToUpper);
+
+  // Стираем исходное слово
+  for i := 1 to Count do
+  begin
+    scanCode := Byte(MapVirtualKey(VK_BACK, 0));
+    keybd_event(VK_BACK, scanCode, 0, 0);
+    keybd_event(VK_BACK, scanCode, KEYEVENTF_KEYUP, 0);
+  end;
+  Sleep(50);
+
+  // Вставляем результат через clipboard
+  SaveClipboard;
   try
-    if Text <> '' then
-    begin
-      SetClipboardTextW(ChangeStringCase(Text, ToUpper));
-      SimulatePaste;
-    end;
+    SetClipboardTextW(Text);
+    SimulatePaste;
   finally
-    if ClipboardSaved then
-      RestoreClipboard;
+    RestoreClipboard;
   end;
+
+  SetLength(FVKBuffer, 0);
 end;
 
+//------------------------------------------------------------------------------
+// LCTRL + RCTRL: инвертирование регистра
+//------------------------------------------------------------------------------
+procedure TFormMain.DoInvertCase;
+var
+  Text, ResultText: WideString;
+  IsSelection: Boolean;
+  i: Integer;
+  Ch: WideChar;
+  Count: Integer;
+  scanCode: Byte;
+begin
+  if not TryGetTargetText(Text, IsSelection) then Exit;
+
+  // --- Сценарий 1: Выделение / слово под курсором ---
+  if IsSelection then
+  begin
+    try
+      if Text = '' then Exit;
+
+      ResultText := '';
+      for i := 1 to Length(Text) do
+      begin
+        Ch := Text[i];
+        if (Ch >= WideChar('a')) and (Ch <= WideChar('z')) then
+          ResultText := ResultText + WideChar(Ord(Ch) - Ord('a') + Ord('A'))
+        else if (Ch >= WideChar('A')) and (Ch <= WideChar('Z')) then
+          ResultText := ResultText + WideChar(Ord(Ch) - Ord('A') + Ord('a'))
+        else if (Ch >= WideChar('а')) and (Ch <= WideChar('я')) then
+          ResultText := ResultText + WideChar(Ord(Ch) - Ord('а') + Ord('А'))
+        else if (Ch >= WideChar('А')) and (Ch <= WideChar('Я')) then
+          ResultText := ResultText + WideChar(Ord(Ch) - Ord('А') + Ord('а'))
+        else if Ch = WideChar('ё') then
+          ResultText := ResultText + WideChar('Ё')
+        else if Ch = WideChar('Ё') then
+          ResultText := ResultText + WideChar('ё')
+        else
+          ResultText := ResultText + Ch;
+      end;
+
+      SetClipboardTextW(ResultText);
+      SimulatePaste;
+    finally
+      RestoreClipboard;
+    end;
+    Exit;
+  end;
+
+  // --- Сценарий 2: FVKBuffer ---
+  Count := Length(FVKBuffer);
+  if Count = 0 then Exit;
+
+  // Собираем строку из буфера клавиш
+  Text := VKBufferToString;
+  if Text = '' then
+  begin
+    SetLength(FVKBuffer, 0);
+    Exit;
+  end;
+
+  // Инвертируем регистр
+  ResultText := '';
+  for i := 1 to Length(Text) do
+  begin
+    Ch := Text[i];
+    if (Ch >= WideChar('a')) and (Ch <= WideChar('z')) then
+      ResultText := ResultText + WideChar(Ord(Ch) - Ord('a') + Ord('A'))
+    else if (Ch >= WideChar('A')) and (Ch <= WideChar('Z')) then
+      ResultText := ResultText + WideChar(Ord(Ch) - Ord('A') + Ord('a'))
+    else if (Ch >= WideChar('а')) and (Ch <= WideChar('я')) then
+      ResultText := ResultText + WideChar(Ord(Ch) - Ord('а') + Ord('А'))
+    else if (Ch >= WideChar('А')) and (Ch <= WideChar('Я')) then
+      ResultText := ResultText + WideChar(Ord(Ch) - Ord('А') + Ord('а'))
+    else if Ch = WideChar('ё') then
+      ResultText := ResultText + WideChar('Ё')
+    else if Ch = WideChar('Ё') then
+      ResultText := ResultText + WideChar('ё')
+    else
+      ResultText := ResultText + Ch;
+  end;
+
+  // Стираем и вставляем
+  for i := 1 to Count do
+  begin
+    scanCode := Byte(MapVirtualKey(VK_BACK, 0));
+    keybd_event(VK_BACK, scanCode, 0, 0);
+    keybd_event(VK_BACK, scanCode, KEYEVENTF_KEYUP, 0);
+  end;
+  Sleep(50);
+
+  SaveClipboard;
+  try
+    SetClipboardTextW(ResultText);
+    SimulatePaste;
+  finally
+    RestoreClipboard;
+  end;
+
+  SetLength(FVKBuffer, 0);
+end;
 
 //------------------------------------------------------------------------------
 procedure TFormMain.mniExitClick(Sender: TObject);

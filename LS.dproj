@@ -66,11 +66,13 @@
         <DCC_S>false</DCC_S>
         <DCC_F>false</DCC_F>
         <DCC_K>false</DCC_K>
-        <DCC_Namespace>System;Xml;Data;Datasnap;Web;Soap;Vcl;Vcl.Imaging;Vcl.Touch;Vcl.Samples;Vcl.Shell;$(DCC_Namespace)</DCC_Namespace>
+        <DCC_Namespace>System;Xml;Data;Datasnap;Web;Soap;Vcl;Vcl.Imaging;Vcl.Touch;Vcl.Samples;Vcl.Shell;Windows;$(DCC_Namespace)</DCC_Namespace>
         <Icon_MainIcon>$(BDS)\bin\delphi_PROJECTICON.ico</Icon_MainIcon>
         <UWP_DelphiLogo44>$(BDS)\bin\Artwork\Windows\UWP\delphi_UwpDefault_44.png</UWP_DelphiLogo44>
         <UWP_DelphiLogo150>$(BDS)\bin\Artwork\Windows\UWP\delphi_UwpDefault_150.png</UWP_DelphiLogo150>
         <SanitizedProjectName>LS</SanitizedProjectName>
+        <VerInfo_Locale>1049</VerInfo_Locale>
+        <VerInfo_Keys>CompanyName=Len-A-R Soft;FileDescription=LayoutSwitcher;FileVersion=1.0.0.0;InternalName=LayoutSwitcher;LegalCopyright=len-a-r;LegalTrademarks=;OriginalFilename=LS.exe;ProgramID=com.embarcadero.$(MSBuildProjectName);ProductName=$(MSBuildProjectName);ProductVersion=1.0.0.0;Comments=LayoutSwitcher</VerInfo_Keys>
     </PropertyGroup>
     <PropertyGroup Condition="'$(Base_Win32)'!=''">
         <DCC_UsePackage>vclwinx;fmx;vclie;DbxCommonDriver;bindengine;IndyIPCommon;VCLRESTComponents;FireDACCommonODBC;FireDACCommonDriver;appanalytics;IndyProtocols;vclx;EhLib140_;Skia.Package.RTL;IndyIPClient;dbxcds;vcledge;bindcompvclwinx;FmxTeeUI;bindcompfmx;SynEdit_R;inetdb;vclribbon;FireDACSqliteDriver;DbxClientDriver;Tee;soapmidas;vclactnband;TeeUI;fmxFireDAC;dbexpress;DBXMySQLDriver;VclSmp;inet;StOGLComp;vcltouch;fmxase;StVisComp;dbrtl;Skia.Package.FMX;fmxdae;TeeDB;FireDACMSAccDriver;CustomIPTransport;ZCore;ZParseSql;vcldsnap;DBXInterBaseDriver;IndySystem;Skia.Package.VCL;vcldb;VirtualTreesR;PngComponents;vclFireDAC;bindcomp;FireDACCommon;inetstn;IndyCore;RESTBackendComponents;inetwinsockets;ZPlain;StVirtualStringTree;ZComponent;bindcompdbx;rtl;FireDACMySQLDriver;FireDACADSDriver;RESTComponents;DBXSqliteDriver;vcl;IndyIPServer;dsnapxml;dsnapcon;adortl;DelphiTWAIN_DPK;vclimg;FireDACPgDriver;FireDAC;inetdbxpress;SprutOKPComponents;xmlrtl;tethering;dTimeLine;ZDbc;bindcompvcl;dsnap;CloudService;fmxobj;bindcompvclsmp;FMXTee;soaprtl;soapserver;FireDACIBDriver;$(DCC_UsePackage)</DCC_UsePackage>
