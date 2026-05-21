@@ -10,3 +10,7 @@ $RECYCLE.BIN/
 
 # Windows shortcuts
 *.lnk
+*.dcu
+*.exe
+LS.delphilsp.json
+LS.dsv
