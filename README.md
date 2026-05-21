@@ -46,21 +46,21 @@
 
 ## Архитектура
 
-┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│  Keyboard Hook  │────→│  TFormMain       │────→│  Mouse Hook     │
-│ (WH_KEYBOARD_LL)│     │  (обработка)     │     │  (WH_MOUSE_LL)  │
-└─────────────────┘     └──────────────────┘     └─────────────────┘
-         │                        │
-         ▼                        ▼
-  Двойной Shift/Ctrl      TryGetTargetText()
-         │                        │
-         ▼                        ▼
-  PostMessage(WM_*)       1. HasSelectionInActiveWindow()
-         │                2. Clipboard fallback
-         ▼                3. FVKBuffer (последнее слово)
-    DoConvert()           4. GetWordAtCursor() (двойной клик)
-    DoChangeCase()
-    DoInvertCase()
+    ┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
+    │  Keyboard Hook  │────→│  TFormMain       │────→│  Mouse Hook     │
+    │ (WH_KEYBOARD_LL)│     │  (обработка)     │     │  (WH_MOUSE_LL)  │
+    └─────────────────┘     └──────────────────┘     └─────────────────┘
+            │                        │
+            ▼                        ▼
+    Двойной Shift/Ctrl      TryGetTargetText()
+            │                        │
+            ▼                        ▼
+    PostMessage(WM_*)        1. HasSelectionInActiveWindow()
+            │                2. Clipboard fallback
+            ▼                3. FVKBuffer (последнее слово)
+        DoConvert()          4. GetWordAtCursor() (двойной клик)
+        DoChangeCase()
+        DoInvertCase()
 
 
 
