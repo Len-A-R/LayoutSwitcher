@@ -229,178 +229,213 @@ var
   threadId: DWORD;
   ShiftPressed: Boolean;
   CurrentTime: DWORD;
+  // === ДОБАВЛЕНО: проверка чистоты нажатия ===
+  IsPureShift, IsPureLCtrl, IsPureRCtrl: Boolean;
 begin
-  if nCode = HC_ACTION then
+  // ВСЕГДА передаём дальше, если не обрабатываем
+  Result := CallNextHookEx(hKeyHook, nCode, wParam, lParam);
+
+  if nCode <> HC_ACTION then Exit;
+
+  pkbhs := PMyKBDLLHOOKSTRUCT(lParam);
+
+  // Игнорируем инжектированные (наши собственные) и системные
+  if (pkbhs^.flags and LLKHF_INJECTED) <> 0 then Exit;
+
+  if Assigned(FormMain) then FormMain.CheckWindowChanged;
+
+  // === ПРОВЕРКА: нажатие "чистое" (без других модификаторов) ===
+  // Только если НЕ зажаты Ctrl, Alt, Win — считаем чистым Shift
+  IsPureShift := (pkbhs^.vkCode = VK_SHIFT) or
+                 (pkbhs^.vkCode = VK_LSHIFT) or
+                 (pkbhs^.vkCode = VK_RSHIFT);
+  if IsPureShift then
+    IsPureShift := IsPureShift and
+                   (GetAsyncKeyState(VK_CONTROL) >= 0) and
+                   (GetAsyncKeyState(VK_MENU) >= 0) and
+                   (GetAsyncKeyState(VK_LWIN) >= 0) and
+                   (GetAsyncKeyState(VK_RWIN) >= 0);
+
+  // Только если НЕ зажаты Shift, Alt, Win — считаем чистым LCtrl
+  IsPureLCtrl := (pkbhs^.vkCode = VK_LCONTROL);
+  if IsPureLCtrl then
+    IsPureLCtrl := IsPureLCtrl and
+                   (GetAsyncKeyState(VK_SHIFT) >= 0) and
+                   (GetAsyncKeyState(VK_MENU) >= 0) and
+                   (GetAsyncKeyState(VK_RCONTROL) >= 0) and  // RCtrl тоже не должен быть зажат
+                   (GetAsyncKeyState(VK_LWIN) >= 0) and
+                   (GetAsyncKeyState(VK_RWIN) >= 0);
+
+  // Только если НЕ зажаты Shift, Alt, Win — считаем чистым RCtrl
+  IsPureRCtrl := (pkbhs^.vkCode = VK_RCONTROL);
+  if IsPureRCtrl then
+    IsPureRCtrl := IsPureRCtrl and
+                   (GetAsyncKeyState(VK_SHIFT) >= 0) and
+                   (GetAsyncKeyState(VK_MENU) >= 0) and
+                   (GetAsyncKeyState(VK_LCONTROL) >= 0) and  // LCtrl тоже не должен быть зажат
+                   (GetAsyncKeyState(VK_LWIN) >= 0) and
+                   (GetAsyncKeyState(VK_RWIN) >= 0);
+
+  // --- ОБРАБОТКА ДВОЙНОГО SHIFT (только чистое нажатие) ---
+  if (wParam = WM_KEYDOWN) and IsPureShift then
   begin
-    pkbhs := PMyKBDLLHOOKSTRUCT(lParam);
-
-    if (pkbhs^.flags and LLKHF_INJECTED) <> 0 then
+    CurrentTime := GetTickCount;
+    if FormMain.FShiftPressed and
+       (CurrentTime - FormMain.FLastShiftTime <= DOUBLE_SHIFT_INTERVAL) then
     begin
-      Result := CallNextHookEx(hKeyHook, nCode, wParam, lParam);
+      // Двойное нажатие Shift!
+      FormMain.FShiftPressed := False;
+      if not IsConverting then
+      begin
+        IsConverting := True;
+        PostMessage(FormMain.Handle, WM_DO_CONVERT, 0, 0);
+        Result := 1; // Блокируем только это нажатие
+      end;
       Exit;
-    end;
-
-    if Assigned(FormMain) then FormMain.CheckWindowChanged;
-
-    // --- ОБРАБОТКА ДВОЙНОГО SHIFT ---
-    if wParam = WM_KEYDOWN then
+    end
+    else
     begin
-      if (pkbhs^.vkCode = VK_SHIFT) or (pkbhs^.vkCode = VK_LSHIFT) or (pkbhs^.vkCode = VK_RSHIFT) then
-      begin
-        CurrentTime := GetTickCount;
-        if FormMain.FShiftPressed and (CurrentTime - FormMain.FLastShiftTime <= DOUBLE_SHIFT_INTERVAL) then
-        begin
-          // Двойное нажатие Shift!
-          FormMain.FShiftPressed := False;
-          if not IsConverting then
-          begin
-            IsConverting := True;
-            PostMessage(FormMain.Handle, WM_DO_CONVERT, 0, 0);
-          end;
-          Result := 1;
-          Exit;
-        end
-        else
-        begin
-          FormMain.FShiftPressed := True;
-          FormMain.FLastShiftTime := CurrentTime;
-        end;
-      end
-      else if (pkbhs^.vkCode <> VK_CONTROL) and (pkbhs^.vkCode <> VK_MENU) then
-      begin
-        // Любая другая клавиша сбрасывает ожидание двойного Shift
-        FormMain.FShiftPressed := False;
-      end;
+      FormMain.FShiftPressed := True;
+      FormMain.FLastShiftTime := CurrentTime;
     end;
-
-    // --- БУФЕР ВВОДА (только если не конвертируем) ---
-    if not IsConverting then
-    begin
-      if wParam = WM_KEYDOWN then
-      begin
-        if (pkbhs^.vkCode = VK_LEFT)  or (pkbhs^.vkCode = VK_RIGHT) or
-           (pkbhs^.vkCode = VK_UP)    or (pkbhs^.vkCode = VK_DOWN)  or
-           (pkbhs^.vkCode = VK_HOME)  or (pkbhs^.vkCode = VK_END)   or
-           (pkbhs^.vkCode = VK_PRIOR) or (pkbhs^.vkCode = VK_NEXT)  or
-           (pkbhs^.vkCode = VK_ESCAPE) or (pkbhs^.vkCode = VK_DELETE) then
-        begin
-          if Assigned(FormMain) then FormMain.ClearBuffer;
-        end
-        else if pkbhs^.vkCode = VK_BACK then
-        begin
-          if Assigned(FormMain) then FormMain.BufferBackspace;
-        end
-        else if (pkbhs^.vkCode = VK_RETURN) or (pkbhs^.vkCode = VK_TAB) or
-                (pkbhs^.vkCode = VK_SPACE) then
-        begin
-          if Assigned(FormMain) then FormMain.FinalizeWord;
-        end
-        else if (pkbhs^.vkCode = VK_SHIFT)   or (pkbhs^.vkCode = VK_LSHIFT) or
-                (pkbhs^.vkCode = VK_RSHIFT)  or (pkbhs^.vkCode = VK_CONTROL) or
-                (pkbhs^.vkCode = VK_LCONTROL)or (pkbhs^.vkCode = VK_RCONTROL)or
-                (pkbhs^.vkCode = VK_MENU)    or (pkbhs^.vkCode = VK_LMENU)  or
-                (pkbhs^.vkCode = VK_RMENU)   or (pkbhs^.vkCode = VK_LWIN)   or
-                (pkbhs^.vkCode = VK_RWIN) then
-        begin
-          // nothing
-        end
-        else if GetAsyncKeyState(VK_CONTROL) < 0 then
-        begin
-          if (pkbhs^.vkCode = Ord('C')) or (pkbhs^.vkCode = Ord('X')) or
-             (pkbhs^.vkCode = Ord('V')) then
-            if Assigned(FormMain) then FormMain.ClearBuffer;
-        end
-        else
-        begin
-          threadId := GetWindowThreadProcessId(GetForegroundWindow, nil);
-          hkl := GetKeyboardLayout(threadId);
-          if FormMain.IsPrintableKey(pkbhs^.vkCode, pkbhs^.scanCode, hkl) then
-          begin
-            ShiftPressed := (GetAsyncKeyState(VK_SHIFT) and $8000) <> 0;
-            if Assigned(FormMain) then FormMain.AddVK(pkbhs^.vkCode, ShiftPressed);
-          end;
-        end;
-      end;
-    end;
-
-    // --- ДВОЙНОЙ CTRL ---
-    if wParam = WM_KEYDOWN then
-    begin
-      // LCtrl + RCtrl (одновременно) — инвертирование регистра
-      if (pkbhs^.vkCode = VK_LCONTROL) and (GetAsyncKeyState(VK_RCONTROL) < 0) then
-      begin
-        if not IsConverting then
-        begin
-          IsConverting := True;
-          PostMessage(FormMain.Handle, WM_DO_INVERT_CASE, 0, 0);
-        end;
-        Result := 1;
-        Exit;
-      end;
-      if (pkbhs^.vkCode = VK_RCONTROL) and (GetAsyncKeyState(VK_LCONTROL) < 0) then
-      begin
-        if not IsConverting then
-        begin
-          IsConverting := True;
-          PostMessage(FormMain.Handle, WM_DO_INVERT_CASE, 0, 0);
-        end;
-        Result := 1;
-        Exit;
-      end;
-      // Двойной ЛЕВЫЙ Ctrl — ВЕРХНИЙ регистр
-      if (pkbhs^.vkCode = VK_LCONTROL) then
-      begin
-        CurrentTime := GetTickCount;
-        if FormMain.FLCtrlPressed and (CurrentTime - FormMain.FLastLCtrlTime <= DOUBLE_CTRL_INTERVAL) then
-        begin
-          FormMain.FLCtrlPressed := False;
-          if not IsConverting then
-          begin
-            IsConverting := True;
-            PostMessage(FormMain.Handle, WM_DO_UPPERCASE, 0, 0);
-          end;
-          Result := 1;
-          Exit;
-        end
-        else
-        begin
-          FormMain.FLCtrlPressed := True;
-          FormMain.FLastLCtrlTime := CurrentTime;
-        end;
-      end
-      // Двойной ПРАВЫЙ Ctrl — нижний регистр
-      else if (pkbhs^.vkCode = VK_RCONTROL) then
-      begin
-        CurrentTime := GetTickCount;
-        if FormMain.FRCtrlPressed and (CurrentTime - FormMain.FLastRCtrlTime <= DOUBLE_CTRL_INTERVAL) then
-        begin
-          FormMain.FRCtrlPressed := False;
-          if not IsConverting then
-          begin
-            IsConverting := True;
-            PostMessage(FormMain.Handle, WM_DO_LOWERCASE, 0, 0);
-          end;
-          Result := 1;
-          Exit;
-        end
-        else
-        begin
-          FormMain.FRCtrlPressed := True;
-          FormMain.FLastRCtrlTime := CurrentTime;
-        end;
-      end
-      // Любая другая клавиша сбрасывает ожидание двойного Ctrl
-      else if (pkbhs^.vkCode <> VK_SHIFT) and (pkbhs^.vkCode <> VK_LSHIFT) and
-              (pkbhs^.vkCode <> VK_RSHIFT) and (pkbhs^.vkCode <> VK_MENU) then
-      begin
-        FormMain.FLCtrlPressed := False;
-        FormMain.FRCtrlPressed := False;
-      end;
-    end;
-
+  end
+  else if (wParam = WM_KEYDOWN) and not IsPureShift and
+          not ((pkbhs^.vkCode = VK_CONTROL) or (pkbhs^.vkCode = VK_MENU) or
+               (pkbhs^.vkCode = VK_LWIN) or (pkbhs^.vkCode = VK_RWIN)) then
+  begin
+    // Любая другая клавиша сбрасывает ожидание двойного Shift
+    // Но НЕ сбрасываем при нажатии модификаторов (чтобы Ctrl+Shift не сбрасывал)
+    FormMain.FShiftPressed := False;
   end;
 
-  Result := CallNextHookEx(hKeyHook, nCode, wParam, lParam);
+  // --- ОБРАБОТКА ДВОЙНОГО CTRL (только чистое нажатие) ---
+  if (wParam = WM_KEYDOWN) and (IsPureLCtrl or IsPureRCtrl) then
+  begin
+    CurrentTime := GetTickCount;
+
+    // Двойной ЛЕВЫЙ Ctrl — ВЕРХНИЙ регистр
+    if IsPureLCtrl then
+    begin
+      if FormMain.FLCtrlPressed and
+         (CurrentTime - FormMain.FLastLCtrlTime <= DOUBLE_CTRL_INTERVAL) then
+      begin
+        FormMain.FLCtrlPressed := False;
+        if not IsConverting then
+        begin
+          IsConverting := True;
+          PostMessage(FormMain.Handle, WM_DO_UPPERCASE, 0, 0);
+          Result := 1;
+        end;
+        Exit;
+      end
+      else
+      begin
+        FormMain.FLCtrlPressed := True;
+        FormMain.FLastLCtrlTime := CurrentTime;
+      end;
+    end;
+
+    // Двойной ПРАВЫЙ Ctrl — нижний регистр
+    if IsPureRCtrl then
+    begin
+      if FormMain.FRCtrlPressed and
+         (CurrentTime - FormMain.FLastRCtrlTime <= DOUBLE_CTRL_INTERVAL) then
+      begin
+        FormMain.FRCtrlPressed := False;
+        if not IsConverting then
+        begin
+          IsConverting := True;
+          PostMessage(FormMain.Handle, WM_DO_LOWERCASE, 0, 0);
+          Result := 1;
+        end;
+        Exit;
+      end
+      else
+      begin
+        FormMain.FRCtrlPressed := True;
+        FormMain.FLastRCtrlTime := CurrentTime;
+      end;
+    end;
+  end
+  else if (wParam = WM_KEYDOWN) and not (IsPureLCtrl or IsPureRCtrl) and
+          not ((pkbhs^.vkCode = VK_SHIFT) or (pkbhs^.vkCode = VK_MENU) or
+               (pkbhs^.vkCode = VK_LWIN) or (pkbhs^.vkCode = VK_RWIN)) then
+  begin
+    // Сбрасываем ожидание Ctrl только при "реальных" клавишах, не модификаторах
+    FormMain.FLCtrlPressed := False;
+    FormMain.FRCtrlPressed := False;
+  end;
+
+  // --- LCtrl + RCtrl одновременно — инвертирование регистра ---
+  // Проверяем при нажатии ЛЕВОГО, если ПРАВЫЙ уже зажат (и наоборот)
+  // Но только если не было "чистого" двойного нажатия выше
+  if (wParam = WM_KEYDOWN) and not IsConverting then
+  begin
+    if (pkbhs^.vkCode = VK_LCONTROL) and (GetAsyncKeyState(VK_RCONTROL) < 0) then
+    begin
+      IsConverting := True;
+      PostMessage(FormMain.Handle, WM_DO_INVERT_CASE, 0, 0);
+      Result := 1;
+      Exit;
+    end;
+    if (pkbhs^.vkCode = VK_RCONTROL) and (GetAsyncKeyState(VK_LCONTROL) < 0) then
+    begin
+      IsConverting := True;
+      PostMessage(FormMain.Handle, WM_DO_INVERT_CASE, 0, 0);
+      Result := 1;
+      Exit;
+    end;
+  end;
+
+  // --- БУФЕР ВВОДА (только если не конвертируем) ---
+  if not IsConverting then
+  begin
+    if wParam = WM_KEYDOWN then
+    begin
+      if (pkbhs^.vkCode = VK_LEFT)  or (pkbhs^.vkCode = VK_RIGHT) or
+         (pkbhs^.vkCode = VK_UP)    or (pkbhs^.vkCode = VK_DOWN)  or
+         (pkbhs^.vkCode = VK_HOME)  or (pkbhs^.vkCode = VK_END)   or
+         (pkbhs^.vkCode = VK_PRIOR) or (pkbhs^.vkCode = VK_NEXT)  or
+         (pkbhs^.vkCode = VK_ESCAPE) or (pkbhs^.vkCode = VK_DELETE) then
+      begin
+        if Assigned(FormMain) then FormMain.ClearBuffer;
+      end
+      else if pkbhs^.vkCode = VK_BACK then
+      begin
+        if Assigned(FormMain) then FormMain.BufferBackspace;
+      end
+      else if (pkbhs^.vkCode = VK_RETURN) or (pkbhs^.vkCode = VK_TAB) or
+              (pkbhs^.vkCode = VK_SPACE) then
+      begin
+        if Assigned(FormMain) then FormMain.FinalizeWord;
+      end
+      else if (pkbhs^.vkCode = VK_SHIFT)   or (pkbhs^.vkCode = VK_LSHIFT) or
+              (pkbhs^.vkCode = VK_RSHIFT)  or (pkbhs^.vkCode = VK_CONTROL) or
+              (pkbhs^.vkCode = VK_LCONTROL)or (pkbhs^.vkCode = VK_RCONTROL)or
+              (pkbhs^.vkCode = VK_MENU)    or (pkbhs^.vkCode = VK_LMENU)  or
+              (pkbhs^.vkCode = VK_RMENU)   or (pkbhs^.vkCode = VK_LWIN)   or
+              (pkbhs^.vkCode = VK_RWIN) then
+      begin
+        // nothing — модификаторы не попадают в буфер
+      end
+      else if GetAsyncKeyState(VK_CONTROL) < 0 then
+      begin
+        if (pkbhs^.vkCode = Ord('C')) or (pkbhs^.vkCode = Ord('X')) or
+           (pkbhs^.vkCode = Ord('V')) then
+          if Assigned(FormMain) then FormMain.ClearBuffer;
+      end
+      else
+      begin
+        threadId := GetWindowThreadProcessId(GetForegroundWindow, nil);
+        hkl := GetKeyboardLayout(threadId);
+        if FormMain.IsPrintableKey(pkbhs^.vkCode, pkbhs^.scanCode, hkl) then
+        begin
+          ShiftPressed := (GetAsyncKeyState(VK_SHIFT) and $8000) <> 0;
+          if Assigned(FormMain) then FormMain.AddVK(pkbhs^.vkCode, ShiftPressed);
+        end;
+      end;
+    end;
+  end;
 end;
 
 //------------------------------------------------------------------------------
@@ -705,19 +740,44 @@ end;
 // Если каретка недоступна — fallback на Ctrl+Shift+Left.
 //------------------------------------------------------------------------------
 function TFormMain.GetWordAtCursor(out Text: WideString): Boolean;
+label KEYBOARD_FALLBACK;
 var
   OldClipboardText: WideString;
   pt: TPoint;
   hWnd: Windows.HWND;
   guiInfo: TMyGUIThreadInfo;
   cxScreen, cyScreen: Integer;
-  inputs: array[0..5] of TInput;
+  inputs: array[0..7] of TInput;
+  i: Integer;
+  className: array[0..255] of Char;
+  MouseRestored: Boolean;
+  OriginalCursorPos: TPoint;
 begin
   Result := False;
   Text := '';
+  MouseRestored := False;
 
   hWnd := GetForegroundWindow;
   if hWnd = 0 then Exit;
+
+  // === ЗАЩИТА: не используем мышь в окнах скриншотеров и некоторых приложениях ===
+  GetClassName(hWnd, @className, 256);
+  // Список классов окон, где мышиный клик опасен (скриншотеры, рисовалки и т.д.)
+  if (Pos('ShareX', className) > 0) or
+     (Pos('Screenshot', className) > 0) or
+     (Pos('Lightshot', className) > 0) or
+     (Pos('Greenshot', className) > 0) or
+     (Pos('SnippingTool', className) > 0) or  // Ножницы Windows
+     (Pos('Screenpresso', className) > 0) or
+     (Pos('PicPick', className) > 0) or
+     (Pos('Fullscreen', className) > 0) then   // Некоторые игры в полный экран
+  begin
+    // Переходим сразу к keyboard fallback (Ctrl+Shift+Left)
+    goto KEYBOARD_FALLBACK;
+  end;
+
+  // Запоминаем текущую позицию курсора для восстановления
+  GetCursorPos(OriginalCursorPos);
 
   // Пытаемся получить позицию каретки
   ZeroMemory(@guiInfo, SizeOf(guiInfo));
@@ -726,7 +786,7 @@ begin
   if MyGetGUIThreadInfo(GetWindowThreadProcessId(hWnd, nil), guiInfo) and
      (guiInfo.hwndCaret <> 0) then
   begin
-    // --- Есть каретка: двойной клик мышью ---
+    // === Есть каретка: двойной клик мышью ===
     hWnd := guiInfo.hwndCaret;
     pt.X := guiInfo.rcCaret.Left + (guiInfo.rcCaret.Right - guiInfo.rcCaret.Left) div 2;
     pt.Y := guiInfo.rcCaret.Top + (guiInfo.rcCaret.Bottom - guiInfo.rcCaret.Top) div 2;
@@ -758,40 +818,52 @@ begin
     inputs[4].Itype := INPUT_MOUSE;
     inputs[4].mi.dwFlags := MOUSEEVENTF_LEFTUP;
 
-    SendInput(5, @inputs[0], SizeOf(TInput));
+    // Восстановление позиции мыши (перемещаем обратно)
+    inputs[5].Itype := INPUT_MOUSE;
+    inputs[5].mi.dx := MulDiv(OriginalCursorPos.X, 65535, cxScreen);
+    inputs[5].mi.dy := MulDiv(OriginalCursorPos.Y, 65535, cyScreen);
+    inputs[5].mi.dwFlags := MOUSEEVENTF_ABSOLUTE or MOUSEEVENTF_MOVE;
+    inputs[5].mi.time := 0; // Сразу после кликов
+
+    SendInput(6, @inputs[0], SizeOf(TInput));
     Sleep(200);
 
     SimulateCopy;
     Text := GetClipboardTextW;
 
+    // Проверяем, что получили валидное слово
     if (Text <> OldClipboardText) and (Text <> '') and
        (Pos(' ', Text) = 0) and (Pos(#9, Text) = 0) and
        (Pos(#10, Text) = 0) and (Pos(#13, Text) = 0) and
-       (Length(Text) < 100) then
+       (Length(Text) < 100) and (Length(Text) > 0) then
     begin
       Result := True;
       // Выделение активно, clipboard содержит слово
       // Вызывающий код должен вызвать RestoreClipboard после обработки
+      Exit;
     end
     else
     begin
+      // Неудача — восстанавливаем clipboard и снимаем выделение
       RestoreClipboard;
-      // Снимаем выделение одиночным кликом
-      inputs[0].Itype := INPUT_MOUSE;
-      inputs[0].mi.dx := MulDiv(pt.X, 65535, cxScreen);
-      inputs[0].mi.dy := MulDiv(pt.Y, 65535, cyScreen);
-      inputs[0].mi.dwFlags := MOUSEEVENTF_ABSOLUTE or MOUSEEVENTF_MOVE;
-      inputs[1].Itype := INPUT_MOUSE;
-      inputs[1].mi.dwFlags := MOUSEEVENTF_LEFTDOWN;
-      inputs[2].Itype := INPUT_MOUSE;
-      inputs[2].mi.dwFlags := MOUSEEVENTF_LEFTUP;
-      SendInput(3, @inputs[0], SizeOf(TInput));
+
+      // Снимаем выделение: перемещаем курсор в конец слова (Right)
+      // Это надёжнее, чем кликать мышью — мы уже знаем, где каретка
+      ZeroMemory(@inputs, SizeOf(inputs));
+      inputs[0].Itype := INPUT_KEYBOARD;
+      inputs[0].ki.wVk := VK_RIGHT;
+      inputs[1].Itype := INPUT_KEYBOARD;
+      inputs[1].ki.wVk := VK_RIGHT;
+      inputs[1].ki.dwFlags := KEYEVENTF_KEYUP;
+      SendInput(2, @inputs[0], SizeOf(TInput));
+
       Text := '';
+      Exit;
     end;
-    Exit;
   end;
 
-  // --- Fallback: нет каретки — используем Ctrl+Shift+Left ---
+KEYBOARD_FALLBACK:
+  // === Fallback: нет каретки — используем Ctrl+Shift+Left ===
   OldClipboardText := GetClipboardTextW;
   SaveClipboard;
 
@@ -809,13 +881,14 @@ begin
   if (Text <> OldClipboardText) and (Text <> '') and
      (Pos(' ', Text) = 0) and (Pos(#9, Text) = 0) and
      (Pos(#10, Text) = 0) and (Pos(#13, Text) = 0) and
-     (Length(Text) < 100) then
+     (Length(Text) < 100) and (Length(Text) > 0) then
   begin
     Result := True;
   end
   else
   begin
     RestoreClipboard;
+    // Возвращаем каретку на место (если сдвинулись влево)
     keybd_event(VK_RIGHT, 0, 0, 0);
     keybd_event(VK_RIGHT, 0, KEYEVENTF_KEYUP, 0);
     Text := '';
