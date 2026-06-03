@@ -83,12 +83,14 @@ type
     procedure DoChangeCase(ToUpper: Boolean);
     procedure DoInvertCase;
     procedure SwitchGlobalLayout(ToLangID: Word);
-    function HasSelectionInActiveWindow: Boolean;
+    function GetSelectedTextInActiveWindow(out Text: WideString): Boolean;
+    function GetSelectedTextByClipboardFallback(out Text: WideString): Boolean;
     function GetWordAtCursor(out Text: WideString): Boolean;
     function TryGetTargetText(out Text: WideString; out IsSelection: Boolean): Boolean;
     function VKBufferToString: WideString;
     procedure SimulateCopy;
     procedure SimulatePaste;
+    procedure TypeUnicodeText(const Value: WideString);
     function ConvertLayout(const S: WideString): WideString;
     function ChangeStringCase(const S: WideString; ToUpper: Boolean): WideString;
     procedure SaveClipboard;
@@ -777,25 +779,73 @@ begin
 end;
 
 //------------------------------------------------------------------------------
-// Проверка наличия выделения в активном окне
+// Получение выделения в стандартных Edit/RichEdit без clipboard
 //------------------------------------------------------------------------------
-function TFormMain.HasSelectionInActiveWindow: Boolean;
+function TFormMain.GetSelectedTextInActiveWindow(out Text: WideString): Boolean;
 var
   hWnd: Windows.HWND;
   startSel, endSel: DWORD;
   className: array[0..255] of Char;
+  guiInfo: TMyGUIThreadInfo;
+  Len, Copied: Integer;
+  Buffer: WideString;
 begin
   Result := False;
+  Text := '';
   hWnd := GetForegroundWindow;
   if hWnd = 0 then Exit;
 
-  // Для стандартных Edit/RichEdit пробуем EM_GETSEL
+  ZeroMemory(@guiInfo, SizeOf(guiInfo));
+  guiInfo.cbSize := SizeOf(guiInfo);
+  if MyGetGUIThreadInfo(GetWindowThreadProcessId(hWnd, nil), guiInfo) and
+     (guiInfo.hwndFocus <> 0) then
+    hWnd := guiInfo.hwndFocus;
+
   GetClassName(hWnd, @className, 256);
   if (Pos('Edit', className) > 0) or (Pos('RichEdit', className) > 0) or
      (Pos('TMemo', className) > 0) or (Pos('TEdit', className) > 0) then
   begin
     SendMessage(hWnd, EM_GETSEL, WPARAM(@startSel), LPARAM(@endSel));
-    Result := startSel <> endSel;
+    if startSel = endSel then Exit;
+
+    Len := GetWindowTextLengthW(hWnd);
+    if Len <= 0 then Exit;
+    if endSel > DWORD(Len) then Exit;
+    if startSel > endSel then Exit;
+
+    SetLength(Buffer, Len + 1);
+    Copied := SendMessageW(hWnd, WM_GETTEXT, WPARAM(Len + 1), LPARAM(PWideChar(Buffer)));
+    if Copied <= 0 then Exit;
+    SetLength(Buffer, Copied);
+
+    Text := Copy(Buffer, startSel + 1, endSel - startSel);
+    Result := Text <> '';
+  end;
+end;
+
+function TFormMain.GetSelectedTextByClipboardFallback(out Text: WideString): Boolean;
+begin
+  Result := False;
+  Text := '';
+
+  SaveClipboard;
+  try
+    SimulateCopy;
+    Text := GetClipboardTextW;
+
+    if Text = '' then Exit;
+
+    // VS Code with an empty selection may copy the whole current line including
+    // a line break. Treat that as "no explicit selection" to avoid replacing a line.
+    if (Text[Length(Text)] = #10) or (Text[Length(Text)] = #13) then
+    begin
+      Text := '';
+      Exit;
+    end;
+
+    Result := True;
+  finally
+    RestoreClipboard;
   end;
 end;
 
@@ -998,32 +1048,38 @@ end;
 
 //------------------------------------------------------------------------------
 // Универсальная функция получения целевого текста.
-// Priority: 1) Выделение  2) FVKBuffer  3) fallback-выделение одного слова
-// IsSelection=True  → текст уже выделен, замена через clipboard
+// Priority: 1) Выделение  2) FVKBuffer
+// IsSelection=True  → текст уже выделен, замена прямым Unicode-вводом
 // IsSelection=False → нужно использовать Backspace (только для FVKBuffer)
 //------------------------------------------------------------------------------
 function TFormMain.TryGetTargetText(out Text: WideString; out IsSelection: Boolean): Boolean;
-var
-  OldClipboardText: WideString;
 begin
   Result := False;
   Text := '';
   IsSelection := False;
 
-  // 1. Проверяем выделение через EM_GETSEL
-  if HasSelectionInActiveWindow then
-  begin
-    SaveClipboard;
-    SimulateCopy;
-    Text := GetClipboardTextW;
-    if Text <> '' then
+  // 1. Проверяем выделение: сначала стандартные Edit/RichEdit без clipboard,
+  // затем обычный Ctrl+C fallback для VS Code/браузеров.
+  try
+    if GetSelectedTextInActiveWindow(Text) then
     begin
       IsSelection := True;
       Result := True;
-    end
-    else
-      RestoreClipboard;
-    Exit;
+      Exit;
+    end;
+  except
+    Text := '';
+  end;
+
+  try
+    if GetSelectedTextByClipboardFallback(Text) then
+    begin
+      IsSelection := True;
+      Result := True;
+      Exit;
+    end;
+  except
+    Text := '';
   end;
 
   // 2. Последнее введённое слово.
@@ -1033,27 +1089,6 @@ begin
     // IsSelection остаётся False → вызывающий код использует Backspace
     Exit;
   end;
-
-  // 3. Fallback для редакторов без EM_GETSEL (например, VS Code).
-  // Не пишем marker в clipboard: ShareX и похожие утилиты могут зависать на
-  // частой программной подмене буфера. Принимаем только одиночное короткое слово.
-  OldClipboardText := GetClipboardTextW;
-  SaveClipboard;
-  SimulateCopy;
-  Text := GetClipboardTextW;
-
-  if (Text <> OldClipboardText) and (Text <> '') and
-     (Length(Text) <= MAX_WORD_LEN) and
-     (Pos(' ', Text) = 0) and (Pos(#9, Text) = 0) and
-     (Pos(#10, Text) = 0) and (Pos(#13, Text) = 0) then
-  begin
-    IsSelection := True;
-    Result := True;
-    Exit;
-  end;
-
-  RestoreClipboard;
-  Text := '';
 end;
 
 //------------------------------------------------------------------------------
@@ -1073,6 +1108,28 @@ begin
   keybd_event(Ord('V'), 0, KEYEVENTF_KEYUP, 0);
   keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0);
   Sleep(50);
+end;
+
+procedure TFormMain.TypeUnicodeText(const Value: WideString);
+var
+  i: Integer;
+  inputs: array[0..1] of TInput;
+begin
+  for i := 1 to Length(Value) do
+  begin
+    ZeroMemory(@inputs, SizeOf(inputs));
+
+    inputs[0].Itype := INPUT_KEYBOARD;
+    inputs[0].ki.wScan := Ord(Value[i]);
+    inputs[0].ki.dwFlags := KEYEVENTF_UNICODE;
+
+    inputs[1].Itype := INPUT_KEYBOARD;
+    inputs[1].ki.wScan := Ord(Value[i]);
+    inputs[1].ki.dwFlags := KEYEVENTF_UNICODE or KEYEVENTF_KEYUP;
+
+    SendInput(2, @inputs[0], SizeOf(TInput));
+    Sleep(1);
+  end;
 end;
 
 function TFormMain.GetClipboardTextW: WideString;
@@ -1323,22 +1380,17 @@ begin
   // --- Сценарий 1: Выделение / слово под курсором ---
   if IsSelection then
   begin
-    try
-      if Text <> '' then
-      begin
-        ConvertedText := ConvertLayout(Text);
-        SetClipboardTextW(ConvertedText);
-        SimulatePaste;
+    if Text <> '' then
+    begin
+      ConvertedText := ConvertLayout(Text);
+      TypeUnicodeText(ConvertedText);
 
-        if IsCyrillicText(Text) then
-          TargetLangID := $0409
-        else
-          TargetLangID := $0419;
+      if IsCyrillicText(Text) then
+        TargetLangID := $0409
+      else
+        TargetLangID := $0419;
 
-        SwitchGlobalLayout(TargetLangID);
-      end;
-    finally
-      RestoreClipboard;
+      SwitchGlobalLayout(TargetLangID);
     end;
     Exit;
   end;
@@ -1429,15 +1481,8 @@ begin
   // --- Сценарий 1: Выделение / слово под курсором ---
   if IsSelection then
   begin
-    try
-      if Text <> '' then
-      begin
-        SetClipboardTextW(ChangeStringCase(Text, ToUpper));
-        SimulatePaste;
-      end;
-    finally
-      RestoreClipboard;
-    end;
+    if Text <> '' then
+      TypeUnicodeText(ChangeStringCase(Text, ToUpper));
     Exit;
   end;
 
@@ -1465,14 +1510,7 @@ begin
   end;
   Sleep(50);
 
-  // Вставляем результат через clipboard
-  SaveClipboard;
-  try
-    SetClipboardTextW(Text);
-    SimulatePaste;
-  finally
-    RestoreClipboard;
-  end;
+  TypeUnicodeText(Text);
 
   SetLength(FVKBuffer, 0);
 end;
@@ -1494,34 +1532,29 @@ begin
   // --- Сценарий 1: Выделение / слово под курсором ---
   if IsSelection then
   begin
-    try
-      if Text = '' then Exit;
+    if Text = '' then Exit;
 
-      ResultText := '';
-      for i := 1 to Length(Text) do
-      begin
-        Ch := Text[i];
-        if (Ch >= WideChar('a')) and (Ch <= WideChar('z')) then
-          ResultText := ResultText + WideChar(Ord(Ch) - Ord('a') + Ord('A'))
-        else if (Ch >= WideChar('A')) and (Ch <= WideChar('Z')) then
-          ResultText := ResultText + WideChar(Ord(Ch) - Ord('A') + Ord('a'))
-        else if (Ch >= WideChar('а')) and (Ch <= WideChar('я')) then
-          ResultText := ResultText + WideChar(Ord(Ch) - Ord('а') + Ord('А'))
-        else if (Ch >= WideChar('А')) and (Ch <= WideChar('Я')) then
-          ResultText := ResultText + WideChar(Ord(Ch) - Ord('А') + Ord('а'))
-        else if Ch = WideChar('ё') then
-          ResultText := ResultText + WideChar('Ё')
-        else if Ch = WideChar('Ё') then
-          ResultText := ResultText + WideChar('ё')
-        else
-          ResultText := ResultText + Ch;
-      end;
-
-      SetClipboardTextW(ResultText);
-      SimulatePaste;
-    finally
-      RestoreClipboard;
+    ResultText := '';
+    for i := 1 to Length(Text) do
+    begin
+      Ch := Text[i];
+      if (Ch >= WideChar('a')) and (Ch <= WideChar('z')) then
+        ResultText := ResultText + WideChar(Ord(Ch) - Ord('a') + Ord('A'))
+      else if (Ch >= WideChar('A')) and (Ch <= WideChar('Z')) then
+        ResultText := ResultText + WideChar(Ord(Ch) - Ord('A') + Ord('a'))
+      else if (Ch >= WideChar('а')) and (Ch <= WideChar('я')) then
+        ResultText := ResultText + WideChar(Ord(Ch) - Ord('а') + Ord('А'))
+      else if (Ch >= WideChar('А')) and (Ch <= WideChar('Я')) then
+        ResultText := ResultText + WideChar(Ord(Ch) - Ord('А') + Ord('а'))
+      else if Ch = WideChar('ё') then
+        ResultText := ResultText + WideChar('Ё')
+      else if Ch = WideChar('Ё') then
+        ResultText := ResultText + WideChar('ё')
+      else
+        ResultText := ResultText + Ch;
     end;
+
+    TypeUnicodeText(ResultText);
     Exit;
   end;
 
@@ -1567,13 +1600,7 @@ begin
   end;
   Sleep(50);
 
-  SaveClipboard;
-  try
-    SetClipboardTextW(ResultText);
-    SimulatePaste;
-  finally
-    RestoreClipboard;
-  end;
+  TypeUnicodeText(ResultText);
 
   SetLength(FVKBuffer, 0);
 end;
