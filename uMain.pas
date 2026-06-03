@@ -11,6 +11,11 @@ const
   WM_INPUTLANGCHANGEREQUEST = $0050;
   DOUBLE_SHIFT_INTERVAL = 500; // мс между нажатиями Shift
   DOUBLE_CTRL_INTERVAL = 500;  // мс между нажатиями Ctrl
+  STICKY_SHIFT_MAX_PRESSES = 4; // 5-е чистое нажатие Shift вызывает Sticky Keys
+  LS_SPI_GETSTICKYKEYS = $003A;
+  LS_SPI_SETSTICKYKEYS = $003B;
+  LS_SKF_HOTKEYACTIVE = $00000004;
+  LS_SKF_CONFIRMHOTKEY = $00000008;
 
 type
   PHKL = ^HKL;
@@ -26,6 +31,11 @@ type
   TVKRecord = record
     VK: Byte;
     Shift: Boolean;
+  end;
+
+  TLSStickyKeys = record
+    cbSize: UINT;
+    dwFlags: DWORD;
   end;
 
   TFormMain = class(TForm)
@@ -61,6 +71,9 @@ type
     FLastLangID: DWORD;         // Последняя раскладка клавиатуры
     FLastShiftTime: DWORD;      // Время последнего нажатия Shift
     FShiftPressed: Boolean;     // Флаг что Shift уже был нажат (для двойного)
+    FPureShiftPressCount: Integer; // Счётчик для подавления Sticky Keys
+    FOriginalStickyKeys: TLSStickyKeys;
+    FStickyKeysSaved: Boolean;
     FLastLCtrlTime: DWORD;      // Время последнего нажатия ЛЕВОГО Ctrl
     FLCtrlPressed: Boolean;     // Флаг ожидания второго ЛЕВОГО Ctrl
     FLastRCtrlTime: DWORD;      // Время последнего нажатия ПРАВОГО Ctrl
@@ -86,6 +99,8 @@ type
     function FindHKLByLangID(LangID: Word): HKL;
     function IsPrintableKey(vkCode, scanCode: DWORD; hkl: HKL): Boolean;
     procedure UpdateTrayIcon;
+    procedure DisableStickyKeysHotkey;
+    procedure RestoreStickyKeysHotkey;
   public
     procedure AddVK(VK: Byte; Shift: Boolean);
     procedure BufferBackspace;
@@ -280,6 +295,15 @@ begin
   if (wParam = WM_KEYDOWN) and IsPureShift then
   begin
     CurrentTime := GetTickCount;
+    Inc(FormMain.FPureShiftPressCount);
+    if FormMain.FPureShiftPressCount > STICKY_SHIFT_MAX_PRESSES then
+    begin
+      FormMain.FPureShiftPressCount := 0;
+      FormMain.FShiftPressed := False;
+      Result := 1;
+      Exit;
+    end;
+
     if FormMain.FShiftPressed and
        (CurrentTime - FormMain.FLastShiftTime <= DOUBLE_SHIFT_INTERVAL) then
     begin
@@ -306,6 +330,7 @@ begin
     // Любая другая клавиша сбрасывает ожидание двойного Shift
     // Но НЕ сбрасываем при нажатии модификаторов (чтобы Ctrl+Shift не сбрасывал)
     FormMain.FShiftPressed := False;
+    FormMain.FPureShiftPressCount := 0;
   end;
 
   // --- ОБРАБОТКА ДВОЙНОГО CTRL (только чистое нажатие) ---
@@ -450,6 +475,7 @@ begin
       begin
         FormMain.ClearBuffer;
         FormMain.FShiftPressed := False;
+        FormMain.FPureShiftPressCount := 0;
         FormMain.FLCtrlPressed := False;
         FormMain.FRCtrlPressed := False;
       end;
@@ -476,6 +502,39 @@ begin
 end;
 
 //------------------------------------------------------------------------------
+procedure TFormMain.DisableStickyKeysHotkey;
+var
+  StickyKeys: TLSStickyKeys;
+begin
+  FStickyKeysSaved := False;
+  ZeroMemory(@FOriginalStickyKeys, SizeOf(FOriginalStickyKeys));
+
+  ZeroMemory(@StickyKeys, SizeOf(StickyKeys));
+  StickyKeys.cbSize := SizeOf(StickyKeys);
+  if not SystemParametersInfo(LS_SPI_GETSTICKYKEYS, SizeOf(StickyKeys),
+                              @StickyKeys, 0) then
+    Exit;
+
+  FOriginalStickyKeys := StickyKeys;
+  FStickyKeysSaved := True;
+
+  StickyKeys.dwFlags := StickyKeys.dwFlags and
+                        not (LS_SKF_HOTKEYACTIVE or LS_SKF_CONFIRMHOTKEY);
+  SystemParametersInfo(LS_SPI_SETSTICKYKEYS, SizeOf(StickyKeys),
+                       @StickyKeys, 0);
+end;
+
+procedure TFormMain.RestoreStickyKeysHotkey;
+begin
+  if not FStickyKeysSaved then Exit;
+
+  FOriginalStickyKeys.cbSize := SizeOf(FOriginalStickyKeys);
+  SystemParametersInfo(LS_SPI_SETSTICKYKEYS, SizeOf(FOriginalStickyKeys),
+                       @FOriginalStickyKeys, 0);
+  FStickyKeysSaved := False;
+end;
+
+//------------------------------------------------------------------------------
 procedure TFormMain.FormCloseQuery(Sender: TObject; var CanClose: Boolean);
 begin
   CanClose := False;
@@ -491,6 +550,8 @@ begin
   FClipboardHadText := False;
   FLastShiftTime := 0;
   FShiftPressed := False;
+  FPureShiftPressCount := 0;
+  FStickyKeysSaved := False;
   FLastLCtrlTime := 0;
   FLCtrlPressed := False;
   FLastRCtrlTime := 0;
@@ -502,13 +563,13 @@ begin
   SetWindowLong(Application.Handle, GWL_EXSTYLE,
   GetWindowLong(Application.Handle, GWL_EXSTYLE) and not WS_EX_APPWINDOW);
 
+  DisableStickyKeysHotkey;
+
   hKeyHook := SetWindowsHookEx(WH_KEYBOARD_LL, @KeyboardHookProc, HInstance, 0);
   if hKeyHook = 0 then
     MessageBox(0, 'Cannot install keyboard hook!', 'LayoutSwitcher', MB_OK or MB_ICONERROR);
 
-  hMouseHook := SetWindowsHookEx(WH_MOUSE_LL, @MouseHookProc, HInstance, 0);
-  if hMouseHook = 0 then
-    MessageBox(0, 'Cannot install mouse hook!', 'LayoutSwitcher', MB_OK or MB_ICONERROR);
+  hMouseHook := 0;
 
   TrayIcon.Hint := '''
   Layout Switcher
@@ -526,6 +587,7 @@ procedure TFormMain.FormDestroy(Sender: TObject);
 begin
   if hKeyHook <> 0 then UnhookWindowsHookEx(hKeyHook);
   if hMouseHook <> 0 then UnhookWindowsHookEx(hMouseHook);
+  RestoreStickyKeysHotkey;
   RestoreClipboard;
 end;
 
@@ -539,6 +601,7 @@ begin
     FLastWindow := h;
     ClearBuffer;
     FShiftPressed := False;
+    FPureShiftPressCount := 0;
     FLCtrlPressed := False;
     FRCtrlPressed := False;
   end;
@@ -561,6 +624,7 @@ begin
       finally
         IsConverting := False;
         FShiftPressed := False;
+        FPureShiftPressCount := 0;
       end;
     WM_DO_UPPERCASE:
       try
@@ -934,7 +998,7 @@ end;
 
 //------------------------------------------------------------------------------
 // Универсальная функция получения целевого текста.
-// Priority: 1) Выделение  2) FVKBuffer  3) Слово под курсором
+// Priority: 1) Выделение  2) FVKBuffer  3) fallback-выделение одного слова
 // IsSelection=True  → текст уже выделен, замена через clipboard
 // IsSelection=False → нужно использовать Backspace (только для FVKBuffer)
 //------------------------------------------------------------------------------
@@ -962,24 +1026,7 @@ begin
     Exit;
   end;
 
-  // 2. Fallback: проверяем выделение через clipboard
-  OldClipboardText := GetClipboardTextW;
-  SaveClipboard;
-  SimulateCopy;
-  Text := GetClipboardTextW;
-
-  if (Text <> OldClipboardText) and (Text <> '') and (Length(Text) < 1000) then
-  begin
-    IsSelection := True;
-    Result := True;
-    Exit;
-  end;
-
-  // Не выделение — восстанавливаем буфер
-  RestoreClipboard;
-  Text := '';
-
-  // 3. Последнее введённое слово
+  // 2. Последнее введённое слово.
   if Length(FVKBuffer) > 0 then
   begin
     Result := True;
@@ -987,13 +1034,26 @@ begin
     Exit;
   end;
 
-  // 4. Слово под курсором (двойной клик мышью или Ctrl+Shift+Left)
-  if GetWordAtCursor(Text) then
+  // 3. Fallback для редакторов без EM_GETSEL (например, VS Code).
+  // Не пишем marker в clipboard: ShareX и похожие утилиты могут зависать на
+  // частой программной подмене буфера. Принимаем только одиночное короткое слово.
+  OldClipboardText := GetClipboardTextW;
+  SaveClipboard;
+  SimulateCopy;
+  Text := GetClipboardTextW;
+
+  if (Text <> OldClipboardText) and (Text <> '') and
+     (Length(Text) <= MAX_WORD_LEN) and
+     (Pos(' ', Text) = 0) and (Pos(#9, Text) = 0) and
+     (Pos(#10, Text) = 0) and (Pos(#13, Text) = 0) then
   begin
-    IsSelection := True; // GetWordAtCursor уже выделил слово
+    IsSelection := True;
     Result := True;
-    // Вызывающий код должен вызвать RestoreClipboard после обработки
+    Exit;
   end;
+
+  RestoreClipboard;
+  Text := '';
 end;
 
 //------------------------------------------------------------------------------
