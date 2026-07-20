@@ -12,6 +12,7 @@ $RECYCLE.BIN/
 *.lnk
 *.dcu
 *.exe
+*.rsm
 LS.delphilsp.json
 LS.dsv
 __history/uMain.pas.~*~
