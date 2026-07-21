@@ -13,6 +13,8 @@ $RECYCLE.BIN/
 *.dcu
 *.exe
 *.rsm
+*.map
+*.drc
 LS.delphilsp.json
 LS.dsv
 __history/uMain.pas.~*~

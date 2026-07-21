@@ -78,6 +78,15 @@ object FormMain: TFormMain
     TabOrder = 0
     OnClick = chkAutorunClick
   end
+  object chkDiagnostics: TCheckBox
+    Left = 232
+    Top = 8
+    Width = 224
+    Height = 17
+    Caption = #1042#1077#1089#1090#1080' '#1076#1080#1072#1075#1085#1086#1089#1090#1080#1095#1077#1089#1082#1080#1081' '#1078#1091#1088#1085#1072#1083
+    TabOrder = 1
+    OnClick = chkDiagnosticsClick
+  end
   object Panel1: TPanel
     Left = 8
     Top = 32
@@ -94,7 +103,7 @@ object FormMain: TFormMain
     Font.Style = [fsBold]
     ParentBackground = False
     ParentFont = False
-    TabOrder = 1
+    TabOrder = 2
   end
   object Panel2: TPanel
     Left = 8
@@ -112,7 +121,7 @@ object FormMain: TFormMain
     Font.Style = [fsBold]
     ParentBackground = False
     ParentFont = False
-    TabOrder = 2
+    TabOrder = 3
   end
   object Panel3: TPanel
     Left = 8
@@ -130,7 +139,7 @@ object FormMain: TFormMain
     Font.Style = [fsBold]
     ParentBackground = False
     ParentFont = False
-    TabOrder = 3
+    TabOrder = 4
   end
   object Panel4: TPanel
     Left = 8
@@ -148,7 +157,7 @@ object FormMain: TFormMain
     Font.Style = [fsBold]
     ParentBackground = False
     ParentFont = False
-    TabOrder = 4
+    TabOrder = 5
   end
   object Panel5: TPanel
     Left = 86
@@ -166,7 +175,7 @@ object FormMain: TFormMain
     Font.Style = [fsBold]
     ParentBackground = False
     ParentFont = False
-    TabOrder = 5
+    TabOrder = 6
   end
   object TrayIcon: TTrayIcon
     Hint = 'LayoutSwitcher'
@@ -181,6 +190,13 @@ object FormMain: TFormMain
   object PopupMenu: TPopupMenu
     Left = 416
     Top = 64
+    object mniDiagnostics: TMenuItem
+      Caption = #1054#1090#1082#1088#1099#1090#1100' '#1087#1072#1087#1082#1091' '#1076#1080#1072#1075#1085#1086#1089#1090#1080#1082#1080
+      OnClick = mniDiagnosticsClick
+    end
+    object mniSeparator: TMenuItem
+      Caption = '-'
+    end
     object mniExit: TMenuItem
       Caption = #1042#1099#1093#1086#1076
       OnClick = mniExitClick

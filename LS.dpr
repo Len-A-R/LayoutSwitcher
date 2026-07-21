@@ -2,7 +2,10 @@
 
 uses
   Winapi.Windows,
+  System.SysUtils,
   Vcl.Forms,
+  uDiagnostics in 'uDiagnostics.pas',
+  uUIAutomation in 'uUIAutomation.pas',
   uMain in 'uMain.pas' {Form1};
 
 {$R *.res}
@@ -24,10 +27,45 @@ begin
 
   try
     Application.Initialize;
-    Application.MainFormOnTaskbar := False;
-    Application.ShowMainForm := False;
-    Application.CreateForm(TFormMain, FormMain);
-    Application.Run;
+    InitializeDiagnostics;
+    try
+      try
+        Application.MainFormOnTaskbar := False;
+        Application.ShowMainForm := False;
+        Application.CreateForm(TFormMain, FormMain);
+        DiagnosticsLog('application.run enter');
+        Application.Run;
+        DiagnosticsLogFmt('application.run leave terminated=%s',
+          [BoolToStr(Application.Terminated, True)]);
+      except
+        on E: Exception do
+        begin
+          DiagnosticsMarkAbnormal;
+          DiagnosticsCaptureException('project.main', E, ExceptAddr);
+          raise;
+        end;
+      end;
+    finally
+      try
+        try
+          if Assigned(FormMain) then
+          begin
+            DiagnosticsLog('application.free_main_form begin');
+            FreeAndNil(FormMain);
+            DiagnosticsLog('application.free_main_form end');
+          end;
+        except
+          on E: Exception do
+          begin
+            DiagnosticsMarkAbnormal;
+            DiagnosticsCaptureException('project.free_main_form', E, ExceptAddr);
+            raise;
+          end;
+        end;
+      finally
+        ShutdownDiagnostics;
+      end;
+    end;
   finally
     CloseHandle(InstanceMutex);
   end;
