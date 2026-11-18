@@ -10,6 +10,9 @@
 //   2nd press  - the rest of the phrase    ("ghbdtn мир" -> "привет мир")
 //   3rd press  - layout conversion only: everything back to the original
 //
+// The separate Undo action restores the text as it was before the last step
+// of any action, as long as nothing has been typed since.
+//
 // A phrase of a single word goes straight from step 1 to step 3, which keeps
 // the classic "press again to undo" behaviour.  Pure logic, unit-tested.
 
@@ -20,7 +23,7 @@ uses
   uSettings;
 
 type
-  TBufferMode = (bmNone, bmWord, bmPhrase, bmRevert);
+  TBufferMode = (bmNone, bmWord, bmPhrase, bmRevert, bmUndo);
 
   TBufferPlan = record
     Mode: TBufferMode;
@@ -29,6 +32,8 @@ type
     RegionLength: Integer;
     ForcedSource: HKL;     // 0 = let the converter choose the layouts.
     ForcedTarget: HKL;
+    // bmUndo: text that replaces Region (no transformation is applied).
+    Replacement: string;
     function Region: string;
     function Head: string;
     function Tail: string;
@@ -44,6 +49,10 @@ type
     FBuffer: string;
     FSource: HKL;
     FTarget: HKL;
+    FUndoAvailable: Boolean;
+    FPrevious: string;      // Text before the last step.
+    FUndoLayout: HKL;       // Layout before the last conversion, 0 if none.
+    function PlanUndo(const Buffer: string): TBufferPlan;
   public
     procedure Reset;
     function Plan(Action: TLSAction; const Buffer: string): TBufferPlan;
@@ -54,8 +63,9 @@ type
     // A selection (or the text before the caret) was replaced by NewBuffer
     // and the caret is now right after it: the next layout conversion
     // restores the whole text, as with a converted phrase.
-    procedure CompletedWhole(Action: TLSAction; const NewBuffer: string;
-      Source, Target: HKL);
+    procedure CompletedWhole(Action: TLSAction; const NewBuffer,
+      Original: string; Source, Target: HKL);
+    property UndoAvailable: Boolean read FUndoAvailable;
   end;
 
 // Last run of non-space characters, ignoring trailing spaces.
@@ -130,6 +140,37 @@ begin
   FBuffer := '';
   FSource := 0;
   FTarget := 0;
+  FUndoAvailable := False;
+  FPrevious := '';
+  FUndoLayout := 0;
+end;
+
+function TConversionChain.PlanUndo(const Buffer: string): TBufferPlan;
+var
+  Common, MaxCommon: Integer;
+begin
+  Result.Mode := bmNone;
+  Result.Text := Buffer;
+  Result.RegionStart := 1;
+  Result.RegionLength := 0;
+  Result.ForcedSource := 0;
+  Result.ForcedTarget := 0;
+  Result.Replacement := '';
+  if not FUndoAvailable or (Buffer <> FBuffer) or (Buffer = FPrevious) then
+    Exit;
+  // Keep the unchanged beginning to send as few Backspaces as possible.
+  MaxCommon := Length(Buffer);
+  if Length(FPrevious) < MaxCommon then
+    MaxCommon := Length(FPrevious);
+  Common := 0;
+  while (Common < MaxCommon) and (Buffer[Common + 1] = FPrevious[Common + 1]) do
+    Inc(Common);
+  Result.Mode := bmUndo;
+  Result.RegionStart := Common + 1;
+  Result.RegionLength := Length(Buffer) - Common;
+  Result.Replacement := Copy(FPrevious, Common + 1, MaxInt);
+  // Only used to switch the keyboard layout back.
+  Result.ForcedTarget := FUndoLayout;
 end;
 
 function TConversionChain.Plan(Action: TLSAction;
@@ -144,6 +185,9 @@ begin
   Result.RegionLength := 0;
   Result.ForcedSource := 0;
   Result.ForcedTarget := 0;
+  Result.Replacement := '';
+  if Action = laUndo then
+    Exit(PlanUndo(Buffer));
   if (Action = laNone) or not HasNonSpace(Buffer) then
     Exit;
 
@@ -197,11 +241,17 @@ end;
 procedure TConversionChain.Completed(const APlan: TBufferPlan;
   Action: TLSAction; const NewBuffer: string; Source, Target: HKL);
 begin
-  if APlan.Mode = bmNone then
+  if (APlan.Mode = bmNone) or (APlan.Mode = bmUndo) then
   begin
-    Reset;
+    Reset; // No redo.
     Exit;
   end;
+  FUndoAvailable := True;
+  FPrevious := APlan.Text;
+  if Action = laConvert then
+    FUndoLayout := Source
+  else
+    FUndoLayout := 0;
   FActive := True;
   FAction := Action;
   FMode := APlan.Mode;
@@ -213,10 +263,16 @@ begin
   end;
 end;
 
-procedure TConversionChain.CompletedWhole(Action: TLSAction;
-  const NewBuffer: string; Source, Target: HKL);
+procedure TConversionChain.CompletedWhole(Action: TLSAction; const NewBuffer,
+  Original: string; Source, Target: HKL);
 begin
   FActive := NewBuffer <> '';
+  FUndoAvailable := FActive and (Original <> '');
+  FPrevious := Original;
+  if Action = laConvert then
+    FUndoLayout := Source
+  else
+    FUndoLayout := 0;
   FAction := Action;
   FMode := bmPhrase;
   FBuffer := NewBuffer;

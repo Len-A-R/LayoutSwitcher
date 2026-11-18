@@ -23,7 +23,8 @@ implementation
 
 uses
   Winapi.Windows, Winapi.ShellAPI,
-  System.SysUtils, System.Classes;
+  System.SysUtils, System.Classes,
+  uLocale;
 
 const
   SCHTASKS_TIMEOUT = 30000;
@@ -173,7 +174,8 @@ begin
   if not ShellExecuteEx(@Info) then
   begin
     if GetLastError = ERROR_CANCELLED then
-      ErrorText := 'Запрос прав администратора отклонён.'
+      ErrorText := T('Запрос прав администратора отклонён.',
+        'The administrator rights request was declined.')
     else
       ErrorText := SysErrorMessage(GetLastError);
     Exit;
@@ -181,13 +183,15 @@ begin
   try
     if WaitForSingleObject(Info.hProcess, SCHTASKS_TIMEOUT) <> WAIT_OBJECT_0 then
     begin
-      ErrorText := 'Планировщик заданий не ответил вовремя.';
+      ErrorText := T('Планировщик заданий не ответил вовремя.',
+        'Task Scheduler did not respond in time.');
       Exit;
     end;
     GetExitCodeProcess(Info.hProcess, ExitCode);
     Result := ExitCode = 0;
     if not Result then
-      ErrorText := Format('Планировщик заданий завершился с кодом %d.', [ExitCode]);
+      ErrorText := Format(T('Планировщик заданий завершился с кодом %d.',
+        'Task Scheduler exited with code %d.'), [ExitCode]);
   finally
     CloseHandle(Info.hProcess);
   end;

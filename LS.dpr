@@ -5,6 +5,7 @@ uses
   Winapi.Messages,
   System.SysUtils,
   Vcl.Forms,
+  uLocale in 'uLocale.pas',
   uDiagnostics in 'uDiagnostics.pas',
   uUIAutomation in 'uUIAutomation.pas',
   uSettings in 'uSettings.pas',
@@ -14,6 +15,8 @@ uses
   uClipboardSnapshot in 'uClipboardSnapshot.pas',
   uConversionChain in 'uConversionChain.pas',
   uTaskAutorun in 'uTaskAutorun.pas',
+  uLayoutIndicator in 'uLayoutIndicator.pas',
+  uUpdateCheck in 'uUpdateCheck.pas',
   uOperationWorker in 'uOperationWorker.pas',
   uMain in 'uMain.pas' {FormMain};
 
@@ -100,10 +103,13 @@ begin
   for Wnd in Scan.LegacyWindows do
     Paths := Paths + sLineBreak + '  ' + GetWindowProcessPath(Wnd);
   if MessageBox(0, PChar(
-       'Запущена устаревшая версия LayoutSwitcher:' + Paths + sLineBreak +
+       T('Запущена устаревшая версия LayoutSwitcher:',
+         'An outdated version of LayoutSwitcher is running:') + Paths + sLineBreak +
        sLineBreak +
-       'Две копии одновременно будут мешать друг другу и другим программам. ' +
-       'Закрыть устаревшую версию и запустить эту?'),
+       T('Две копии одновременно будут мешать друг другу и другим программам. ' +
+         'Закрыть устаревшую версию и запустить эту?',
+         'Two copies running at once interfere with each other and with other ' +
+         'programs. Close the outdated version and start this one?')),
        'LayoutSwitcher', MB_YESNO or MB_ICONWARNING or MB_SETFOREGROUND) <> IDYES then
     Exit(False);
 
@@ -111,8 +117,10 @@ begin
   for Wnd in Scan.LegacyWindows do
     AllClosed := TerminateWindowProcess(Wnd) and AllClosed;
   if not AllClosed then
-    MessageBox(0, 'Не удалось закрыть устаревшую версию LayoutSwitcher. ' +
+    MessageBox(0, PChar(T('Не удалось закрыть устаревшую версию LayoutSwitcher. ' +
       'Закройте её через значок в трее («Выход») и запустите программу снова.',
+      'Could not close the outdated version of LayoutSwitcher. Close it from ' +
+      'the tray icon (Exit) and start the program again.')),
       'LayoutSwitcher', MB_OK or MB_ICONERROR);
   Result := AllClosed;
 end;
@@ -121,6 +129,10 @@ var
   InstanceMutex: THandle;
 
 begin
+  {$IFDEF DEBUG}
+  // Debug builds report leaked objects when the program exits.
+  ReportMemoryLeaksOnShutdown := True;
+  {$ENDIF}
   if not ResolveOtherInstances then
     Exit;
 
@@ -129,7 +141,8 @@ begin
   begin
     if InstanceMutex <> 0 then
       CloseHandle(InstanceMutex);
-    MessageBox(0, 'LayoutSwitcher уже запущен.', 'LayoutSwitcher',
+    MessageBox(0, PChar(T('LayoutSwitcher уже запущен.',
+      'LayoutSwitcher is already running.')), 'LayoutSwitcher',
       MB_OK or MB_ICONINFORMATION);
     Exit;
   end;

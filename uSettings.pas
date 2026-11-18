@@ -6,12 +6,17 @@
 interface
 
 uses
-  System.SysUtils;
+  System.SysUtils,
+  uLocale;
 
 type
-  TLSAction = (laNone, laConvert, laUpperCase, laLowerCase, laInvertCase);
-  TLSGesture = (lgNone, lgDoubleShift, lgDoubleLCtrl, lgDoubleRCtrl, lgBothCtrl);
-  TLSActionGestures = array[laConvert..laInvertCase] of TLSGesture;
+  // New values are only ever appended: the ordinal values are stored in the
+  // registry.
+  TLSAction = (laNone, laConvert, laUpperCase, laLowerCase, laInvertCase,
+    laTransliterate, laUndo);
+  TLSGesture = (lgNone, lgDoubleShift, lgDoubleLCtrl, lgDoubleRCtrl, lgBothCtrl,
+    lgBothShift, lgDoubleCapsLock);
+  TLSActionGestures = array[laConvert..laUndo] of TLSGesture;
 
   TLSSettings = record
     ActionGestures: TLSActionGestures;
@@ -22,6 +27,10 @@ type
     // Turns off the "press Shift five times" Sticky Keys prompt while the
     // program runs (session-only; restored on exit).
     DisableStickyKeysHotkey: Boolean;
+    ShowLayoutIndicator: Boolean;
+    Language: TLSLanguage;
+    CheckForUpdates: Boolean;
+    LastUpdateCheck: TDateTime;
     class function Defaults: TLSSettings; static;
     function ActionForGesture(Gesture: TLSGesture): TLSAction;
     function GestureForAction(Action: TLSAction): TLSGesture;
@@ -34,25 +43,14 @@ const
   MIN_DOUBLE_TAP_INTERVAL = 200;
   MAX_DOUBLE_TAP_INTERVAL = 1000;
   DEFAULT_DOUBLE_TAP_INTERVAL = 500;
+  // 2: transliteration and undo got default gestures.
+  CURRENT_SETTINGS_VERSION = 2;
   SETTINGS_REGISTRY_KEY = 'Software\LayoutSwitcher';
   STARTUP_VALUE_NAME = 'LayoutSwitcher';
 
-  ActionNames: array[TLSAction] of string = (
-    'Нет',
-    'Конвертировать раскладку',
-    'Преобразовать в ВЕРХНИЙ регистр',
-    'Преобразовать в нижний регистр',
-    'Инвертировать регистр');
-
   ActionKeys: array[TLSAction] of string = (
-    'none', 'convert_layout', 'uppercase', 'lowercase', 'invert_case');
-
-  GestureNames: array[TLSGesture] of string = (
-    'Отключено',
-    'Двойной Shift',
-    'Двойной левый Ctrl',
-    'Двойной правый Ctrl',
-    'Левый Ctrl + правый Ctrl');
+    'none', 'convert_layout', 'uppercase', 'lowercase', 'invert_case',
+    'transliterate', 'undo');
 
   // Screenshot tools own full-screen overlays, use Shift/Ctrl themselves and
   // monitor the clipboard.  LayoutSwitcher must not inject input into them.
@@ -63,6 +61,13 @@ const
     'SnippingTool.exe',
     'ScreenClippingHost.exe',
     'PicPick.exe');
+
+function ActionName(Action: TLSAction): string;
+function GestureName(Gesture: TLSGesture): string;
+
+// Settings written by an older version: gives actions introduced later
+// their default gesture, unless the user already uses that gesture.
+procedure MigrateActionGestures(var Gestures: TLSActionGestures);
 
 function LoadSettings: TLSSettings;
 function SaveSettings(const Settings: TLSSettings): Boolean;
@@ -89,6 +94,11 @@ const
   VALUE_PAUSE_FULLSCREEN = 'PauseInFullscreen';
   VALUE_NOTIFICATIONS = 'ShowNotifications';
   VALUE_DISABLE_STICKY_HOTKEY = 'DisableStickyKeysHotkey';
+  VALUE_LAYOUT_INDICATOR = 'ShowLayoutIndicator';
+  VALUE_LANGUAGE = 'Language';
+  VALUE_CHECK_UPDATES = 'CheckForUpdates';
+  VALUE_LAST_UPDATE_CHECK = 'LastUpdateCheck';
+  VALUE_SETTINGS_VERSION = 'SettingsVersion';
   VALUE_GESTURE_PREFIX = 'Gesture.';
 
 { TLSSettings }
@@ -101,6 +111,8 @@ begin
   Result.ActionGestures[laUpperCase] := lgDoubleLCtrl;
   Result.ActionGestures[laLowerCase] := lgDoubleRCtrl;
   Result.ActionGestures[laInvertCase] := lgBothCtrl;
+  Result.ActionGestures[laTransliterate] := lgBothShift;
+  Result.ActionGestures[laUndo] := lgDoubleCapsLock;
   Result.DoubleTapInterval := DEFAULT_DOUBLE_TAP_INTERVAL;
   SetLength(Result.ExcludedProcesses, Length(DefaultExcludedProcesses));
   for I := 0 to High(DefaultExcludedProcesses) do
@@ -108,6 +120,38 @@ begin
   Result.PauseInFullscreen := True;
   Result.ShowNotifications := True;
   Result.DisableStickyKeysHotkey := False;
+  Result.ShowLayoutIndicator := False;
+  Result.Language := llAuto;
+  Result.CheckForUpdates := True;
+  Result.LastUpdateCheck := 0;
+end;
+
+function ActionName(Action: TLSAction): string;
+begin
+  case Action of
+    laConvert: Result := T('Конвертировать раскладку', 'Convert keyboard layout');
+    laUpperCase: Result := T('Преобразовать в ВЕРХНИЙ регистр', 'Convert to UPPER case');
+    laLowerCase: Result := T('Преобразовать в нижний регистр', 'Convert to lower case');
+    laInvertCase: Result := T('Инвертировать регистр', 'iNVERT cASE');
+    laTransliterate: Result := T('Транслитерация (привет ↔ privet)', 'Transliterate (привет ↔ privet)');
+    laUndo: Result := T('Отменить последнее исправление', 'Undo last correction');
+  else
+    Result := T('Нет', 'None');
+  end;
+end;
+
+function GestureName(Gesture: TLSGesture): string;
+begin
+  case Gesture of
+    lgDoubleShift: Result := T('Двойной Shift', 'Double Shift');
+    lgDoubleLCtrl: Result := T('Двойной левый Ctrl', 'Double left Ctrl');
+    lgDoubleRCtrl: Result := T('Двойной правый Ctrl', 'Double right Ctrl');
+    lgBothCtrl: Result := T('Левый Ctrl + правый Ctrl', 'Left Ctrl + right Ctrl');
+    lgBothShift: Result := T('Левый Shift + правый Shift', 'Left Shift + right Shift');
+    lgDoubleCapsLock: Result := T('Двойной Caps Lock', 'Double Caps Lock');
+  else
+    Result := T('Отключено', 'Disabled');
+  end;
 end;
 
 function TLSSettings.ActionForGesture(Gesture: TLSGesture): TLSAction;
@@ -201,6 +245,28 @@ begin
   Result := string.Join('; ', List);
 end;
 
+procedure MigrateActionGestures(var Gestures: TLSActionGestures);
+const
+  NewActions: array[0..1] of TLSAction = (laTransliterate, laUndo);
+var
+  Defaults: TLSActionGestures;
+  NewAction, Other: TLSAction;
+  Taken: Boolean;
+begin
+  Defaults := TLSSettings.Defaults.ActionGestures;
+  for NewAction in NewActions do
+  begin
+    if Gestures[NewAction] <> lgNone then
+      Continue;
+    Taken := False;
+    for Other := Low(Gestures) to High(Gestures) do
+      if Gestures[Other] = Defaults[NewAction] then
+        Taken := True;
+    if not Taken then
+      Gestures[NewAction] := Defaults[NewAction];
+  end;
+end;
+
 function GestureFromInteger(Value: Integer; Default: TLSGesture): TLSGesture;
 begin
   if (Value >= Ord(Low(TLSGesture))) and (Value <= Ord(High(TLSGesture))) then
@@ -248,6 +314,9 @@ begin
         end;
         Include(Used, Gesture);
       end;
+      if not Registry.ValueExists(VALUE_SETTINGS_VERSION) or
+         (Registry.ReadInteger(VALUE_SETTINGS_VERSION) < CURRENT_SETTINGS_VERSION) then
+        MigrateActionGestures(Loaded);
       Result.ActionGestures := Loaded;
 
       if Registry.ValueExists(VALUE_INTERVAL) then
@@ -263,6 +332,14 @@ begin
       if Registry.ValueExists(VALUE_DISABLE_STICKY_HOTKEY) then
         Result.DisableStickyKeysHotkey :=
           Registry.ReadBool(VALUE_DISABLE_STICKY_HOTKEY);
+      if Registry.ValueExists(VALUE_LAYOUT_INDICATOR) then
+        Result.ShowLayoutIndicator := Registry.ReadBool(VALUE_LAYOUT_INDICATOR);
+      if Registry.ValueExists(VALUE_LANGUAGE) then
+        Result.Language := ReadLanguageSetting;
+      if Registry.ValueExists(VALUE_CHECK_UPDATES) then
+        Result.CheckForUpdates := Registry.ReadBool(VALUE_CHECK_UPDATES);
+      if Registry.ValueExists(VALUE_LAST_UPDATE_CHECK) then
+        Result.LastUpdateCheck := Registry.ReadDateTime(VALUE_LAST_UPDATE_CHECK);
     except
       // A damaged value must not prevent the application from starting.
       Result := TLSSettings.Defaults;
@@ -294,6 +371,11 @@ begin
       Registry.WriteBool(VALUE_NOTIFICATIONS, Settings.ShowNotifications);
       Registry.WriteBool(VALUE_DISABLE_STICKY_HOTKEY,
         Settings.DisableStickyKeysHotkey);
+      Registry.WriteBool(VALUE_LAYOUT_INDICATOR, Settings.ShowLayoutIndicator);
+      Registry.WriteInteger(VALUE_LANGUAGE, Ord(Settings.Language));
+      Registry.WriteBool(VALUE_CHECK_UPDATES, Settings.CheckForUpdates);
+      Registry.WriteDateTime(VALUE_LAST_UPDATE_CHECK, Settings.LastUpdateCheck);
+      Registry.WriteInteger(VALUE_SETTINGS_VERSION, CURRENT_SETTINGS_VERSION);
       Result := True;
     except
       Result := False;

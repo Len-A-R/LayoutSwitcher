@@ -26,3 +26,5 @@ __history
 *.local
 *.identcache
 *.dsk
+Tests/Integration/out/
+dist/

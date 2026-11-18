@@ -41,6 +41,7 @@ type
     Action: TLSAction;
     Success: Boolean;
     UsedBuffer: Boolean;   // The request plan was applied.
+    OriginalText: string;  // Text before a selection/caret replacement.
     BufferAction: TBufferAction;
     NewBufferText: string;
     FocusIsPassword: Boolean;
@@ -64,7 +65,11 @@ type
     FSelectionRange: IUnknown; // UI Automation range to select before typing.
     procedure HandleRequest(Request: TOperationRequest);
     procedure Process(Request: TOperationRequest; Res: TOperationResult);
+    function ReadNativeEdit(Target: HWND; out Text: string;
+      out SelStart, SelEnd: DWORD): Boolean;
     function GetNativeSelection(Target: HWND; out Text: string): Boolean;
+    function ReplaceNativeBeforeCaret(Target: HWND;
+      const Expected, Replacement: string): Boolean;
     function GetClipboardSelection(Request: TOperationRequest;
       out Text: string): Boolean;
     function ReplaceSelection(const Value: string): Boolean;
@@ -88,7 +93,7 @@ implementation
 
 uses
   Winapi.ActiveX,
-  uDiagnostics, uWinUtils, uUIAutomation;
+  uDiagnostics, uWinUtils, uUIAutomation, uLocale;
 
 const
   WM_LS_EXECUTE = WM_APP + 100;
@@ -244,28 +249,32 @@ begin
   Result := False;
 end;
 
-function TOperationWorker.GetNativeSelection(Target: HWND;
-  out Text: string): Boolean;
+function IsNativeEditClass(const ClassText: string): Boolean;
+begin
+  Result := (Pos('edit', ClassText) > 0) or (Pos('tmemo', ClassText) > 0);
+end;
+
+// Reads the text and selection of a standard Edit/RichEdit control.  Text is
+// indexed like the selection: RichEdit counts a paragraph break as one
+// character while WM_GETTEXT returns CRLF, so CRLF is folded to CR there.
+function TOperationWorker.ReadNativeEdit(Target: HWND; out Text: string;
+  out SelStart, SelEnd: DWORD): Boolean;
 var
   ClassText: string;
-  StartSel, EndSel, SelStart, SelEnd: DWORD;
   MessageResult: DWORD_PTR;
   TextLength, Copied: Integer;
-  Buffer: string;
 begin
   Result := False;
   Text := '';
+  SelStart := 0;
+  SelEnd := 0;
   if Target = 0 then
     Exit;
   ClassText := LowerCase(GetWindowClassName(Target));
-  if (Pos('edit', ClassText) = 0) and (Pos('tmemo', ClassText) = 0) then
-    Exit;
-  if IsNativePasswordEdit(Target) then
+  if not IsNativeEditClass(ClassText) or IsNativePasswordEdit(Target) then
     Exit;
 
-  StartSel := 0;
-  EndSel := 0;
-  if SendMessageTimeout(Target, EM_GETSEL, WPARAM(@StartSel), LPARAM(@EndSel),
+  if SendMessageTimeout(Target, EM_GETSEL, WPARAM(@SelStart), LPARAM(@SelEnd),
        SMTO_ABORTIFHUNG or SMTO_BLOCK, WINDOW_MESSAGE_TIMEOUT, @MessageResult) = 0 then
     Exit;
   MessageResult := 0;
@@ -273,23 +282,36 @@ begin
        SMTO_ABORTIFHUNG or SMTO_BLOCK, WINDOW_MESSAGE_TIMEOUT, @MessageResult) = 0 then
     Exit;
   TextLength := Integer(MessageResult);
-  if (TextLength <= 0) or (TextLength > MAX_SELECTION_LEN) or
-     (EndSel > DWORD(TextLength)) or (StartSel > EndSel) then
+  if (TextLength <= 0) or (TextLength > MAX_SELECTION_LEN) then
     Exit;
 
-  SetLength(Buffer, TextLength + 1);
+  SetLength(Text, TextLength + 1);
   MessageResult := 0;
   if SendMessageTimeoutW(Target, WM_GETTEXT, WPARAM(TextLength + 1),
-       LPARAM(PChar(Buffer)), SMTO_ABORTIFHUNG or SMTO_BLOCK,
+       LPARAM(PChar(Text)), SMTO_ABORTIFHUNG or SMTO_BLOCK,
        WINDOW_MESSAGE_TIMEOUT, @MessageResult) = 0 then
     Exit;
   Copied := Integer(MessageResult);
-  if (Copied <= 0) or (EndSel > DWORD(Copied)) then
+  if Copied <= 0 then
     Exit;
-  SetLength(Buffer, Copied);
+  SetLength(Text, Copied);
+  if Pos('richedit', ClassText) > 0 then
+    Text := StringReplace(Text, #13#10, #13, [rfReplaceAll]);
+  Result := (SelStart <= SelEnd) and (SelEnd <= DWORD(Length(Text)));
+end;
 
-  SelStart := StartSel;
-  SelEnd := EndSel;
+function TOperationWorker.GetNativeSelection(Target: HWND;
+  out Text: string): Boolean;
+var
+  Buffer: string;
+  SelStart, SelEnd: DWORD;
+  MessageResult: DWORD_PTR;
+begin
+  Result := False;
+  Text := '';
+  if not ReadNativeEdit(Target, Buffer, SelStart, SelEnd) then
+    Exit;
+
   if SelStart = SelEnd then
   begin
     // No selection: take the word immediately before the caret.
@@ -312,6 +334,36 @@ begin
     FSelectionIsNative := True;
     Result := True;
   end;
+end;
+
+function TOperationWorker.ReplaceNativeBeforeCaret(Target: HWND;
+  const Expected, Replacement: string): Boolean;
+var
+  Text: string;
+  SelStart, SelEnd, StartPos: DWORD;
+  MessageResult: DWORD_PTR;
+begin
+  // Replaces the Expected text that ends at the caret in a standard
+  // Edit/RichEdit control with one EM_REPLACESEL: exact, a single undo step
+  // and independent of how the application converts injected keystrokes.
+  Result := False;
+  if (Expected = '') or not ReadNativeEdit(Target, Text, SelStart, SelEnd) then
+    Exit;
+  if (SelStart <> SelEnd) or (SelEnd < DWORD(Length(Expected))) then
+    Exit;
+  StartPos := SelEnd - DWORD(Length(Expected));
+  if Copy(Text, StartPos + 1, Length(Expected)) <> Expected then
+  begin
+    DiagnosticsLog('target.native_buffer mismatch=true');
+    Exit;
+  end;
+  if SendMessageTimeout(Target, EM_SETSEL, StartPos, SelEnd,
+       SMTO_ABORTIFHUNG or SMTO_BLOCK, WINDOW_MESSAGE_TIMEOUT,
+       @MessageResult) = 0 then
+    Exit;
+  Result := SendMessageTimeoutW(Target, EM_REPLACESEL, 1,
+    LPARAM(PChar(Replacement)), SMTO_ABORTIFHUNG or SMTO_BLOCK,
+    WINDOW_MESSAGE_TIMEOUT, @MessageResult) <> 0;
 end;
 
 function TOperationWorker.GetClipboardSelection(Request: TOperationRequest;
@@ -422,6 +474,12 @@ var
 begin
   Result := False;
   Converted := Text;
+  if Request.Plan.Mode = bmUndo then
+  begin
+    Converted := Request.Plan.Replacement;
+    Res.TargetLayout := Request.Plan.ForcedTarget;
+    Exit(True);
+  end;
   case Request.Action of
     laConvert:
       begin
@@ -436,7 +494,8 @@ begin
         begin
           DiagnosticsLog('convert.no_layout_pair');
           Notify(Res, 'single_layout',
-            'В Windows установлена только одна раскладка клавиатуры.');
+            T('В Windows установлена только одна раскладка клавиатуры.',
+              'Only one keyboard layout is installed in Windows.'));
           Exit;
         end;
         Converted := ConvertTextBetweenLayouts(Text, FCatalog.KeyChars(Pair.Source),
@@ -453,6 +512,8 @@ begin
       Converted := ChangeTextCase(Text, False);
     laInvertCase:
       Converted := InvertTextCase(Text);
+    laTransliterate:
+      Converted := TransliterateText(Text);
   else
     Exit;
   end;
@@ -559,7 +620,8 @@ begin
   begin
     DiagnosticsLog('operation.skipped reason=target_not_responding');
     Res.BufferAction := baClear;
-    Notify(Res, 'target_hung', 'Окно не отвечает, повторите действие через несколько секунд.');
+    Notify(Res, 'target_hung', T('Окно не отвечает, повторите действие через несколько секунд.',
+      'The window is not responding, try again in a few seconds.'));
     Exit;
   end;
 
@@ -570,7 +632,8 @@ begin
     DiagnosticsLog('operation.skipped reason=password_field');
     Res.FocusIsPassword := True;
     Res.BufferAction := baClear;
-    Notify(Res, 'password', 'Поле ввода пароля: преобразование отключено.');
+    Notify(Res, 'password', T('Поле ввода пароля: преобразование отключено.',
+      'Password field: conversion is disabled.'));
     Exit;
   end;
 
@@ -585,15 +648,23 @@ begin
       Exit;
     Res.UsedBuffer := True;
     Typed := Converted + Request.Plan.Tail;
-    Res.Success := (Converted = Region) or
-      (WaitForModifiersReleased(MODIFIER_RELEASE_TIMEOUT) and
-       (GetFocusedWindow = Request.FocusWnd) and
-       SendBackspaces(Request.Plan.DeleteCount) and TypeUnicodeText(Typed));
+    if Converted = Region then
+      Res.Success := True
+    else if ReplaceNativeBeforeCaret(Request.FocusWnd,
+         Region + Request.Plan.Tail, Typed) then
+    begin
+      Res.Success := True;
+      DiagnosticsLog('target.buffer applied=native');
+    end
+    else
+      Res.Success := WaitForModifiersReleased(MODIFIER_RELEASE_TIMEOUT) and
+        (GetFocusedWindow = Request.FocusWnd) and
+        SendBackspaces(Request.Plan.DeleteCount) and TypeUnicodeText(Typed);
     if Res.Success then
     begin
       Res.BufferAction := baSet;
       Res.NewBufferText := Request.Plan.Head + Typed;
-      if Request.Action = laConvert then
+      if Res.TargetLayout <> 0 then
         SwitchLayout(Request.FocusWnd, Res.TargetLayout);
     end
     else
@@ -629,21 +700,27 @@ begin
       [Focus.FailureStage, Cardinal(Focus.ErrorCode)]);
     if FClipboardSkipReason = 'clipboard_has_image_or_files' then
       Notify(Res, 'clipboard_image',
-        'Не удалось получить выделенный текст: в буфере обмена изображение или файлы, ' +
-        'поэтому копирование не выполнялось.');
+        T('Не удалось получить выделенный текст: в буфере обмена изображение или файлы, ' +
+          'поэтому копирование не выполнялось.',
+          'Could not get the selected text: the clipboard holds an image or files, ' +
+          'so nothing was copied.'));
     Exit;
   end;
   DiagnosticsLogFmt('target.selected source=%s length=%d', [Source, Length(Text)]);
 
+  // Undo only ever works on the tracked text.
+  if Request.Action = laUndo then
+    Exit;
   if not TransformText(Request, Text, Res, Converted) then
     Exit;
+  Res.OriginalText := Text;
   Res.Success := (Converted = Text) or ReplaceSelection(Converted);
   FSelectionRange := nil;
   if Res.Success then
   begin
     Res.BufferAction := baSet;
     Res.NewBufferText := Converted;
-    if Request.Action = laConvert then
+    if Res.TargetLayout <> 0 then
       SwitchLayout(Request.FocusWnd, Res.TargetLayout);
   end
   else

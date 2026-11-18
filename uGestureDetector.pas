@@ -5,7 +5,9 @@
 {$Q-}
 
 // Pure state machine that turns physical key transitions into gestures:
-// double Shift, double Left Ctrl, double Right Ctrl, Left Ctrl + Right Ctrl.
+// double Shift, double Left Ctrl, double Right Ctrl, Left Ctrl + Right Ctrl,
+// Left Shift + Right Shift, double Caps Lock.  A double Caps Lock toggles the
+// Caps Lock state twice and so leaves it unchanged.
 // It has no Win32 calls besides VK_* constants, so it is fully unit-testable.
 //
 // A "tap" is a modifier pressed and released within the double-tap interval
@@ -49,8 +51,15 @@ type
     FRCtrlPending: Boolean;
     FRCtrlPendingTime: Cardinal;
 
+    FCapsDownTime: Cardinal;
+    FCapsEligible: Boolean;
+    FCapsPending: Boolean;
+    FCapsPendingTime: Cardinal;
+
     FChordActive: Boolean;
     FChordValid: Boolean;
+    FShiftChordActive: Boolean;
+    FShiftChordValid: Boolean;
 
     function OtherKeysDown(ExceptA, ExceptB, ExceptC: Cardinal): Boolean;
     function CompleteTap(var Pending: Boolean; var PendingTime: Cardinal;
@@ -128,6 +137,7 @@ begin
   FShiftPending := False;
   FLCtrlPending := False;
   FRCtrlPending := False;
+  FCapsPending := False;
 end;
 
 procedure TGestureDetector.ResetTaps;
@@ -137,6 +147,8 @@ begin
   FLCtrlEligible := False;
   FRCtrlEligible := False;
   FChordValid := False;
+  FShiftChordValid := False;
+  FCapsEligible := False;
 end;
 
 procedure TGestureDetector.ResetAll;
@@ -144,6 +156,7 @@ begin
   FillChar(FKeyDown, SizeOf(FKeyDown), 0);
   ResetTaps;
   FChordActive := False;
+  FShiftChordActive := False;
 end;
 
 function TGestureDetector.ReleaseStaleKeys(const IsPhysicallyDown: TKeyStateQuery;
@@ -166,6 +179,7 @@ begin
     // State built on top of the lost key-ups is unreliable.
     ResetTaps;
     FChordActive := False;
+    FShiftChordActive := False;
   end;
 end;
 
@@ -279,6 +293,18 @@ begin
       FRCtrlEligible := False;
     end;
 
+    if VK = VK_CAPITAL then
+    begin
+      if FCapsEligible and (Time - FCapsDownTime <= FInterval) then
+      begin
+        if CompleteTap(FCapsPending, FCapsPendingTime, Time) then
+          Result := lgDoubleCapsLock;
+      end
+      else
+        FCapsPending := False;
+      FCapsEligible := False;
+    end;
+
     if FChordActive and not FKeyDown[VK_LCONTROL] and
        not FKeyDown[VK_RCONTROL] then
     begin
@@ -286,6 +312,16 @@ begin
       if FChordValid then
         Result := lgBothCtrl;
       FChordValid := False;
+      CancelPending;
+    end;
+
+    if FShiftChordActive and not FKeyDown[VK_LSHIFT] and
+       not FKeyDown[VK_RSHIFT] then
+    begin
+      FShiftChordActive := False;
+      if FShiftChordValid then
+        Result := lgBothShift;
+      FShiftChordValid := False;
       CancelPending;
     end;
     Exit;
@@ -315,14 +351,28 @@ begin
       FRCtrlPending := False;
     FRCtrlEligible := False;
   end;
+  if VK <> VK_CAPITAL then
+  begin
+    FCapsEligible := False;
+    FCapsPending := False;
+  end;
   if FChordActive and not IsCtrlKey(VK) then
     FChordValid := False;
+  if FShiftChordActive and not IsShiftKey(VK) then
+    FShiftChordValid := False;
 
   if IsShiftKey(VK) then
   begin
-    // A second Shift while one is held is not a tap.
+    // A second Shift while one is held is not a tap, but both Shift keys
+    // together form the Left Shift + Right Shift chord.
     FShiftEligible := not OtherKeysDown(VK, VK, VK);
     FShiftDownTime := Time;
+    if ((VK = VK_LSHIFT) and FKeyDown[VK_RSHIFT]) or
+       ((VK = VK_RSHIFT) and FKeyDown[VK_LSHIFT]) then
+    begin
+      FShiftChordActive := True;
+      FShiftChordValid := not OtherKeysDown(VK_LSHIFT, VK_RSHIFT, VK_SHIFT);
+    end;
   end
   else if VK = VK_LCONTROL then
   begin
@@ -345,6 +395,11 @@ begin
     else
       FRCtrlEligible := not OtherKeysDown(VK, VK, VK);
     FRCtrlDownTime := Time;
+  end
+  else if VK = VK_CAPITAL then
+  begin
+    FCapsEligible := not OtherKeysDown(VK, VK, VK);
+    FCapsDownTime := Time;
   end;
 
   FKeyDown[VK] := True;

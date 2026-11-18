@@ -49,6 +49,10 @@ function ChooseSourceLayout(const Text: string;
 function InvertTextCase(const Text: string): string;
 function ChangeTextCase(const Text: string; ToUpper: Boolean): string;
 
+// Cyrillic -> Latin when the text contains Cyrillic letters, otherwise
+// Latin -> Cyrillic ("privet" <-> "привет", "Shchuka" <-> "Щука").
+function TransliterateText(const Text: string): string;
+
 type
   TKeyboardLayoutCatalog = class
   private
@@ -197,6 +201,133 @@ begin
     Result := Text.ToUpper
   else
     Result := Text.ToLower;
+end;
+
+{ Transliteration }
+
+const
+  // Cyrillic -> Latin, close to the common "passport" style.  The hard and
+  // soft signs are dropped, as in most practical transliterations.
+  CyrSource = 'абвгдеёжзийклмнопрстуфхцчшщъыьэюяіїєґў';
+  CyrTarget: array[1..38] of string = (
+    'a', 'b', 'v', 'g', 'd', 'e', 'yo', 'zh', 'z', 'i', 'y', 'k', 'l', 'm',
+    'n', 'o', 'p', 'r', 's', 't', 'u', 'f', 'kh', 'ts', 'ch', 'sh', 'shch',
+    '', 'y', '', 'e', 'yu', 'ya', 'i', 'yi', 'ye', 'g', 'w');
+
+  // Latin -> Cyrillic, longest sequences first.
+  LatSequences: array[0..10] of string = (
+    'shch', 'yo', 'yu', 'ya', 'ye', 'zh', 'kh', 'ts', 'ch', 'sh', 'x');
+  LatSequenceTargets: array[0..10] of string = (
+    'щ', 'ё', 'ю', 'я', 'е', 'ж', 'х', 'ц', 'ч', 'ш', 'кс');
+  LatSingle = 'abcdefghijklmnopqrstuvwz';
+  LatSingleTarget = 'абцдефгхийклмнопкрстуввз';
+  LatinVowels = 'aeiouy';
+
+function IsCyrillic(Ch: Char): Boolean;
+begin
+  Result := (Ch >= #$0400) and (Ch <= #$04FF);
+end;
+
+function ContainsCyrillicLetter(const Text: string): Boolean;
+var
+  Ch: Char;
+begin
+  for Ch in Text do
+    if IsCyrillic(Ch) and Ch.IsLetter then
+      Exit(True);
+  Result := False;
+end;
+
+function CyrillicToLatin(const Text: string): string;
+var
+  I, Index: Integer;
+  Ch, Lower: Char;
+  Part: string;
+  NeighbourUpper: Boolean;
+begin
+  Result := '';
+  for I := 1 to Length(Text) do
+  begin
+    Ch := Text[I];
+    Lower := Ch.ToLower;
+    Index := Pos(Lower, CyrSource);
+    if Index = 0 then
+    begin
+      Result := Result + Ch;
+      Continue;
+    end;
+    Part := CyrTarget[Index];
+    if Ch.IsUpper and (Part <> '') then
+    begin
+      // "Щука" -> "Shchuka", but "ЩУКА" -> "SHCHUKA".
+      NeighbourUpper := ((I < Length(Text)) and Text[I + 1].IsUpper) or
+        ((I > 1) and Text[I - 1].IsUpper);
+      if NeighbourUpper then
+        Part := Part.ToUpper
+      else
+        Part := Part.Substring(0, 1).ToUpper + Part.Substring(1);
+    end;
+    Result := Result + Part;
+  end;
+end;
+
+function LatinToCyrillic(const Text: string): string;
+var
+  I, J, Index: Integer;
+  Lower, Part: string;
+  Matched: Boolean;
+  Ch: Char;
+  Upper: Boolean;
+begin
+  Result := '';
+  Lower := Text.ToLower;
+  I := 1;
+  while I <= Length(Text) do
+  begin
+    Upper := Text[I].IsUpper;
+    Matched := False;
+    for J := Low(LatSequences) to High(LatSequences) do
+      if Copy(Lower, I, Length(LatSequences[J])) = LatSequences[J] then
+      begin
+        Part := LatSequenceTargets[J];
+        Inc(I, Length(LatSequences[J]));
+        Matched := True;
+        Break;
+      end;
+    if not Matched then
+    begin
+      Ch := Lower[I];
+      if Ch = 'y' then
+      begin
+        // After a vowel "y" is "й" (novyy -> новый is ambiguous anyway),
+        // otherwise "ы".
+        if (I > 1) and (Pos(Lower[I - 1], LatinVowels) > 0) then
+          Part := 'й'
+        else
+          Part := 'ы';
+      end
+      else
+      begin
+        Index := Pos(Ch, LatSingle);
+        if Index > 0 then
+          Part := LatSingleTarget[Index]
+        else
+          Part := Text[I];
+      end;
+      Inc(I);
+    end;
+    if Upper then
+      Part := Part.Substring(0, 1).ToUpper + Part.Substring(1);
+    Result := Result + Part;
+  end;
+end;
+
+function TransliterateText(const Text: string): string;
+begin
+  if ContainsCyrillicLetter(Text) then
+    Result := CyrillicToLatin(Text)
+  else
+    Result := LatinToCyrillic(Text);
 end;
 
 { TKeyboardLayoutCatalog }

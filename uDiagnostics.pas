@@ -25,13 +25,17 @@ function SetDiagnosticsEnabled(Value: Boolean): Boolean;
 function DiagnosticsDirectory: string;
 function DiagnosticsLogFile: string;
 procedure OpenDiagnosticsDirectory;
+// Packs the newest logs, the newest minidump and SystemInfo (written as
+// system-info.txt) into a zip archive for sending to the developer.
+function CreateDiagnosticsReport(const ZipFileName, SystemInfo: string;
+  out ErrorText: string): Boolean;
 
 implementation
 
 uses
   Winapi.Windows, Winapi.ShellAPI,
   System.Classes, System.Win.Registry, System.IOUtils, System.Types,
-  System.Generics.Collections, System.Generics.Defaults,
+  System.Generics.Collections, System.Generics.Defaults, System.Zip,
   Vcl.Forms,
   uWinUtils;
 
@@ -573,6 +577,77 @@ begin
   except
     // Opening the folder is optional and must not affect the application.
   end;
+end;
+
+function CreateDiagnosticsReport(const ZipFileName, SystemInfo: string;
+  out ErrorText: string): Boolean;
+const
+  REPORT_LOG_FILES = 5;
+  REPORT_DUMP_FILES = 1;
+var
+  Zip: TZipFile;
+  Files: TArray<string>;
+  I: Integer;
+  Stream: TStream;
+  InfoBytes: TBytes;
+
+  procedure AddShared(const FileName: string);
+  var
+    FileStream: TFileStream;
+  begin
+    // The current log is appended to concurrently: open it share-all.
+    try
+      FileStream := TFileStream.Create(FileName, fmOpenRead or fmShareDenyNone);
+      try
+        Zip.Add(FileStream, ExtractFileName(FileName));
+      finally
+        FileStream.Free;
+      end;
+    except
+      // A locked or vanished file must not spoil the whole report.
+    end;
+  end;
+
+begin
+  Result := False;
+  ErrorText := '';
+  try
+    if FileExists(ZipFileName) then
+      System.SysUtils.DeleteFile(ZipFileName);
+    Zip := TZipFile.Create;
+    try
+      Zip.Open(ZipFileName, zmWrite);
+      InfoBytes := TEncoding.UTF8.GetPreamble + TEncoding.UTF8.GetBytes(SystemInfo);
+      Stream := TBytesStream.Create(InfoBytes);
+      try
+        Zip.Add(Stream, 'system-info.txt');
+      finally
+        Stream.Free;
+      end;
+      if (GDiagnosticsDirectory <> '') and DirectoryExists(GDiagnosticsDirectory) then
+      begin
+        Files := SortedByAge(TDirectory.GetFiles(GDiagnosticsDirectory,
+          'LayoutSwitcher-*.log'));
+        for I := High(Files) downto 0 do
+          if High(Files) - I < REPORT_LOG_FILES then
+            AddShared(Files[I]);
+        Files := SortedByAge(TDirectory.GetFiles(GDiagnosticsDirectory,
+          'LayoutSwitcher-*.dmp'));
+        for I := High(Files) downto 0 do
+          if High(Files) - I < REPORT_DUMP_FILES then
+            AddShared(Files[I]);
+      end;
+      Zip.Close;
+      Result := True;
+    finally
+      Zip.Free;
+    end;
+  except
+    on E: Exception do
+      ErrorText := E.Message;
+  end;
+  DiagnosticsLogFmt('diagnostics.report success=%s path="%s"',
+    [BoolToStr(Result, True), ZipFileName]);
 end;
 
 procedure InitializeDiagnostics;

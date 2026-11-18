@@ -39,6 +39,10 @@ function GetExecutableVersion: string;
 function ReadStickyKeysFlags(out Flags: DWORD): Boolean;
 function WriteStickyKeysFlags(Flags: DWORD): Boolean;
 
+// "To turn off Caps Lock: press the SHIFT key" is enabled.  A second Caps
+// Lock press then does not turn it off.
+function IsCapsLockOffByShift: Boolean;
+
 function SendChord(ModifierVK, VK: Word): Boolean;
 function SendBackspaces(Count: Integer): Boolean;
 function TypeUnicodeText(const Value: string): Boolean;
@@ -48,7 +52,7 @@ implementation
 
 uses
   Winapi.MultiMon,
-  System.SysUtils;
+  System.SysUtils, System.Character;
 
 const
   PROCESS_QUERY_LIMITED_INFORMATION = $1000;
@@ -340,6 +344,26 @@ begin
     @StickyKeys, 0);
 end;
 
+function IsCapsLockOffByShift: Boolean;
+const
+  KLF_SHIFTLOCK = $00010000;
+var
+  Key: HKEY;
+  Value, Size, ValueType: DWORD;
+begin
+  Result := False;
+  if RegOpenKeyEx(HKEY_CURRENT_USER, 'Keyboard Layout', 0, KEY_READ, Key) <> ERROR_SUCCESS then
+    Exit;
+  try
+    Size := SizeOf(Value);
+    if (RegQueryValueEx(Key, 'Attributes', nil, @ValueType, @Value, @Size) = ERROR_SUCCESS) and
+       (ValueType = REG_DWORD) then
+      Result := (Value and KLF_SHIFTLOCK) <> 0;
+  finally
+    RegCloseKey(Key);
+  end;
+end;
+
 function SendChord(ModifierVK, VK: Word): Boolean;
 var
   Inputs: array[0..3] of TInput;
@@ -391,32 +415,41 @@ end;
 
 function TypeUnicodeText(const Value: string): Boolean;
 const
-  MAX_CHARS_PER_BATCH = 64;
+  // Some applications (Windows 11 Notepad, other WinUI/XAML input stacks)
+  // read the character of a VK_PACKET key event when they process it, not
+  // when it was queued.  A batch of KEYEVENTF_UNICODE events then turns into
+  // the last character repeated ("дела" -> "аааа").  Each character is sent
+  // separately and given time to be consumed.
+  CHAR_INTERVAL_MS = 8;
 var
-  Inputs: array[0..MAX_CHARS_PER_BATCH * 2 - 1] of TInput;
-  Offset, BatchChars, I, InputCount: Integer;
+  Inputs: array[0..3] of TInput;
+  Index, Units, I, InputCount: Integer;
 begin
   Result := True;
-  Offset := 1;
-  while Offset <= Length(Value) do
+  Index := 1;
+  while Index <= Length(Value) do
   begin
-    BatchChars := Length(Value) - Offset + 1;
-    if BatchChars > MAX_CHARS_PER_BATCH then
-      BatchChars := MAX_CHARS_PER_BATCH;
-    InputCount := BatchChars * 2;
+    // A surrogate pair is one character and goes in one call.
+    Units := 1;
+    if Value[Index].IsHighSurrogate and (Index < Length(Value)) and
+       Value[Index + 1].IsLowSurrogate then
+      Units := 2;
     FillChar(Inputs, SizeOf(Inputs), 0);
-    for I := 0 to BatchChars - 1 do
+    for I := 0 to Units - 1 do
     begin
       Inputs[I * 2].Itype := INPUT_KEYBOARD;
-      Inputs[I * 2].ki.wScan := Ord(Value[Offset + I]);
+      Inputs[I * 2].ki.wScan := Ord(Value[Index + I]);
       Inputs[I * 2].ki.dwFlags := KEYEVENTF_UNICODE;
       Inputs[I * 2].ki.dwExtraInfo := LS_INPUT_TAG;
       Inputs[I * 2 + 1] := Inputs[I * 2];
       Inputs[I * 2 + 1].ki.dwFlags := KEYEVENTF_UNICODE or KEYEVENTF_KEYUP;
     end;
+    InputCount := Units * 2;
     if SendInput(InputCount, Inputs[0], SizeOf(TInput)) <> UINT(InputCount) then
       Exit(False);
-    Inc(Offset, BatchChars);
+    Inc(Index, Units);
+    if Index <= Length(Value) then
+      Sleep(CHAR_INTERVAL_MS);
   end;
 end;
 

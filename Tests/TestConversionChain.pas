@@ -257,7 +257,7 @@ procedure TConversionChainTests.SelectionReplacementRevertsWhole;
 var
   Plan: TBufferPlan;
 begin
-  FChain.CompletedWhole(laConvert, 'привет мир', EN, RU);
+  FChain.CompletedWhole(laConvert, 'привет мир', 'ghbdtn vbh', EN, RU);
   Plan := FChain.Plan(laConvert, 'привет мир');
   Assert.AreEqual(Ord(bmRevert), Ord(Plan.Mode));
   Assert.AreEqual('привет мир', Plan.Region);

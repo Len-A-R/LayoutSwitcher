@@ -16,7 +16,8 @@ uses
   uConversionChain in '..\uConversionChain.pas',
   TestLayoutConverter in 'TestLayoutConverter.pas',
   TestGestureDetector in 'TestGestureDetector.pas',
-  TestConversionChain in 'TestConversionChain.pas';
+  TestConversionChain in 'TestConversionChain.pas',
+  TestFeatures21 in 'TestFeatures21.pas';
 
 var
   Runner: ITestRunner;
