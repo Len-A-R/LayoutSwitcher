@@ -4,7 +4,7 @@ object FormMain: TFormMain
   BorderIcons = [biSystemMenu]
   BorderStyle = bsSingle
   Caption = 'LayoutSwitcher - '#1055#1077#1088#1077#1082#1083#1102#1095#1072#1090#1077#1083#1100' '#1088#1072#1089#1082#1083#1072#1076#1086#1082' '#1082#1083#1072#1074#1080#1072#1090#1091#1088#1099
-  ClientHeight = 384
+  ClientHeight = 430
   ClientWidth = 520
   Color = clBtnFace
   Font.Charset = DEFAULT_CHARSET
@@ -19,7 +19,7 @@ object FormMain: TFormMain
   TextHeight = 13
   object lblVersion: TLabel
     Left = 8
-    Top = 356
+    Top = 402
     Width = 8
     Height = 13
     Caption = #1042#1077#1088#1089#1080#1103
@@ -32,7 +32,7 @@ object FormMain: TFormMain
   end
   object lblAuthor: TLabel
     Left = 200
-    Top = 356
+    Top = 402
     Width = 8
     Height = 13
     Caption = 'len-a-r'
@@ -61,13 +61,22 @@ object FormMain: TFormMain
     TabOrder = 1
     OnClick = chkDiagnosticsClick
   end
+  object chkAutorunElevated: TCheckBox
+    Left = 26
+    Top = 30
+    Width = 486
+    Height = 17
+    Caption = #1047#1072#1087#1091#1089#1082#1072#1090#1100' '#1089' '#1087#1088#1072#1074#1072#1084#1080' '#1072#1076#1084#1080#1085#1080#1089#1090#1088#1072#1090#1086#1088#1072' ('#1076#1083#1103' '#1086#1082#1086#1085', '#1086#1090#1082#1088#1099#1090#1099#1093' '#1086#1090' '#1080#1084#1077#1085#1080' '#1072#1076#1084#1080#1085#1080#1089#1090#1088#1072#1090#1086#1088#1072')'
+    TabOrder = 2
+    OnClick = chkAutorunElevatedClick
+  end
   object grpHotkeys: TGroupBox
     Left = 8
-    Top = 34
+    Top = 56
     Width = 504
     Height = 170
     Caption = #1057#1086#1095#1077#1090#1072#1085#1080#1103' '#1082#1083#1072#1074#1080#1096
-    TabOrder = 2
+    TabOrder = 3
     object lblConvert: TLabel
       Left = 12
       Top = 27
@@ -177,11 +186,11 @@ object FormMain: TFormMain
   end
   object grpBehavior: TGroupBox
     Left = 8
-    Top = 212
+    Top = 234
     Width = 504
-    Height = 128
+    Height = 152
     Caption = #1055#1086#1074#1077#1076#1077#1085#1080#1077
-    TabOrder = 3
+    TabOrder = 4
     object chkPauseFullscreen: TCheckBox
       Left = 12
       Top = 22
@@ -200,39 +209,48 @@ object FormMain: TFormMain
       TabOrder = 1
       OnClick = chkBehaviorClick
     end
+    object chkDisableStickyKeys: TCheckBox
+      Left = 12
+      Top = 70
+      Width = 480
+      Height = 17
+      Caption = #1054#1090#1082#1083#1102#1095#1080#1090#1100' '#1074#1099#1079#1086#1074' '#1079#1072#1083#1080#1087#1072#1085#1080#1103' '#1082#1083#1072#1074#1080#1096' '#1087#1103#1090#1080#1082#1088#1072#1090#1085#1099#1084' '#1085#1072#1078#1072#1090#1080#1077#1084' Shift'
+      TabOrder = 2
+      OnClick = chkBehaviorClick
+    end
     object lblExcluded: TLabel
       Left = 12
-      Top = 74
+      Top = 98
       Width = 8
       Height = 13
       Caption = #1053#1077' '#1088#1072#1073#1086#1090#1072#1090#1100' '#1074' '#1087#1088#1086#1075#1088#1072#1084#1084#1072#1093' ('#1080#1084#1077#1085#1072' exe '#1095#1077#1088#1077#1079' '#1090#1086#1095#1082#1091' '#1089' '#1079#1072#1087#1103#1090#1086#1081'):'
     end
     object edExcluded: TEdit
       Left = 12
-      Top = 92
+      Top = 116
       Width = 388
       Height = 21
-      TabOrder = 2
+      TabOrder = 3
       OnExit = edExcludedExit
     end
     object btnDefaultExcluded: TButton
       Left = 406
-      Top = 90
+      Top = 114
       Width = 86
       Height = 25
       Caption = #1055#1086' '#1091#1084#1086#1083#1095#1072#1085#1080#1102
-      TabOrder = 3
+      TabOrder = 4
       OnClick = btnDefaultExcludedClick
     end
   end
   object btnClose: TButton
     Left = 432
-    Top = 350
+    Top = 396
     Width = 80
     Height = 25
     Cancel = True
     Caption = #1047#1072#1082#1088#1099#1090#1100
-    TabOrder = 4
+    TabOrder = 5
     OnClick = btnCloseClick
   end
   object TrayIcon: TTrayIcon

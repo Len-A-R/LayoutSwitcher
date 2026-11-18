@@ -12,6 +12,8 @@ uses
   uGestureDetector in 'uGestureDetector.pas',
   uLayoutConverter in 'uLayoutConverter.pas',
   uClipboardSnapshot in 'uClipboardSnapshot.pas',
+  uConversionChain in 'uConversionChain.pas',
+  uTaskAutorun in 'uTaskAutorun.pas',
   uOperationWorker in 'uOperationWorker.pas',
   uMain in 'uMain.pas' {FormMain};
 

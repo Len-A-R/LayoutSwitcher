@@ -446,6 +446,8 @@ begin
   Assert.AreEqual(lgBothCtrl, S.GestureForAction(laInvertCase));
   Assert.AreEqual(Cardinal(500), S.DoubleTapInterval);
   Assert.IsTrue(S.IsProcessExcluded('ShareX.exe'));
+  // System accessibility settings are only touched on explicit request.
+  Assert.IsFalse(S.DisableStickyKeysHotkey);
 end;
 
 procedure TSettingsTests.AssigningGestureDisablesPreviousOwner;

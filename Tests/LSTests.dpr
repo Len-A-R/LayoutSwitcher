@@ -13,8 +13,10 @@ uses
   uSettings in '..\uSettings.pas',
   uGestureDetector in '..\uGestureDetector.pas',
   uLayoutConverter in '..\uLayoutConverter.pas',
+  uConversionChain in '..\uConversionChain.pas',
   TestLayoutConverter in 'TestLayoutConverter.pas',
-  TestGestureDetector in 'TestGestureDetector.pas';
+  TestGestureDetector in 'TestGestureDetector.pas',
+  TestConversionChain in 'TestConversionChain.pas';
 
 var
   Runner: ITestRunner;

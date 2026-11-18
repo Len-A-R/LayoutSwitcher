@@ -11,7 +11,7 @@ uses
   System.SysUtils, System.Classes, System.Generics.Collections,
   Vcl.Graphics, Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.ExtCtrls, Vcl.Menus,
   System.ImageList, Vcl.ImgList, PngImageList, Vcl.StdCtrls, Vcl.ComCtrls,
-  uSettings, uGestureDetector, uOperationWorker;
+  uSettings, uGestureDetector, uOperationWorker, uConversionChain;
 
 const
   INSTANCE_WINDOW_PROP = 'LayoutSwitcher.Instance.v2';
@@ -37,6 +37,7 @@ type
     lblAuthor: TLabel;
     chkAutorun: TCheckBox;
     chkDiagnostics: TCheckBox;
+    chkAutorunElevated: TCheckBox;
     grpHotkeys: TGroupBox;
     lblConvert: TLabel;
     cbConvert: TComboBox;
@@ -53,6 +54,7 @@ type
     grpBehavior: TGroupBox;
     chkPauseFullscreen: TCheckBox;
     chkNotifications: TCheckBox;
+    chkDisableStickyKeys: TCheckBox;
     lblExcluded: TLabel;
     edExcluded: TEdit;
     btnDefaultExcluded: TButton;
@@ -64,6 +66,7 @@ type
     procedure TimerPauseTimer(Sender: TObject);
     procedure TrayIconDblClick(Sender: TObject);
     procedure chkAutorunClick(Sender: TObject);
+    procedure chkAutorunElevatedClick(Sender: TObject);
     procedure chkDiagnosticsClick(Sender: TObject);
     procedure cbGestureChange(Sender: TObject);
     procedure edIntervalChange(Sender: TObject);
@@ -101,10 +104,19 @@ type
     FOperationStarted: DWORD;
     FOperationSequence: Cardinal;
     FNotificationTimes: TDictionary<string, DWORD>;
+    FChain: TConversionChain;
+    FPendingPlan: TBufferPlan;
+    // Sticky Keys hotkey bits this instance turned off and must restore.
+    FStickyHotkeyRemoved: DWORD;
+    // Logon task with administrator rights (uTaskAutorun).
+    FTaskInstalled: Boolean;
+    FTaskPath: string;
 
     function RegisterRawInput: Boolean;
     procedure UnregisterRawInput;
     procedure ResetInputState(const Reason: string; Reregister: Boolean);
+    procedure ApplyStickyKeysSetting;
+    procedure RestoreStickyKeysHotkey;
     procedure HandleRawInput(RawInputHandle: THandle; EventTime: DWORD);
     procedure ProcessKeyboardEvent(EventTime: DWORD; VK, ScanCode: UINT;
       IsKeyUp: Boolean);
@@ -131,6 +143,7 @@ type
     procedure ApplySettings;
     procedure ApplyExcludedFromEdit;
     procedure SyncAutorunPath;
+    procedure UpdateAutorunControls;
     procedure ShowSettingsWindow;
 
     procedure UpdateTrayIcon(Force: Boolean);
@@ -155,11 +168,12 @@ implementation
 uses
   System.DateUtils,
   PngImage, PngFunctions,
-  uDiagnostics, uWinUtils;
+  uDiagnostics, uWinUtils, uTaskAutorun;
 
 const
   WM_LS_OPERATION_DONE = WM_APP + 10;
-  MAX_WORD_LEN = 50;
+  // The phrase typed since the last caret jump (spaces included).
+  MAX_PHRASE_LEN = 300;
   TO_UNICODE_NO_STATE_CHANGE = 4;
   OPERATION_WATCHDOG_MS = 30000;
   NOTIFICATION_THROTTLE_MS = 60000;
@@ -299,6 +313,7 @@ var
 begin
   FSettings := LoadSettings;
   FDetector := TGestureDetector.Create;
+  FChain := TConversionChain.Create;
   FDetector.Interval := FSettings.DoubleTapInterval;
   FNotificationTimes := TDictionary<string, DWORD>.Create;
   FVersion := GetExecutableVersion;
@@ -320,13 +335,15 @@ begin
   // rewriting the Run key or the diagnostics preference.
   FUpdatingControls := True;
   try
-    chkAutorun.Checked := IsInStartup(STARTUP_VALUE_NAME);
     chkDiagnostics.Checked := DiagnosticsEnabled;
   finally
     FUpdatingControls := False;
   end;
   LoadControlsFromSettings;
+  FTaskInstalled := QueryAutorunTask(FTaskPath);
+  UpdateAutorunControls;
   SyncAutorunPath;
+  ApplyStickyKeysSetting;
   mniDiagnostics.Enabled := DirectoryExists(DiagnosticsDirectory);
 
   ShowInTaskBar := False;
@@ -365,6 +382,7 @@ begin
   DiagnosticsLog('form.destroy begin');
   LSWTSUnRegisterSessionNotification(Handle);
   UnregisterRawInput;
+  RestoreStickyKeysHotkey;
   if Assigned(FWorker) then
   begin
     FWorker.Shutdown;
@@ -375,6 +393,7 @@ begin
           PM_REMOVE) do
     TOperationResult(Msg.lParam).Free;
   FreeAndNil(FDetector);
+  FreeAndNil(FChain);
   FreeAndNil(FNotificationTimes);
   DiagnosticsLog('form.destroy end');
 end;
@@ -532,6 +551,7 @@ begin
     [Reason, FDetector.HeldKeyCount, BoolToStr(FOperationBusy, True)]);
   FDetector.ResetAll;
   ClearBuffer;
+  FChain.Reset;
   FLastWindow := 0;
   // A request interrupted by sleep must not block the next gesture; a late
   // result is discarded by its sequence number.
@@ -542,7 +562,51 @@ begin
     // covers keyboards re-enumerated on resume.
     if not RegisterRawInput then
       DiagnosticsLogFmt('raw_input.reregister_failed error=%d', [GetLastError]);
+    // The accessibility settings may have been changed meanwhile.
+    ApplyStickyKeysSetting;
   end;
+end;
+
+procedure TFormMain.ApplyStickyKeysSetting;
+var
+  Flags, Bits: DWORD;
+begin
+  if not FSettings.DisableStickyKeysHotkey then
+  begin
+    RestoreStickyKeysHotkey;
+    Exit;
+  end;
+  if not ReadStickyKeysFlags(Flags) then
+  begin
+    DiagnosticsLogFmt('sticky_keys.read_failed error=%d', [GetLastError]);
+    Exit;
+  end;
+  Bits := Flags and STICKY_KEYS_HOTKEY_FLAGS;
+  if Bits = 0 then
+    Exit; // Already off: nothing to change and nothing to restore later.
+  if WriteStickyKeysFlags(Flags and not STICKY_KEYS_HOTKEY_FLAGS) then
+  begin
+    FStickyHotkeyRemoved := FStickyHotkeyRemoved or Bits;
+    DiagnosticsLogFmt('sticky_keys.hotkey_disabled flags=0x%.8x', [Flags]);
+  end
+  else
+    DiagnosticsLogFmt('sticky_keys.write_failed error=%d', [GetLastError]);
+end;
+
+procedure TFormMain.RestoreStickyKeysHotkey;
+var
+  Flags: DWORD;
+begin
+  if FStickyHotkeyRemoved = 0 then
+    Exit;
+  // Only the bits removed by us are put back; other Sticky Keys options the
+  // user may have changed meanwhile are preserved.
+  if ReadStickyKeysFlags(Flags) and
+     WriteStickyKeysFlags(Flags or FStickyHotkeyRemoved) then
+    DiagnosticsLog('sticky_keys.hotkey_restored')
+  else
+    DiagnosticsLogFmt('sticky_keys.restore_failed error=%d', [GetLastError]);
+  FStickyHotkeyRemoved := 0;
 end;
 
 procedure TFormMain.ProcessKeyboardEvent(EventTime: DWORD; VK, ScanCode: UINT;
@@ -613,7 +677,7 @@ begin
 
   case VK of
     VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN, VK_HOME, VK_END, VK_PRIOR, VK_NEXT,
-    VK_ESCAPE, VK_DELETE, VK_INSERT, VK_RETURN, VK_TAB, VK_SPACE:
+    VK_ESCAPE, VK_DELETE, VK_INSERT, VK_RETURN, VK_TAB:
       begin
         ClearBuffer;
         Exit;
@@ -695,9 +759,11 @@ end;
 
 procedure TFormMain.AddChar(Ch: Char);
 begin
+  // Any manual edit ends the word -> phrase -> revert chain.
+  FChain.Reset;
   if FBufferOverflowed then
     Exit;
-  if Length(FBuffer) >= MAX_WORD_LEN then
+  if Length(FBuffer) >= MAX_PHRASE_LEN then
   begin
     FBuffer := '';
     FBufferOverflowed := True;
@@ -708,6 +774,7 @@ end;
 
 procedure TFormMain.BufferBackspace;
 begin
+  FChain.Reset;
   if not FBufferOverflowed and (FBuffer <> '') then
     SetLength(FBuffer, Length(FBuffer) - 1);
 end;
@@ -716,6 +783,8 @@ procedure TFormMain.ClearBuffer;
 begin
   FBuffer := '';
   FBufferOverflowed := False;
+  if Assigned(FChain) then
+    FChain.Reset;
 end;
 
 procedure TFormMain.SetBufferText(const Value: string);
@@ -723,10 +792,10 @@ var
   Ch: Char;
 begin
   ClearBuffer;
-  if (Value = '') or (Length(Value) > MAX_WORD_LEN) then
+  if (Value = '') or (Length(Value) > MAX_PHRASE_LEN) then
     Exit;
   for Ch in Value do
-    if Ord(Ch) <= 32 then
+    if Ord(Ch) < 32 then
       Exit;
   FBuffer := Value;
 end;
@@ -790,7 +859,10 @@ begin
   Request.Sequence := FOperationSequence;
   Request.Action := Action;
   if not FBufferOverflowed and not FFocusIsPassword then
-    Request.BufferText := FBuffer;
+    Request.Plan := FChain.Plan(Action, FBuffer)
+  else
+    Request.Plan := FChain.Plan(laNone, '');
+  FPendingPlan := Request.Plan;
   Request.FocusWnd := Focus;
   Request.WindowLayout := GetKeyboardLayout(GetWindowThreadProcessId(Focus, nil));
   Request.PreviousLayout := FPreviousLayout;
@@ -822,6 +894,15 @@ begin
       baClear: ClearBuffer;
       baSet: SetBufferText(Res.NewBufferText);
     end;
+    // Remember the step so that repeating the action widens it.
+    if not Res.Success or (FBuffer = '') then
+      FChain.Reset
+    else if Res.UsedBuffer then
+      FChain.Completed(FPendingPlan, Res.Action, FBuffer, Res.SourceLayout,
+        Res.TargetLayout)
+    else
+      FChain.CompletedWhole(Res.Action, FBuffer, Res.SourceLayout,
+        Res.TargetLayout);
     if Res.Success and (Res.SourceLayout <> 0) then
       FPreviousLayout := Res.SourceLayout;
     if Res.Notification <> '' then
@@ -1026,6 +1107,7 @@ begin
     edInterval.Text := IntToStr(FSettings.DoubleTapInterval);
     chkPauseFullscreen.Checked := FSettings.PauseInFullscreen;
     chkNotifications.Checked := FSettings.ShowNotifications;
+    chkDisableStickyKeys.Checked := FSettings.DisableStickyKeysHotkey;
     edExcluded.Text := ProcessListToText(FSettings.ExcludedProcesses);
   finally
     FUpdatingControls := False;
@@ -1090,7 +1172,9 @@ begin
     Exit;
   FSettings.PauseInFullscreen := chkPauseFullscreen.Checked;
   FSettings.ShowNotifications := chkNotifications.Checked;
+  FSettings.DisableStickyKeysHotkey := chkDisableStickyKeys.Checked;
   ApplySettings;
+  ApplyStickyKeysSetting;
 end;
 
 procedure TFormMain.ApplyExcludedFromEdit;
@@ -1123,22 +1207,123 @@ begin
   Close;
 end;
 
+procedure TFormMain.UpdateAutorunControls;
+begin
+  FUpdatingControls := True;
+  try
+    chkAutorun.Checked := FTaskInstalled or IsInStartup(STARTUP_VALUE_NAME);
+    chkAutorunElevated.Checked := FTaskInstalled;
+    chkAutorunElevated.Enabled := chkAutorun.Checked;
+  finally
+    FUpdatingControls := False;
+  end;
+end;
+
 procedure TFormMain.chkAutorunClick(Sender: TObject);
+var
+  ErrorText: string;
 begin
   if FUpdatingControls then
     Exit;
   if chkAutorun.Checked then
     AddToStartup(STARTUP_VALUE_NAME, Application.ExeName)
   else
+  begin
+    if FTaskInstalled then
+    begin
+      if not RemoveAutorunTask(ErrorText) then
+      begin
+        DiagnosticsLogFmt('autorun.task_remove_failed error="%s"', [ErrorText]);
+        UpdateAutorunControls;
+        MessageBox(Handle, PChar('Не удалось отключить автозапуск с правами ' +
+          'администратора.' + sLineBreak + ErrorText), 'LayoutSwitcher',
+          MB_OK or MB_ICONERROR);
+        Exit;
+      end;
+      FTaskInstalled := False;
+    end;
     RemoveFromStartup(STARTUP_VALUE_NAME);
+  end;
+  UpdateAutorunControls;
   DiagnosticsLogFmt('ui.autorun_changed enabled=%s path="%s"',
     [BoolToStr(chkAutorun.Checked, True), Application.ExeName]);
+end;
+
+procedure TFormMain.chkAutorunElevatedClick(Sender: TObject);
+var
+  ErrorText: string;
+begin
+  if FUpdatingControls then
+    Exit;
+  if chkAutorunElevated.Checked then
+  begin
+    if not InstallAutorunTask(Application.ExeName, ErrorText) then
+    begin
+      DiagnosticsLogFmt('autorun.task_install_failed error="%s"', [ErrorText]);
+      UpdateAutorunControls;
+      MessageBox(Handle, PChar('Не удалось включить автозапуск с правами ' +
+        'администратора.' + sLineBreak + ErrorText), 'LayoutSwitcher',
+        MB_OK or MB_ICONERROR);
+      Exit;
+    end;
+    FTaskInstalled := True;
+    // The task replaces the Run key; both would start two copies.
+    RemoveFromStartup(STARTUP_VALUE_NAME);
+    DiagnosticsLog('autorun.task_installed');
+    if not IsProcessElevated then
+      MessageBox(Handle, 'С правами администратора программа будет запускаться ' +
+        'со следующего входа в Windows. Чтобы работать в окнах администратора ' +
+        'уже сейчас, закройте LayoutSwitcher и запустите его от имени администратора.',
+        'LayoutSwitcher', MB_OK or MB_ICONINFORMATION);
+  end
+  else
+  begin
+    if not RemoveAutorunTask(ErrorText) then
+    begin
+      DiagnosticsLogFmt('autorun.task_remove_failed error="%s"', [ErrorText]);
+      UpdateAutorunControls;
+      MessageBox(Handle, PChar('Не удалось отключить автозапуск с правами ' +
+        'администратора.' + sLineBreak + ErrorText), 'LayoutSwitcher',
+        MB_OK or MB_ICONERROR);
+      Exit;
+    end;
+    FTaskInstalled := False;
+    AddToStartup(STARTUP_VALUE_NAME, Application.ExeName);
+    DiagnosticsLog('autorun.task_removed');
+  end;
+  UpdateAutorunControls;
 end;
 
 procedure TFormMain.SyncAutorunPath;
 var
   Registered: string;
 begin
+  if FTaskInstalled then
+  begin
+    // A leftover Run entry would start a second, non-elevated copy.
+    if IsInStartup(STARTUP_VALUE_NAME) then
+    begin
+      RemoveFromStartup(STARTUP_VALUE_NAME);
+      DiagnosticsLog('autorun.run_key_removed reason=task_installed');
+    end;
+    if (FTaskPath = '') or SameText(ExpandFileName(FTaskPath), Application.ExeName) then
+      Exit;
+    {$IFDEF DEBUG}
+    DiagnosticsLogFmt('autorun.task_path_mismatch registered="%s" current="%s" updated=false',
+      [FTaskPath, Application.ExeName]);
+    {$ELSE}
+    // Updating the task needs elevation; do it silently only when we have it.
+    var ErrorText: string;
+    if IsProcessElevated and InstallAutorunTask(Application.ExeName, ErrorText) then
+      DiagnosticsLogFmt('autorun.task_path_mismatch registered="%s" current="%s" updated=true',
+        [FTaskPath, Application.ExeName])
+    else
+      DiagnosticsLogFmt('autorun.task_path_mismatch registered="%s" current="%s" updated=false',
+        [FTaskPath, Application.ExeName]);
+    {$ENDIF}
+    Exit;
+  end;
+
   if not chkAutorun.Checked then
     Exit;
   Registered := StartupCommandToPath(GetStartupCommand(STARTUP_VALUE_NAME));

@@ -11,6 +11,11 @@ const
   // dwExtraInfo marker for our own synthetic input.
   LS_INPUT_TAG = $4C535749; // "LSWI"
 
+  // STICKYKEYS.dwFlags bits behind the "press Shift five times" prompt.
+  SKF_HOTKEYACTIVE = $00000004;
+  SKF_CONFIRMHOTKEY = $00000008;
+  STICKY_KEYS_HOTKEY_FLAGS = SKF_HOTKEYACTIVE or SKF_CONFIRMHOTKEY;
+
 function GetFocusedWindow: HWND;
 function GetWindowProcessPath(Wnd: HWND): string;
 function GetWindowProcessFileName(Wnd: HWND): string;
@@ -27,6 +32,12 @@ function IsWindowProcessElevatedAboveUs(Wnd: HWND): Boolean;
 function IsFullscreenAppActive: Boolean;
 
 function GetExecutableVersion: string;
+
+// Sticky Keys flags.  WriteStickyKeysFlags changes the current session only
+// (no SPIF_UPDATEINIFILE), so the user profile is never modified and a
+// crash is undone by the next logon.
+function ReadStickyKeysFlags(out Flags: DWORD): Boolean;
+function WriteStickyKeysFlags(Flags: DWORD): Boolean;
 
 function SendChord(ModifierVK, VK: Word): Boolean;
 function SendBackspaces(Count: Integer): Boolean;
@@ -57,6 +68,11 @@ type
     hwndMoveSize: HWND;
     hwndCaret: HWND;
     rcCaret: TRect;
+  end;
+
+  TLSStickyKeys = record
+    cbSize: UINT;
+    dwFlags: DWORD;
   end;
 
   TLSTokenMandatoryLabel = record
@@ -301,6 +317,27 @@ begin
   Result := Format('%d.%d.%d.%d', [HiWord(Info^.dwFileVersionMS),
     LoWord(Info^.dwFileVersionMS), HiWord(Info^.dwFileVersionLS),
     LoWord(Info^.dwFileVersionLS)]);
+end;
+
+function ReadStickyKeysFlags(out Flags: DWORD): Boolean;
+var
+  StickyKeys: TLSStickyKeys;
+begin
+  FillChar(StickyKeys, SizeOf(StickyKeys), 0);
+  StickyKeys.cbSize := SizeOf(StickyKeys);
+  Result := SystemParametersInfo(SPI_GETSTICKYKEYS, SizeOf(StickyKeys),
+    @StickyKeys, 0);
+  Flags := StickyKeys.dwFlags;
+end;
+
+function WriteStickyKeysFlags(Flags: DWORD): Boolean;
+var
+  StickyKeys: TLSStickyKeys;
+begin
+  StickyKeys.cbSize := SizeOf(StickyKeys);
+  StickyKeys.dwFlags := Flags;
+  Result := SystemParametersInfo(SPI_SETSTICKYKEYS, SizeOf(StickyKeys),
+    @StickyKeys, 0);
 end;
 
 function SendChord(ModifierVK, VK: Word): Boolean;

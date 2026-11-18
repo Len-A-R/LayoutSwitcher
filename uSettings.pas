@@ -19,6 +19,9 @@ type
     ExcludedProcesses: TArray<string>;
     PauseInFullscreen: Boolean;
     ShowNotifications: Boolean;
+    // Turns off the "press Shift five times" Sticky Keys prompt while the
+    // program runs (session-only; restored on exit).
+    DisableStickyKeysHotkey: Boolean;
     class function Defaults: TLSSettings; static;
     function ActionForGesture(Gesture: TLSGesture): TLSAction;
     function GestureForAction(Action: TLSAction): TLSGesture;
@@ -85,6 +88,7 @@ const
   VALUE_EXCLUDED = 'ExcludedProcesses';
   VALUE_PAUSE_FULLSCREEN = 'PauseInFullscreen';
   VALUE_NOTIFICATIONS = 'ShowNotifications';
+  VALUE_DISABLE_STICKY_HOTKEY = 'DisableStickyKeysHotkey';
   VALUE_GESTURE_PREFIX = 'Gesture.';
 
 { TLSSettings }
@@ -103,6 +107,7 @@ begin
     Result.ExcludedProcesses[I] := DefaultExcludedProcesses[I];
   Result.PauseInFullscreen := True;
   Result.ShowNotifications := True;
+  Result.DisableStickyKeysHotkey := False;
 end;
 
 function TLSSettings.ActionForGesture(Gesture: TLSGesture): TLSAction;
@@ -255,6 +260,9 @@ begin
         Result.PauseInFullscreen := Registry.ReadBool(VALUE_PAUSE_FULLSCREEN);
       if Registry.ValueExists(VALUE_NOTIFICATIONS) then
         Result.ShowNotifications := Registry.ReadBool(VALUE_NOTIFICATIONS);
+      if Registry.ValueExists(VALUE_DISABLE_STICKY_HOTKEY) then
+        Result.DisableStickyKeysHotkey :=
+          Registry.ReadBool(VALUE_DISABLE_STICKY_HOTKEY);
     except
       // A damaged value must not prevent the application from starting.
       Result := TLSSettings.Defaults;
@@ -284,6 +292,8 @@ begin
         ProcessListToText(Settings.ExcludedProcesses));
       Registry.WriteBool(VALUE_PAUSE_FULLSCREEN, Settings.PauseInFullscreen);
       Registry.WriteBool(VALUE_NOTIFICATIONS, Settings.ShowNotifications);
+      Registry.WriteBool(VALUE_DISABLE_STICKY_HOTKEY,
+        Settings.DisableStickyKeysHotkey);
       Result := True;
     except
       Result := False;

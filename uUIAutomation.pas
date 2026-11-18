@@ -13,12 +13,21 @@ type
     SelectionText: WideString;
     FailureStage: string;
     ErrorCode: HRESULT;
+    // TextPattern of the focused element, kept for UIAGetTextBeforeCaret.
+    TextPattern: IUnknown;
   end;
 
 // Queries the focused UI Automation element once: whether it is a password
 // field and, if it supports TextPattern, its single selected range.
 // Must be called from a thread that has initialised COM.
 function QueryUIAutomationFocus: TUIAFocusInfo;
+
+// Text immediately before the caret (TextPattern2, Windows 8+): the last
+// word, extended over punctuation glued to it ("vbh," typed in the wrong
+// layout is one word).  Range is an opaque text range for UIASelectRange.
+function UIAGetTextBeforeCaret(const Info: TUIAFocusInfo; MaxLength: Integer;
+  out Text: WideString; out Range: IUnknown): Boolean;
+function UIASelectRange(const Range: IUnknown): Boolean;
 
 implementation
 
@@ -29,6 +38,10 @@ uses
 const
   UIA_TEXT_PATTERN_ID = 10014;
   UIA_IS_PASSWORD_PROPERTY_ID = 30019;
+  UIA_ENDPOINT_START = 0;
+  UIA_TEXTUNIT_CHARACTER = 0;
+  UIA_TEXTUNIT_WORD = 2;
+  MAX_CARET_WORD_STEPS = 8;
   MAX_UIA_SELECTION_LENGTH = 1024 * 1024;
   CLASS_CUIAutomation: TGUID = '{FF48DBA4-60EF-4201-AA87-54103EEF594E}';
   CLASS_CUIAutomation8: TGUID = '{E22AD333-B25F-460C-83D0-0581107395C9}';
@@ -142,6 +155,16 @@ type
     function Reserved02: HRESULT; stdcall;
     function GetSelection(
       out Ranges: ILSUIAutomationTextRangeArray): HRESULT; stdcall;
+    function Reserved04: HRESULT; stdcall;
+    function Reserved05: HRESULT; stdcall;
+    function Reserved06: HRESULT; stdcall;
+  end;
+
+  ILSUIAutomationTextPattern2 = interface(ILSUIAutomationTextPattern)
+  ['{506A921A-FCC9-409F-B23B-37EB74106872}']
+    function Reserved07: HRESULT; stdcall;
+    function GetCaretRange(out IsActive: BOOL;
+      out Range: ILSUIAutomationTextRange): HRESULT; stdcall;
   end;
 
   ILSUIAutomationTextRangeArray = interface(IUnknown)
@@ -153,7 +176,7 @@ type
 
   ILSUIAutomationTextRange = interface(IUnknown)
   ['{A543CC6A-F4AE-494B-8239-C814481187A8}']
-    function Reserved01: HRESULT; stdcall;
+    function Clone(out Range: ILSUIAutomationTextRange): HRESULT; stdcall;
     function Reserved02: HRESULT; stdcall;
     function Reserved03: HRESULT; stdcall;
     function Reserved04: HRESULT; stdcall;
@@ -164,6 +187,11 @@ type
     function Reserved09: HRESULT; stdcall;
     function GetText(MaxLength: Integer;
       out Text: WideString): HRESULT; stdcall;
+    function Reserved11: HRESULT; stdcall;
+    function MoveEndpointByUnit(Endpoint, TextUnit, Count: Integer;
+      out Moved: Integer): HRESULT; stdcall;
+    function Reserved13: HRESULT; stdcall;
+    function Select: HRESULT; stdcall;
   end;
 
 function QueryUIAutomationFocus: TUIAFocusInfo;
@@ -225,6 +253,7 @@ begin
       Result.ErrorCode := E_NOINTERFACE;
       Exit;
     end;
+    Result.TextPattern := TextPattern;
 
     Result.FailureStage := 'selection_ranges';
     Result.ErrorCode := TextPattern.GetSelection(Ranges);
@@ -268,6 +297,93 @@ begin
       Result.FailureStage := Result.FailureStage + ':' + E.ClassName;
       Result.ErrorCode := E_UNEXPECTED;
     end;
+  end;
+end;
+
+function IsBlank(Ch: WideChar): Boolean;
+begin
+  Result := (Ord(Ch) <= 32) or (Ch = #$00A0);
+end;
+
+function UIAGetTextBeforeCaret(const Info: TUIAFocusInfo; MaxLength: Integer;
+  out Text: WideString; out Range: IUnknown): Boolean;
+var
+  Pattern2: ILSUIAutomationTextPattern2;
+  Caret, Candidate, Probe: ILSUIAutomationTextRange;
+  IsActive: BOOL;
+  Moved, Step: Integer;
+  Previous: WideString;
+  Ch: WideChar;
+begin
+  Result := False;
+  Text := '';
+  Range := nil;
+  if not Assigned(Info.TextPattern) or
+     not Supports(Info.TextPattern, ILSUIAutomationTextPattern2, Pattern2) then
+    Exit;
+  try
+    if Failed(Pattern2.GetCaretRange(IsActive, Caret)) or not Assigned(Caret) then
+      Exit;
+    if Failed(Caret.Clone(Candidate)) or not Assigned(Candidate) then
+      Exit;
+
+    for Step := 1 to MAX_CARET_WORD_STEPS do
+    begin
+      Moved := 0;
+      if Failed(Candidate.MoveEndpointByUnit(UIA_ENDPOINT_START,
+           UIA_TEXTUNIT_WORD, -1, Moved)) or (Moved = 0) then
+        Break;
+      // Stop at whitespace or at the start of the text; otherwise the word
+      // unit split on punctuation and the previous piece belongs to it.
+      Probe := nil;
+      if Failed(Candidate.Clone(Probe)) or not Assigned(Probe) then
+        Break;
+      Moved := 0;
+      if Failed(Probe.MoveEndpointByUnit(UIA_ENDPOINT_START,
+           UIA_TEXTUNIT_CHARACTER, -1, Moved)) or (Moved = 0) then
+        Break;
+      Previous := '';
+      if Failed(Probe.GetText(1, Previous)) or (Previous = '') or
+         IsBlank(Previous[1]) then
+        Break;
+    end;
+
+    if Failed(Candidate.GetText(MaxLength + 1, Text)) then
+      Text := '';
+    if (Text = '') or (Length(Text) > MaxLength) then
+    begin
+      Text := '';
+      Exit;
+    end;
+    for Ch in Text do
+      if (Ch = #13) or (Ch = #10) then
+      begin
+        Text := '';
+        Exit;
+      end;
+    if Trim(Text) = '' then
+    begin
+      Text := '';
+      Exit;
+    end;
+    Range := Candidate;
+    Result := True;
+  except
+    Text := '';
+    Range := nil;
+    Result := False;
+  end;
+end;
+
+function UIASelectRange(const Range: IUnknown): Boolean;
+var
+  TextRange: ILSUIAutomationTextRange;
+begin
+  try
+    Result := Supports(Range, ILSUIAutomationTextRange, TextRange) and
+      Succeeded(TextRange.Select);
+  except
+    Result := False;
   end;
 end;
 

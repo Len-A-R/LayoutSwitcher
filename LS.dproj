@@ -146,6 +146,8 @@
         <DCCReference Include="uGestureDetector.pas"/>
         <DCCReference Include="uLayoutConverter.pas"/>
         <DCCReference Include="uClipboardSnapshot.pas"/>
+        <DCCReference Include="uConversionChain.pas"/>
+        <DCCReference Include="uTaskAutorun.pas"/>
         <DCCReference Include="uOperationWorker.pas"/>
         <DCCReference Include="uMain.pas">
             <Form>FormMain</Form>

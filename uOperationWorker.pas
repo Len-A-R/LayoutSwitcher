@@ -17,7 +17,7 @@ interface
 uses
   Winapi.Windows, Winapi.Messages,
   System.SysUtils, System.Classes, System.SyncObjs,
-  uSettings, uLayoutConverter, uClipboardSnapshot;
+  uSettings, uLayoutConverter, uClipboardSnapshot, uConversionChain;
 
 type
   TBufferAction = (baKeep, baClear, baSet);
@@ -26,7 +26,9 @@ type
   public
     Sequence: Cardinal;
     Action: TLSAction;
-    BufferText: string;      // Empty when the tracked word is unavailable.
+    // Part of the tracked phrase to transform; Mode = bmNone when the phrase
+    // is unavailable and other text sources must be used.
+    Plan: TBufferPlan;
     FocusWnd: HWND;
     WindowLayout: HKL;
     PreviousLayout: HKL;
@@ -38,6 +40,7 @@ type
     Sequence: Cardinal;
     Action: TLSAction;
     Success: Boolean;
+    UsedBuffer: Boolean;   // The request plan was applied.
     BufferAction: TBufferAction;
     NewBufferText: string;
     FocusIsPassword: Boolean;
@@ -58,12 +61,16 @@ type
     FSelectionWindow: HWND;
     FSelectionIsNative: Boolean;
     FClipboardSkipReason: string;
+    FSelectionRange: IUnknown; // UI Automation range to select before typing.
     procedure HandleRequest(Request: TOperationRequest);
     procedure Process(Request: TOperationRequest; Res: TOperationResult);
     function GetNativeSelection(Target: HWND; out Text: string): Boolean;
     function GetClipboardSelection(Request: TOperationRequest;
       out Text: string): Boolean;
     function ReplaceSelection(const Value: string): Boolean;
+    function TransformText(Request: TOperationRequest; const Text: string;
+      Res: TOperationResult; out Converted: string): Boolean;
+    procedure SwitchLayout(FocusWnd: HWND; Target: HKL);
     function WaitForModifiersReleased(TimeoutMS: DWORD): Boolean;
     procedure Notify(Res: TOperationResult; const Key, Text: string);
   protected
@@ -91,6 +98,8 @@ const
   MODIFIER_RELEASE_TIMEOUT = 1000;
   TARGET_KEYUP_SETTLE_DELAY = 30;
   WINDOW_MESSAGE_TIMEOUT = 250;
+  MAX_CARET_TEXT_LEN = 300;
+  LAYOUT_SWITCH_TIMEOUT = 150;
 
 { TOperationWorker }
 
@@ -195,7 +204,7 @@ begin
     OperationName := ActionKeys[Request.Action];
     DiagnosticsBeginOperation(OperationName,
       Format('seq=%d buffer_len=%d target=%p target_class="%s" target_process="%s"',
-        [Request.Sequence, Length(Request.BufferText), Pointer(Request.FocusWnd),
+        [Request.Sequence, Length(Request.Plan.Text), Pointer(Request.FocusWnd),
          GetWindowClassName(Request.FocusWnd),
          GetWindowProcessFileName(Request.FocusWnd)]));
     try
@@ -390,24 +399,151 @@ begin
   if (FSelectionWindow = 0) or (GetFocusedWindow <> FSelectionWindow) then
     Exit;
   if FSelectionIsNative then
-    Result := SendMessageTimeoutW(FSelectionWindow, EM_REPLACESEL, 1,
+    Exit(SendMessageTimeoutW(FSelectionWindow, EM_REPLACESEL, 1,
       LPARAM(PChar(Value)), SMTO_ABORTIFHUNG or SMTO_BLOCK,
-      WINDOW_MESSAGE_TIMEOUT, @MessageResult) <> 0
+      WINDOW_MESSAGE_TIMEOUT, @MessageResult) <> 0);
+
+  if not WaitForModifiersReleased(MODIFIER_RELEASE_TIMEOUT) then
+    Exit;
+  // Text found before the caret is not selected yet: typing replaces it only
+  // after the range has been selected.
+  if Assigned(FSelectionRange) and not UIASelectRange(FSelectionRange) then
+  begin
+    DiagnosticsLog('target.uia_caret select_failed');
+    Exit;
+  end;
+  Result := TypeUnicodeText(Value);
+end;
+
+function TOperationWorker.TransformText(Request: TOperationRequest;
+  const Text: string; Res: TOperationResult; out Converted: string): Boolean;
+var
+  Pair: TLayoutPair;
+begin
+  Result := False;
+  Converted := Text;
+  case Request.Action of
+    laConvert:
+      begin
+        if (Request.Plan.ForcedSource <> 0) and (Request.Plan.ForcedTarget <> 0) then
+        begin
+          // Continuing a chain: keep the direction of the previous step.
+          Pair.Source := Request.Plan.ForcedSource;
+          Pair.Target := Request.Plan.ForcedTarget;
+        end
+        else if not FCatalog.ChoosePair(Text, Request.WindowLayout,
+             Request.PreviousLayout, Pair) then
+        begin
+          DiagnosticsLog('convert.no_layout_pair');
+          Notify(Res, 'single_layout',
+            'В Windows установлена только одна раскладка клавиатуры.');
+          Exit;
+        end;
+        Converted := ConvertTextBetweenLayouts(Text, FCatalog.KeyChars(Pair.Source),
+          FCatalog.KeyChars(Pair.Target));
+        Res.SourceLayout := Pair.Source;
+        Res.TargetLayout := Pair.Target;
+        DiagnosticsLogFmt('convert.layouts source=%.8x target=%.8x forced=%s',
+          [NativeUInt(Pair.Source), NativeUInt(Pair.Target),
+           BoolToStr(Request.Plan.ForcedSource <> 0, True)]);
+      end;
+    laUpperCase:
+      Converted := ChangeTextCase(Text, True);
+    laLowerCase:
+      Converted := ChangeTextCase(Text, False);
+    laInvertCase:
+      Converted := InvertTextCase(Text);
   else
-    Result := WaitForModifiersReleased(MODIFIER_RELEASE_TIMEOUT) and
-      TypeUnicodeText(Value);
+    Exit;
+  end;
+  Result := True;
+end;
+
+function IsConsoleWindowClass(const ClassName: string): Boolean;
+begin
+  Result := SameText(ClassName, 'ConsoleWindowClass') or
+    SameText(ClassName, 'CASCADIA_HOSTING_WINDOW_CLASS') or
+    SameText(ClassName, 'PseudoConsoleWindow');
+end;
+
+procedure TOperationWorker.SwitchLayout(FocusWnd: HWND; Target: HKL);
+
+  function CurrentLayout: HKL;
+  begin
+    Result := GetKeyboardLayout(GetWindowThreadProcessId(FocusWnd, nil));
+  end;
+
+  function WaitForLayout(TimeoutMS: DWORD): Boolean;
+  var
+    Started: DWORD;
+  begin
+    Started := GetTickCount;
+    repeat
+      if CurrentLayout = Target then
+        Exit(True);
+      Sleep(10);
+    until GetTickCount - Started >= TimeoutMS;
+    Result := CurrentLayout = Target;
+  end;
+
+var
+  Root: HWND;
+  Attempt: Integer;
+begin
+  if (FocusWnd = 0) or (Target = 0) or (CurrentLayout = Target) then
+    Exit;
+
+  PostMessage(FocusWnd, WM_INPUTLANGCHANGEREQUEST, 0, LPARAM(Target));
+  if WaitForLayout(LAYOUT_SWITCH_TIMEOUT) then
+    Exit;
+
+  // Some frameworks handle the request only in the top-level window.
+  Root := GetAncestor(FocusWnd, GA_ROOT);
+  if (Root <> 0) and (Root <> FocusWnd) then
+  begin
+    PostMessage(Root, WM_INPUTLANGCHANGEREQUEST, 0, LPARAM(Target));
+    if WaitForLayout(LAYOUT_SWITCH_TIMEOUT) then
+    begin
+      DiagnosticsLog('layout.switched via=root_window');
+      Exit;
+    end;
+  end;
+
+  // Consoles ignore WM_INPUTLANGCHANGEREQUEST.  Win+Space cycles the input
+  // languages; the layout is checked after every step so the cycle stops
+  // exactly at the target.  Limited to consoles, where the check is reliable.
+  if not IsConsoleWindowClass(GetWindowClassName(Root)) and
+     not IsConsoleWindowClass(GetWindowClassName(FocusWnd)) then
+  begin
+    DiagnosticsLogFmt('layout.switch_failed class="%s"', [GetWindowClassName(Root)]);
+    Exit;
+  end;
+  for Attempt := 1 to Length(TKeyboardLayoutCatalog.InstalledLayouts) - 1 do
+  begin
+    if not WaitForModifiersReleased(MODIFIER_RELEASE_TIMEOUT) or
+       (GetFocusedWindow <> FocusWnd) then
+      Break;
+    SendChord(VK_LWIN, VK_SPACE);
+    if WaitForLayout(LAYOUT_SWITCH_TIMEOUT * 2) then
+    begin
+      DiagnosticsLogFmt('layout.switched via=win_space steps=%d', [Attempt]);
+      Exit;
+    end;
+  end;
+  DiagnosticsLog('layout.switch_failed via=win_space');
 end;
 
 procedure TOperationWorker.Process(Request: TOperationRequest;
   Res: TOperationResult);
 var
   Focus: TUIAFocusInfo;
-  Text, Converted, Source: string;
-  IsSelection: Boolean;
-  Pair: TLayoutPair;
+  Text, Region, Converted, Typed, Source: string;
+  CaretText: WideString;
+  CaretRange: IUnknown;
 begin
   FSelectionWindow := 0;
   FSelectionIsNative := False;
+  FSelectionRange := nil;
   FClipboardSkipReason := '';
 
   if GetFocusedWindow <> Request.FocusWnd then
@@ -427,7 +563,7 @@ begin
     Exit;
   end;
 
-  // One UI Automation round trip: password flag plus selection.
+  // One UI Automation round trip: password flag, selection, text pattern.
   Focus := QueryUIAutomationFocus;
   if Focus.IsPassword or IsNativePasswordEdit(Request.FocusWnd) then
   begin
@@ -437,33 +573,60 @@ begin
     Notify(Res, 'password', 'Поле ввода пароля: преобразование отключено.');
     Exit;
   end;
-  if not Focus.HasSelection then
-    DiagnosticsLogFmt('target.uia unavailable stage=%s result=0x%.8x',
-      [Focus.FailureStage, Cardinal(Focus.ErrorCode)]);
 
-  // Target text, in order of reliability and of how little it disturbs the
-  // target application.
-  IsSelection := True;
+  // 1. Text typed since the last caret jump: exact, no clipboard, and it
+  //    supports widening from the last word to the whole phrase.
+  if Request.Plan.Mode <> bmNone then
+  begin
+    Region := Request.Plan.Region;
+    DiagnosticsLogFmt('target.selected source=buffer mode=%d region_length=%d delete=%d',
+      [Ord(Request.Plan.Mode), Length(Region), Request.Plan.DeleteCount]);
+    if not TransformText(Request, Region, Res, Converted) then
+      Exit;
+    Res.UsedBuffer := True;
+    Typed := Converted + Request.Plan.Tail;
+    Res.Success := (Converted = Region) or
+      (WaitForModifiersReleased(MODIFIER_RELEASE_TIMEOUT) and
+       (GetFocusedWindow = Request.FocusWnd) and
+       SendBackspaces(Request.Plan.DeleteCount) and TypeUnicodeText(Typed));
+    if Res.Success then
+    begin
+      Res.BufferAction := baSet;
+      Res.NewBufferText := Request.Plan.Head + Typed;
+      if Request.Action = laConvert then
+        SwitchLayout(Request.FocusWnd, Res.TargetLayout);
+    end
+    else
+    begin
+      Res.BufferAction := baClear;
+      DiagnosticsLog('operation.replace_failed source=buffer');
+    end;
+    Exit;
+  end;
+
+  // 2. Selection or the word before the caret, in order of reliability and
+  //    of how little it disturbs the target application.
   if GetNativeSelection(Request.FocusWnd, Text) then
     Source := 'native'
-  else if Request.BufferText <> '' then
-  begin
-    Text := Request.BufferText;
-    IsSelection := False;
-    Source := 'buffer';
-  end
   else if Focus.HasSelection then
   begin
     Text := Focus.SelectionText;
     FSelectionWindow := Request.FocusWnd;
-    FSelectionIsNative := False;
     Source := 'uia';
+  end
+  else if UIAGetTextBeforeCaret(Focus, MAX_CARET_TEXT_LEN, CaretText, CaretRange) then
+  begin
+    Text := CaretText;
+    FSelectionWindow := Request.FocusWnd;
+    FSelectionRange := CaretRange;
+    Source := 'uia_caret';
   end
   else if GetClipboardSelection(Request, Text) then
     Source := 'clipboard'
   else
   begin
-    DiagnosticsLog('target.selected source=none');
+    DiagnosticsLogFmt('target.selected source=none uia_stage=%s uia_result=0x%.8x',
+      [Focus.FailureStage, Cardinal(Focus.ErrorCode)]);
     if FClipboardSkipReason = 'clipboard_has_image_or_files' then
       Notify(Res, 'clipboard_image',
         'Не удалось получить выделенный текст: в буфере обмена изображение или файлы, ' +
@@ -472,49 +635,16 @@ begin
   end;
   DiagnosticsLogFmt('target.selected source=%s length=%d', [Source, Length(Text)]);
 
-  case Request.Action of
-    laConvert:
-      begin
-        if not FCatalog.ChoosePair(Text, Request.WindowLayout,
-             Request.PreviousLayout, Pair) then
-        begin
-          DiagnosticsLog('convert.no_layout_pair');
-          Notify(Res, 'single_layout',
-            'В Windows установлена только одна раскладка клавиатуры.');
-          Exit;
-        end;
-        Converted := ConvertTextBetweenLayouts(Text, FCatalog.KeyChars(Pair.Source),
-          FCatalog.KeyChars(Pair.Target));
-        Res.SourceLayout := Pair.Source;
-        Res.TargetLayout := Pair.Target;
-        DiagnosticsLogFmt('convert.layouts source=%.8x target=%.8x',
-          [NativeUInt(Pair.Source), NativeUInt(Pair.Target)]);
-      end;
-    laUpperCase:
-      Converted := ChangeTextCase(Text, True);
-    laLowerCase:
-      Converted := ChangeTextCase(Text, False);
-    laInvertCase:
-      Converted := InvertTextCase(Text);
-  else
+  if not TransformText(Request, Text, Res, Converted) then
     Exit;
-  end;
-
-  if IsSelection then
-    Res.Success := (Converted = Text) or ReplaceSelection(Converted)
-  else
-    Res.Success := (Converted = Text) or
-      (WaitForModifiersReleased(MODIFIER_RELEASE_TIMEOUT) and
-       (GetFocusedWindow = Request.FocusWnd) and
-       SendBackspaces(Length(Text)) and TypeUnicodeText(Converted));
-
+  Res.Success := (Converted = Text) or ReplaceSelection(Converted);
+  FSelectionRange := nil;
   if Res.Success then
   begin
     Res.BufferAction := baSet;
     Res.NewBufferText := Converted;
-    if (Request.Action = laConvert) and (Res.TargetLayout <> 0) then
-      PostMessage(Request.FocusWnd, WM_INPUTLANGCHANGEREQUEST, 0,
-        LPARAM(Res.TargetLayout));
+    if Request.Action = laConvert then
+      SwitchLayout(Request.FocusWnd, Res.TargetLayout);
   end
   else
   begin
