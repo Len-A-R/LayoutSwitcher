@@ -47,6 +47,14 @@ function FindSnippet(const Snippets: TArray<TSnippet>; const Word: string;
 // {date} {time} {datetime} placeholders; line breaks are removed.
 function ExpandSnippet(const Template: string; Moment: TDateTime): string;
 
+// The converted word is a plain word worth checking with the spell checker:
+// at least three letters, only letters inside (hyphens and apostrophes
+// allowed between letters), no digits.
+function IsAutoSwitchCandidate(const Converted: string): Boolean;
+
+// Release description (GitHub Markdown) as plain text for a dialog.
+function CleanReleaseNotes(const Markdown: string): string;
+
 function PercentEncode(const Text: string): string;
 function ContainsCyrillic(const Text: string): Boolean;
 function BuildTranslateUrl(Service: Integer; const Text: string): string;
@@ -189,6 +197,63 @@ begin
     .Replace('{date}', FormatDateTime('dd.mm.yyyy', Moment), [rfIgnoreCase])
     .Replace('{time}', FormatDateTime('hh:nn', Moment), [rfIgnoreCase])
     .Replace(#13, '').Replace(#10, '');
+end;
+
+function IsAutoSwitchCandidate(const Converted: string): Boolean;
+var
+  I, Letters: Integer;
+  Ch: Char;
+begin
+  Result := False;
+  if Converted = '' then
+    Exit;
+  if not Converted[1].IsLetter or not Converted[Length(Converted)].IsLetter then
+    Exit;
+  Letters := 0;
+  for I := 1 to Length(Converted) do
+  begin
+    Ch := Converted[I];
+    if Ch.IsLetter then
+      Inc(Letters)
+    else if (Ch <> '-') and (Ch <> '''') and (Ch <> #$2019) then
+      Exit;
+  end;
+  Result := Letters >= 3;
+end;
+
+function CleanReleaseNotes(const Markdown: string): string;
+const
+  MAX_LENGTH = 4000;
+var
+  Line, Clean: string;
+  Lines: TArray<string>;
+  Blank: Boolean;
+begin
+  Result := '';
+  Blank := False;
+  Lines := Markdown.Replace(#13#10, #10).Replace(#13, #10).Split([#10]);
+  for Line in Lines do
+  begin
+    Clean := Line.Trim;
+    while Clean.StartsWith('#') do
+      Clean := Clean.Substring(1);
+    Clean := Clean.Trim.Replace('**', '').Replace('__', '').Replace('`', '');
+    if Clean.StartsWith('- ') or Clean.StartsWith('* ') then
+      Clean := '• ' + Clean.Substring(2).Trim;
+    if Clean = '' then
+    begin
+      // Collapse runs of empty lines.
+      if (Result <> '') and not Blank then
+        Result := Result + sLineBreak;
+      Blank := True;
+      Continue;
+    end;
+    Blank := False;
+    Result := Result + Clean + sLineBreak;
+  end;
+  Result := Result.TrimRight;
+  if Length(Result) > MAX_LENGTH then
+    Result := Copy(Result, 1, MAX_LENGTH) + '…';
 end;
 
 function PercentEncode(const Text: string): string;

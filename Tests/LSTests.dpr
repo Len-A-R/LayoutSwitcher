@@ -18,7 +18,8 @@ uses
   TestGestureDetector in 'TestGestureDetector.pas',
   TestConversionChain in 'TestConversionChain.pas',
   TestFeatures21 in 'TestFeatures21.pas',
-  TestFeatures22 in 'TestFeatures22.pas';
+  TestFeatures22 in 'TestFeatures22.pas',
+  TestFeatures23 in 'TestFeatures23.pas';
 
 var
   Runner: ITestRunner;

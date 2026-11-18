@@ -25,7 +25,8 @@ DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=dialog
+; "commandline": winget passes /CURRENTUSER or /ALLUSERS.
+PrivilegesRequiredOverridesAllowed=commandline dialog
 ArchitecturesAllowed=x86compatible x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 ; The running instance must be closed before its files are replaced; this

@@ -28,6 +28,7 @@ type
     InstallerUrl: string;
     InstallerName: string;
     InstallerSha256: string;   // From the GitHub asset digest; may be empty.
+    ReleaseNotes: string;      // Release description (Markdown).
   end;
 
   TUpdateDownloadResult = class
@@ -36,6 +37,7 @@ type
     Cancelled: Boolean;
     FileName: string;
     ErrorText: string;
+    SignatureNote: string;  // Why the installer signature was accepted.
   end;
 
   // Downloads the installer to %TEMP% and verifies its SHA-256.
@@ -94,6 +96,7 @@ implementation
 uses
   Winapi.ShellAPI,
   System.SysUtils, System.JSON, System.Hash, System.Win.Registry,
+  uSignature,
   System.Net.HttpClient, System.Net.URLClient, System.NetConsts;
 
 const
@@ -257,7 +260,8 @@ var
   Response: IHTTPResponse;
   Stream: TFileStream;
   Res: TUpdateDownloadResult;
-  Actual: string;
+  Actual, OwnSigner, InstallerSigner, Reason: string;
+  OwnState, InstallerState: TSignatureState;
 begin
   NameThreadForDebugging('LayoutSwitcher.UpdateDownload');
   Res := TUpdateDownloadResult.Create;
@@ -286,7 +290,20 @@ begin
         if (FSha256 <> '') and (Actual <> FSha256) then
           Res.ErrorText := 'SHA-256 mismatch'
         else
-          Res.Success := True;
+        begin
+          // The checksum comes from the same release as the file; a
+          // signature by the same publisher as this program is stronger.
+          OwnState := GetFileSignature(ParamStr(0), OwnSigner);
+          InstallerState := GetFileSignature(FFileName, InstallerSigner);
+          if InstallerSignatureAccepted(OwnState, OwnSigner, InstallerState,
+               InstallerSigner, Reason) then
+          begin
+            Res.Success := True;
+            Res.SignatureNote := Reason;
+          end
+          else
+            Res.ErrorText := 'signature: ' + Reason;
+        end;
       end;
     finally
       Client.Free;
@@ -357,6 +374,7 @@ begin
             Res.Success := True;
             Res.LatestVersion := NormalizeVersionTag(Tag);
             Res.ReleaseUrl := Url;
+            TJSONObject(Json).TryGetValue<string>('body', Res.ReleaseNotes);
             Res.IsNewer := CompareVersions(Res.LatestVersion, FCurrentVersion) > 0;
             ReadInstallerAsset(TJSONObject(Json), Res);
           end

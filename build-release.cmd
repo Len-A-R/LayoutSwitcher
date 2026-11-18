@@ -64,5 +64,12 @@ if not defined ISCC (
   )
 )
 
+echo === winget manifests ===
+if exist "dist\LayoutSwitcher-Setup-%VERSION%.exe" (
+  %DRY% powershell -NoProfile -ExecutionPolicy Bypass -File tools\make-winget.ps1 -Version %VERSION% -InstallerPath "dist\LayoutSwitcher-Setup-%VERSION%.exe" -OutDir dist\winget || exit /b 1
+) else (
+  echo No installer: winget manifests skipped.
+)
+
 echo === Done: dist\ ===
 dir /b dist

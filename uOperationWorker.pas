@@ -18,7 +18,7 @@ uses
   Winapi.Windows, Winapi.Messages,
   System.SysUtils, System.Classes, System.SyncObjs,
   uSettings, uLayoutConverter, uClipboardSnapshot, uConversionChain,
-  uUIAutomation;
+  uUIAutomation, uSpellCheck;
 
 type
   TBufferAction = (baKeep, baClear, baSet);
@@ -39,6 +39,7 @@ type
     // Triggered by a double Alt: wait until the application leaves its menu
     // mode and take the focused window again.
     SettleFocus: Boolean;
+    AutoSwitchExceptions: TArray<string>;
     FocusWnd: HWND;
     WindowLayout: HKL;
     PreviousLayout: HKL;
@@ -74,6 +75,9 @@ type
     FSelectionIsNative: Boolean;
     FClipboardSkipReason: string;
     FSelectionRange: IUnknown; // UI Automation range to select before typing.
+    FSpell: TSpellCheck;
+    function ApproveAutoSwitch(Request: TOperationRequest;
+      const Original, Converted: string; Res: TOperationResult): Boolean;
     procedure HandleRequest(Request: TOperationRequest);
     procedure Process(Request: TOperationRequest; Res: TOperationResult);
     function ReadNativeEdit(Target: HWND; out Text: string;
@@ -112,7 +116,7 @@ implementation
 
 uses
   Winapi.ActiveX,
-  uDiagnostics, uWinUtils, uLocale;
+  uDiagnostics, uWinUtils, uLocale, uTextTools;
 
 const
   WM_LS_EXECUTE = WM_APP + 100;
@@ -180,6 +184,7 @@ begin
     FWindow := CreateWindowEx(0, 'STATIC', 'LayoutSwitcher.Worker', 0, 0, 0, 0,
       0, HWND_MESSAGE, 0, HInstance, nil);
     PeekMessage(Msg, 0, WM_USER, WM_USER, PM_NOREMOVE); // Create the queue.
+    FSpell := TSpellCheck.Create;
     FReady.SetEvent;
     DiagnosticsLogFmt('worker.started window=%p', [Pointer(FWindow)]);
 
@@ -202,6 +207,7 @@ begin
       TOperationRequest(Msg.lParam).Free;
   finally
     FSnapshot.Discard;
+    FreeAndNil(FSpell);
     if FWindow <> 0 then
       DestroyWindow(FWindow);
     FWindow := 0;
@@ -501,7 +507,7 @@ begin
     Exit(True);
   end;
   case Request.Action of
-    laConvert:
+    laConvert, laAutoSwitch:
       begin
         if (Request.Plan.ForcedSource <> 0) and (Request.Plan.ForcedTarget <> 0) then
         begin
@@ -612,6 +618,42 @@ begin
     end;
   end;
   DiagnosticsLog('layout.switch_failed via=win_space');
+end;
+
+function TOperationWorker.ApproveAutoSwitch(Request: TOperationRequest;
+  const Original, Converted: string; Res: TOperationResult): Boolean;
+const
+  ResultNames: array[TSpellCheckResult] of string = ('unknown', 'correct', 'misspelled');
+var
+  SourceTag, TargetTag: string;
+  SourceResult, TargetResult: TSpellCheckResult;
+  Item: string;
+begin
+  // Switch only when the word is wrong as typed and a correct word of the
+  // other language after conversion.  Words are not written to the log.
+  Result := False;
+  if not IsAutoSwitchCandidate(Converted) then
+  begin
+    DiagnosticsLog('autoswitch.skipped reason=not_a_word');
+    Exit;
+  end;
+  for Item in Request.AutoSwitchExceptions do
+    if AnsiSameText(Item, Original) or AnsiSameText(Item, Converted) then
+    begin
+      DiagnosticsLog('autoswitch.skipped reason=exception');
+      Exit;
+    end;
+  SourceTag := LayoutLanguageTag(Res.SourceLayout);
+  TargetTag := LayoutLanguageTag(Res.TargetLayout);
+  SourceResult := FSpell.CheckWord(SourceTag, Original);
+  if SourceResult = scMisspelled then
+    TargetResult := FSpell.CheckWord(TargetTag, Converted)
+  else
+    TargetResult := scUnknown;
+  Result := (SourceResult = scMisspelled) and (TargetResult = scCorrect);
+  DiagnosticsLogFmt('autoswitch.check source=%s:%s target=%s:%s length=%d switch=%s',
+    [SourceTag, ResultNames[SourceResult], TargetTag, ResultNames[TargetResult],
+     Length(Original), BoolToStr(Result, True)]);
 end;
 
 function TOperationWorker.TypingContinued(Request: TOperationRequest): Boolean;
@@ -741,6 +783,12 @@ begin
       [Ord(Request.Plan.Mode), Length(Region), Request.Plan.DeleteCount]);
     if not TransformText(Request, Region, Res, Converted) then
       Exit;
+    if (Request.Action = laAutoSwitch) and
+       not ApproveAutoSwitch(Request, Region, Converted, Res) then
+    begin
+      Res.BufferAction := baKeep;
+      Exit;
+    end;
     Res.UsedBuffer := True;
     Typed := Converted + Request.Plan.Tail;
     if Converted = Region then
