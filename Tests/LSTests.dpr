@@ -17,7 +17,8 @@ uses
   TestLayoutConverter in 'TestLayoutConverter.pas',
   TestGestureDetector in 'TestGestureDetector.pas',
   TestConversionChain in 'TestConversionChain.pas',
-  TestFeatures21 in 'TestFeatures21.pas';
+  TestFeatures21 in 'TestFeatures21.pas',
+  TestFeatures22 in 'TestFeatures22.pas';
 
 var
   Runner: ITestRunner;

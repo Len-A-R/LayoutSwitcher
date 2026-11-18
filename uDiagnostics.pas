@@ -37,11 +37,10 @@ uses
   System.Classes, System.Win.Registry, System.IOUtils, System.Types,
   System.Generics.Collections, System.Generics.Defaults, System.Zip,
   Vcl.Forms,
-  uWinUtils;
+  uWinUtils, uSettingsStore;
 
 const
   DIAGNOSTICS_FOLDER_NAME = 'LayoutSwitcher\Diagnostics';
-  SETTINGS_REGISTRY_KEY = 'Software\LayoutSwitcher';
   DIAGNOSTICS_ENABLED_VALUE = 'EnableDiagnostics';
   SESSION_MARKER_NAME = 'last-session.running';
   // Rotation limits: a single log file is split when it grows past
@@ -451,44 +450,35 @@ end;
 
 function DiagnosticsEnabled: Boolean;
 var
-  Registry: TRegistry;
+  Store: TSettingsStore;
 begin
-  Result := True;
-  Registry := TRegistry.Create(KEY_READ);
   try
-    Registry.RootKey := HKEY_CURRENT_USER;
+    Store := OpenSettingsStore(False);
     try
-      if Registry.OpenKeyReadOnly(SETTINGS_REGISTRY_KEY) and
-         Registry.ValueExists(DIAGNOSTICS_ENABLED_VALUE) then
-        Result := Registry.ReadBool(DIAGNOSTICS_ENABLED_VALUE);
-    except
-      // Keep diagnostics enabled when the preference cannot be read.
-      Result := True;
+      Result := Store.ReadBool(DIAGNOSTICS_ENABLED_VALUE, True);
+    finally
+      Store.Free;
     end;
-  finally
-    Registry.Free;
+  except
+    // Keep diagnostics enabled when the preference cannot be read.
+    Result := True;
   end;
 end;
 
 function SetDiagnosticsEnabled(Value: Boolean): Boolean;
 var
-  Registry: TRegistry;
+  Store: TSettingsStore;
 begin
-  Result := False;
-  Registry := TRegistry.Create(KEY_READ or KEY_WRITE);
   try
-    Registry.RootKey := HKEY_CURRENT_USER;
+    Store := OpenSettingsStore(True);
     try
-      if Registry.OpenKey(SETTINGS_REGISTRY_KEY, True) then
-      begin
-        Registry.WriteBool(DIAGNOSTICS_ENABLED_VALUE, Value);
-        Result := True;
-      end;
-    except
-      Result := False;
+      Store.WriteBool(DIAGNOSTICS_ENABLED_VALUE, Value);
+      Result := Store.Flush;
+    finally
+      Store.Free;
     end;
-  finally
-    Registry.Free;
+  except
+    Result := False;
   end;
 end;
 
@@ -668,6 +658,9 @@ begin
 
   GDiagnosticsDirectory := IncludeTrailingPathDelimiter(RootDirectory) +
     DIAGNOSTICS_FOLDER_NAME;
+  // Portable mode keeps its logs next to the executable as well.
+  if IsPortableMode then
+    GDiagnosticsDirectory := ExtractFilePath(ParamStr(0)) + 'Diagnostics';
   if not DiagnosticsEnabled then
     Exit;
 

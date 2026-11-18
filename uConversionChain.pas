@@ -23,7 +23,9 @@ uses
   uSettings;
 
 type
-  TBufferMode = (bmNone, bmWord, bmPhrase, bmRevert, bmUndo);
+  // bmFix: an automatic correction (Caps Lock mistake, two capitals,
+  // template) that replaces a part of the text with Replacement.
+  TBufferMode = (bmNone, bmWord, bmPhrase, bmRevert, bmUndo, bmFix);
 
   TBufferPlan = record
     Mode: TBufferMode;
@@ -66,6 +68,9 @@ type
     procedure CompletedWhole(Action: TLSAction; const NewBuffer,
       Original: string; Source, Target: HKL);
     property UndoAvailable: Boolean read FUndoAvailable;
+    // Plan that replaces Region with Replacement verbatim.
+    class function PlanReplacement(const Buffer: string; RegionStart,
+      RegionLength: Integer; const Replacement: string): TBufferPlan; static;
   end;
 
 // Last run of non-space characters, ignoring trailing spaces.
@@ -171,6 +176,18 @@ begin
   Result.Replacement := Copy(FPrevious, Common + 1, MaxInt);
   // Only used to switch the keyboard layout back.
   Result.ForcedTarget := FUndoLayout;
+end;
+
+class function TConversionChain.PlanReplacement(const Buffer: string;
+  RegionStart, RegionLength: Integer; const Replacement: string): TBufferPlan;
+begin
+  Result.Mode := bmFix;
+  Result.Text := Buffer;
+  Result.RegionStart := RegionStart;
+  Result.RegionLength := RegionLength;
+  Result.ForcedSource := 0;
+  Result.ForcedTarget := 0;
+  Result.Replacement := Replacement;
 end;
 
 function TConversionChain.Plan(Action: TLSAction;

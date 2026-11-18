@@ -6,7 +6,8 @@
 
 // Pure state machine that turns physical key transitions into gestures:
 // double Shift, double Left Ctrl, double Right Ctrl, Left Ctrl + Right Ctrl,
-// Left Shift + Right Shift, double Caps Lock.  A double Caps Lock toggles the
+// Left Shift + Right Shift, double Caps Lock, double left/right Alt.  A double
+// Alt opens and closes the menu of classic applications.  A double Caps Lock toggles the
 // Caps Lock state twice and so leaves it unchanged.
 // It has no Win32 calls besides VK_* constants, so it is fully unit-testable.
 //
@@ -30,36 +31,49 @@ uses
 type
   TKeyStateQuery = TFunc<Cardinal, Boolean>;
 
+  // Everything the detector knows about the keyboard, kept in one record so
+  // that the effect of a key event can be rolled back (see AltGr below).
+  TGestureState = record
+    KeyDown: array[0..255] of Boolean;
+    KeyDownTime: array[0..255] of Cardinal;
+    ShiftDownTime: Cardinal;
+    ShiftEligible: Boolean;
+    ShiftPending: Boolean;
+    ShiftPendingTime: Cardinal;
+    LCtrlDownTime: Cardinal;
+    LCtrlEligible: Boolean;
+    LCtrlPending: Boolean;
+    LCtrlPendingTime: Cardinal;
+    RCtrlDownTime: Cardinal;
+    RCtrlEligible: Boolean;
+    RCtrlPending: Boolean;
+    RCtrlPendingTime: Cardinal;
+    // Double Alt taps: index 0 = left Alt, 1 = right Alt.
+    AltDownTime: array[0..1] of Cardinal;
+    AltEligible: array[0..1] of Boolean;
+    AltPending: array[0..1] of Boolean;
+    AltPendingTime: array[0..1] of Cardinal;
+    CapsDownTime: Cardinal;
+    CapsEligible: Boolean;
+    CapsPending: Boolean;
+    CapsPendingTime: Cardinal;
+    ChordActive: Boolean;
+    ChordValid: Boolean;
+    ShiftChordActive: Boolean;
+    ShiftChordValid: Boolean;
+  end;
+
   TGestureDetector = class
   private
-    FKeyDown: array[0..255] of Boolean;
-    FKeyDownTime: array[0..255] of Cardinal;
+    FS: TGestureState;
     FInterval: Cardinal;
-
-    FShiftDownTime: Cardinal;
-    FShiftEligible: Boolean;
-    FShiftPending: Boolean;
-    FShiftPendingTime: Cardinal;
-
-    FLCtrlDownTime: Cardinal;
-    FLCtrlEligible: Boolean;
-    FLCtrlPending: Boolean;
-    FLCtrlPendingTime: Cardinal;
-
-    FRCtrlDownTime: Cardinal;
-    FRCtrlEligible: Boolean;
-    FRCtrlPending: Boolean;
-    FRCtrlPendingTime: Cardinal;
-
-    FCapsDownTime: Cardinal;
-    FCapsEligible: Boolean;
-    FCapsPending: Boolean;
-    FCapsPendingTime: Cardinal;
-
-    FChordActive: Boolean;
-    FChordValid: Boolean;
-    FShiftChordActive: Boolean;
-    FShiftChordValid: Boolean;
+    // AltGr: Windows inserts a fake Ctrl right before Right Alt on layouts
+    // with AltGr (the Russian one has ₽ on AltGr+8).  Raw Input reports it
+    // as Left or Right Ctrl depending on the keyboard driver.
+    FBeforeCtrl: TGestureState;
+    FLastCtrlDownVK: Cardinal;   // Ctrl pressed by the previous event, or 0.
+    FCtrlDownAt: Cardinal;
+    FFakeCtrlVK: Cardinal;       // Fake Ctrl whose events are ignored, or 0.
 
     function OtherKeysDown(ExceptA, ExceptB, ExceptC: Cardinal): Boolean;
     function CompleteTap(var Pending: Boolean; var PendingTime: Cardinal;
@@ -98,6 +112,10 @@ implementation
 uses
   Winapi.Windows;
 
+const
+  // The fake Ctrl of AltGr arrives together with Right Alt.
+  ALTGR_MAX_GAP_MS = 20;
+
 function IsShiftKey(VK: Cardinal): Boolean;
 begin
   Result := (VK = VK_SHIFT) or (VK = VK_LSHIFT) or (VK = VK_RSHIFT);
@@ -134,29 +152,35 @@ end;
 
 procedure TGestureDetector.CancelPending;
 begin
-  FShiftPending := False;
-  FLCtrlPending := False;
-  FRCtrlPending := False;
-  FCapsPending := False;
+  FS.ShiftPending := False;
+  FS.LCtrlPending := False;
+  FS.RCtrlPending := False;
+  FS.CapsPending := False;
+  FS.AltPending[0] := False;
+  FS.AltPending[1] := False;
 end;
 
 procedure TGestureDetector.ResetTaps;
 begin
   CancelPending;
-  FShiftEligible := False;
-  FLCtrlEligible := False;
-  FRCtrlEligible := False;
-  FChordValid := False;
-  FShiftChordValid := False;
-  FCapsEligible := False;
+  FS.ShiftEligible := False;
+  FS.LCtrlEligible := False;
+  FS.RCtrlEligible := False;
+  FS.ChordValid := False;
+  FS.ShiftChordValid := False;
+  FS.CapsEligible := False;
+  FS.AltEligible[0] := False;
+  FS.AltEligible[1] := False;
 end;
 
 procedure TGestureDetector.ResetAll;
 begin
-  FillChar(FKeyDown, SizeOf(FKeyDown), 0);
+  FillChar(FS.KeyDown, SizeOf(FS.KeyDown), 0);
+  FLastCtrlDownVK := 0;
+  FFakeCtrlVK := 0;
   ResetTaps;
-  FChordActive := False;
-  FShiftChordActive := False;
+  FS.ChordActive := False;
+  FS.ShiftChordActive := False;
 end;
 
 function TGestureDetector.ReleaseStaleKeys(const IsPhysicallyDown: TKeyStateQuery;
@@ -167,19 +191,19 @@ begin
   Result := 0;
   if not Assigned(IsPhysicallyDown) then
     Exit;
-  for I := Low(FKeyDown) to High(FKeyDown) do
-    if FKeyDown[I] and (Time - FKeyDownTime[I] >= MinAgeMS) and
+  for I := Low(FS.KeyDown) to High(FS.KeyDown) do
+    if FS.KeyDown[I] and (Time - FS.KeyDownTime[I] >= MinAgeMS) and
        not IsPhysicallyDown(I) then
     begin
-      FKeyDown[I] := False;
+      FS.KeyDown[I] := False;
       Inc(Result);
     end;
   if Result > 0 then
   begin
     // State built on top of the lost key-ups is unreliable.
     ResetTaps;
-    FChordActive := False;
-    FShiftChordActive := False;
+    FS.ChordActive := False;
+    FS.ShiftChordActive := False;
   end;
 end;
 
@@ -188,34 +212,34 @@ var
   I: Cardinal;
 begin
   Result := 0;
-  for I := Low(FKeyDown) to High(FKeyDown) do
-    if FKeyDown[I] then
+  for I := Low(FS.KeyDown) to High(FS.KeyDown) do
+    if FS.KeyDown[I] then
       Inc(Result);
 end;
 
 function TGestureDetector.IsDown(VK: Cardinal): Boolean;
 begin
-  Result := (VK <= High(FKeyDown)) and FKeyDown[VK];
+  Result := (VK <= High(FS.KeyDown)) and FS.KeyDown[VK];
 end;
 
 function TGestureDetector.ShiftDown: Boolean;
 begin
-  Result := FKeyDown[VK_SHIFT] or FKeyDown[VK_LSHIFT] or FKeyDown[VK_RSHIFT];
+  Result := FS.KeyDown[VK_SHIFT] or FS.KeyDown[VK_LSHIFT] or FS.KeyDown[VK_RSHIFT];
 end;
 
 function TGestureDetector.CtrlDown: Boolean;
 begin
-  Result := FKeyDown[VK_CONTROL] or FKeyDown[VK_LCONTROL] or FKeyDown[VK_RCONTROL];
+  Result := FS.KeyDown[VK_CONTROL] or FS.KeyDown[VK_LCONTROL] or FS.KeyDown[VK_RCONTROL];
 end;
 
 function TGestureDetector.AltDown: Boolean;
 begin
-  Result := FKeyDown[VK_MENU] or FKeyDown[VK_LMENU] or FKeyDown[VK_RMENU];
+  Result := FS.KeyDown[VK_MENU] or FS.KeyDown[VK_LMENU] or FS.KeyDown[VK_RMENU];
 end;
 
 function TGestureDetector.WinDown: Boolean;
 begin
-  Result := FKeyDown[VK_LWIN] or FKeyDown[VK_RWIN];
+  Result := FS.KeyDown[VK_LWIN] or FS.KeyDown[VK_RWIN];
 end;
 
 function TGestureDetector.OtherKeysDown(ExceptA, ExceptB,
@@ -223,8 +247,8 @@ function TGestureDetector.OtherKeysDown(ExceptA, ExceptB,
 var
   I: Cardinal;
 begin
-  for I := Low(FKeyDown) to High(FKeyDown) do
-    if FKeyDown[I] and (I <> ExceptA) and (I <> ExceptB) and (I <> ExceptC) then
+  for I := Low(FS.KeyDown) to High(FS.KeyDown) do
+    if FS.KeyDown[I] and (I <> ExceptA) and (I <> ExceptB) and (I <> ExceptC) then
       Exit(True);
   Result := False;
 end;
@@ -246,89 +270,131 @@ function TGestureDetector.KeyEvent(VK: Cardinal; IsKeyUp: Boolean;
   Time: Cardinal): TLSGesture;
 var
   WasDown: Boolean;
+  I: Integer;
 begin
   Result := lgNone;
-  if VK > High(FKeyDown) then
+  if VK > High(FS.KeyDown) then
     Exit;
+
+  // AltGr = fake Ctrl + Right Alt with (practically) the same time.  Undo
+  // everything the fake Ctrl did and ignore its further events.
+  if (VK = VK_RMENU) and not IsKeyUp and (FLastCtrlDownVK <> 0) and
+     (Time - FCtrlDownAt <= ALTGR_MAX_GAP_MS) then
+  begin
+    FS := FBeforeCtrl;
+    FFakeCtrlVK := FLastCtrlDownVK;
+  end;
+  if (FFakeCtrlVK <> 0) and (VK = FFakeCtrlVK) then
+  begin
+    if IsKeyUp then
+      FFakeCtrlVK := 0;
+    FLastCtrlDownVK := 0;
+    Exit;
+  end;
+  if ((VK = VK_LCONTROL) or (VK = VK_RCONTROL)) and not IsKeyUp and
+     not FS.KeyDown[VK] then
+  begin
+    FBeforeCtrl := FS;
+    FLastCtrlDownVK := VK;
+    FCtrlDownAt := Time;
+  end
+  else
+    FLastCtrlDownVK := 0;
 
   if IsKeyUp then
   begin
-    FKeyDown[VK] := False;
+    FS.KeyDown[VK] := False;
 
     if IsShiftKey(VK) and not ShiftDown then
     begin
-      if FShiftEligible and (Time - FShiftDownTime <= FInterval) then
+      if FS.ShiftEligible and (Time - FS.ShiftDownTime <= FInterval) then
       begin
-        if CompleteTap(FShiftPending, FShiftPendingTime, Time) then
+        if CompleteTap(FS.ShiftPending, FS.ShiftPendingTime, Time) then
           Result := lgDoubleShift;
       end
       else
-        FShiftPending := False;
-      FShiftEligible := False;
+        FS.ShiftPending := False;
+      FS.ShiftEligible := False;
     end;
 
     if VK = VK_LCONTROL then
     begin
-      if FLCtrlEligible and not FChordActive and
-         (Time - FLCtrlDownTime <= FInterval) then
+      if FS.LCtrlEligible and not FS.ChordActive and
+         (Time - FS.LCtrlDownTime <= FInterval) then
       begin
-        if CompleteTap(FLCtrlPending, FLCtrlPendingTime, Time) then
+        if CompleteTap(FS.LCtrlPending, FS.LCtrlPendingTime, Time) then
           Result := lgDoubleLCtrl;
       end
-      else if not FChordActive then
-        FLCtrlPending := False;
-      FLCtrlEligible := False;
+      else if not FS.ChordActive then
+        FS.LCtrlPending := False;
+      FS.LCtrlEligible := False;
     end;
 
     if VK = VK_RCONTROL then
     begin
-      if FRCtrlEligible and not FChordActive and
-         (Time - FRCtrlDownTime <= FInterval) then
+      if FS.RCtrlEligible and not FS.ChordActive and
+         (Time - FS.RCtrlDownTime <= FInterval) then
       begin
-        if CompleteTap(FRCtrlPending, FRCtrlPendingTime, Time) then
+        if CompleteTap(FS.RCtrlPending, FS.RCtrlPendingTime, Time) then
           Result := lgDoubleRCtrl;
       end
-      else if not FChordActive then
-        FRCtrlPending := False;
-      FRCtrlEligible := False;
+      else if not FS.ChordActive then
+        FS.RCtrlPending := False;
+      FS.RCtrlEligible := False;
+    end;
+
+    if (VK = VK_LMENU) or (VK = VK_RMENU) then
+    begin
+      I := Ord(VK = VK_RMENU);
+      if FS.AltEligible[I] and (Time - FS.AltDownTime[I] <= FInterval) then
+      begin
+        if CompleteTap(FS.AltPending[I], FS.AltPendingTime[I], Time) then
+          if I = 0 then
+            Result := lgDoubleLAlt
+          else
+            Result := lgDoubleRAlt;
+      end
+      else
+        FS.AltPending[I] := False;
+      FS.AltEligible[I] := False;
     end;
 
     if VK = VK_CAPITAL then
     begin
-      if FCapsEligible and (Time - FCapsDownTime <= FInterval) then
+      if FS.CapsEligible and (Time - FS.CapsDownTime <= FInterval) then
       begin
-        if CompleteTap(FCapsPending, FCapsPendingTime, Time) then
+        if CompleteTap(FS.CapsPending, FS.CapsPendingTime, Time) then
           Result := lgDoubleCapsLock;
       end
       else
-        FCapsPending := False;
-      FCapsEligible := False;
+        FS.CapsPending := False;
+      FS.CapsEligible := False;
     end;
 
-    if FChordActive and not FKeyDown[VK_LCONTROL] and
-       not FKeyDown[VK_RCONTROL] then
+    if FS.ChordActive and not FS.KeyDown[VK_LCONTROL] and
+       not FS.KeyDown[VK_RCONTROL] then
     begin
-      FChordActive := False;
-      if FChordValid then
+      FS.ChordActive := False;
+      if FS.ChordValid then
         Result := lgBothCtrl;
-      FChordValid := False;
+      FS.ChordValid := False;
       CancelPending;
     end;
 
-    if FShiftChordActive and not FKeyDown[VK_LSHIFT] and
-       not FKeyDown[VK_RSHIFT] then
+    if FS.ShiftChordActive and not FS.KeyDown[VK_LSHIFT] and
+       not FS.KeyDown[VK_RSHIFT] then
     begin
-      FShiftChordActive := False;
-      if FShiftChordValid then
+      FS.ShiftChordActive := False;
+      if FS.ShiftChordValid then
         Result := lgBothShift;
-      FShiftChordValid := False;
+      FS.ShiftChordValid := False;
       CancelPending;
     end;
     Exit;
   end;
 
-  WasDown := FKeyDown[VK];
-  FKeyDownTime[VK] := Time;
+  WasDown := FS.KeyDown[VK];
+  FS.KeyDownTime[VK] := Time;
   if WasDown then
     Exit; // Auto-repeat does not change gesture state.
 
@@ -336,73 +402,90 @@ begin
   // pending first taps of other gestures.
   if not IsShiftKey(VK) then
   begin
-    FShiftEligible := False;
-    FShiftPending := False;
+    FS.ShiftEligible := False;
+    FS.ShiftPending := False;
   end;
   if VK <> VK_LCONTROL then
   begin
-    if not ((VK = VK_RCONTROL) and FKeyDown[VK_LCONTROL]) then
-      FLCtrlPending := False;
-    FLCtrlEligible := False;
+    if not ((VK = VK_RCONTROL) and FS.KeyDown[VK_LCONTROL]) then
+      FS.LCtrlPending := False;
+    FS.LCtrlEligible := False;
   end;
   if VK <> VK_RCONTROL then
   begin
-    if not ((VK = VK_LCONTROL) and FKeyDown[VK_RCONTROL]) then
-      FRCtrlPending := False;
-    FRCtrlEligible := False;
+    if not ((VK = VK_LCONTROL) and FS.KeyDown[VK_RCONTROL]) then
+      FS.RCtrlPending := False;
+    FS.RCtrlEligible := False;
   end;
   if VK <> VK_CAPITAL then
   begin
-    FCapsEligible := False;
-    FCapsPending := False;
+    FS.CapsEligible := False;
+    FS.CapsPending := False;
   end;
-  if FChordActive and not IsCtrlKey(VK) then
-    FChordValid := False;
-  if FShiftChordActive and not IsShiftKey(VK) then
-    FShiftChordValid := False;
+  if VK <> VK_LMENU then
+  begin
+    FS.AltEligible[0] := False;
+    FS.AltPending[0] := False;
+  end;
+  if VK <> VK_RMENU then
+  begin
+    FS.AltEligible[1] := False;
+    FS.AltPending[1] := False;
+  end;
+  if FS.ChordActive and not IsCtrlKey(VK) then
+    FS.ChordValid := False;
+  if FS.ShiftChordActive and not IsShiftKey(VK) then
+    FS.ShiftChordValid := False;
 
   if IsShiftKey(VK) then
   begin
     // A second Shift while one is held is not a tap, but both Shift keys
     // together form the Left Shift + Right Shift chord.
-    FShiftEligible := not OtherKeysDown(VK, VK, VK);
-    FShiftDownTime := Time;
-    if ((VK = VK_LSHIFT) and FKeyDown[VK_RSHIFT]) or
-       ((VK = VK_RSHIFT) and FKeyDown[VK_LSHIFT]) then
+    FS.ShiftEligible := not OtherKeysDown(VK, VK, VK);
+    FS.ShiftDownTime := Time;
+    if ((VK = VK_LSHIFT) and FS.KeyDown[VK_RSHIFT]) or
+       ((VK = VK_RSHIFT) and FS.KeyDown[VK_LSHIFT]) then
     begin
-      FShiftChordActive := True;
-      FShiftChordValid := not OtherKeysDown(VK_LSHIFT, VK_RSHIFT, VK_SHIFT);
+      FS.ShiftChordActive := True;
+      FS.ShiftChordValid := not OtherKeysDown(VK_LSHIFT, VK_RSHIFT, VK_SHIFT);
     end;
   end
   else if VK = VK_LCONTROL then
   begin
-    if FKeyDown[VK_RCONTROL] then
+    if FS.KeyDown[VK_RCONTROL] then
     begin
-      FChordActive := True;
-      FChordValid := not OtherKeysDown(VK_RCONTROL, VK_LCONTROL, VK_LCONTROL);
+      FS.ChordActive := True;
+      FS.ChordValid := not OtherKeysDown(VK_RCONTROL, VK_LCONTROL, VK_LCONTROL);
     end
     else
-      FLCtrlEligible := not OtherKeysDown(VK, VK, VK);
-    FLCtrlDownTime := Time;
+      FS.LCtrlEligible := not OtherKeysDown(VK, VK, VK);
+    FS.LCtrlDownTime := Time;
   end
   else if VK = VK_RCONTROL then
   begin
-    if FKeyDown[VK_LCONTROL] then
+    if FS.KeyDown[VK_LCONTROL] then
     begin
-      FChordActive := True;
-      FChordValid := not OtherKeysDown(VK_LCONTROL, VK_RCONTROL, VK_RCONTROL);
+      FS.ChordActive := True;
+      FS.ChordValid := not OtherKeysDown(VK_LCONTROL, VK_RCONTROL, VK_RCONTROL);
     end
     else
-      FRCtrlEligible := not OtherKeysDown(VK, VK, VK);
-    FRCtrlDownTime := Time;
+      FS.RCtrlEligible := not OtherKeysDown(VK, VK, VK);
+    FS.RCtrlDownTime := Time;
   end
   else if VK = VK_CAPITAL then
   begin
-    FCapsEligible := not OtherKeysDown(VK, VK, VK);
-    FCapsDownTime := Time;
+    FS.CapsEligible := not OtherKeysDown(VK, VK, VK);
+    FS.CapsDownTime := Time;
+  end
+  else if (VK = VK_LMENU) or (VK = VK_RMENU) then
+  begin
+    // AltGr arrives as Left Ctrl + Right Alt and is therefore never a tap.
+    I := Ord(VK = VK_RMENU);
+    FS.AltEligible[I] := not OtherKeysDown(VK, VK, VK);
+    FS.AltDownTime[I] := Time;
   end;
 
-  FKeyDown[VK] := True;
+  FS.KeyDown[VK] := True;
 end;
 
 end.
