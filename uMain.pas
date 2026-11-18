@@ -1,168 +1,228 @@
 ﻿unit uMain;
 
+// Tick counts wrap around every 49.7 days; differences rely on modular
+// arithmetic, so overflow checking must stay off here.
+{$Q-}
+
 interface
 
 uses
   Winapi.Windows, Winapi.Messages,
-  System.SysUtils, System.Classes,
+  System.SysUtils, System.Classes, System.Generics.Collections,
   Vcl.Graphics, Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.ExtCtrls, Vcl.Menus,
-  System.ImageList, Vcl.ImgList, PngImageList, Vcl.StdCtrls;
+  System.ImageList, Vcl.ImgList, PngImageList, Vcl.StdCtrls, Vcl.ComCtrls,
+  uSettings, uGestureDetector, uOperationWorker, uConversionChain,
+  uLayoutIndicator, uUpdateCheck;
 
 const
-  DOUBLE_SHIFT_INTERVAL = 500;
-  DOUBLE_CTRL_INTERVAL = 500;
+  INSTANCE_WINDOW_PROP = 'LayoutSwitcher.Instance.v2';
 
 type
-  TBufferedChar = record
-    Ch: WideChar;
-  end;
-
-  TClipboardFormatSnapshot = record
-    FormatID: UINT;
-    DataHandle: THandle;
-    DataSize: NativeUInt;
-  end;
-
   TFormMain = class(TForm)
     TrayIcon: TTrayIcon;
     PopupMenu: TPopupMenu;
+    mniSettings: TMenuItem;
+    mniSeparator1: TMenuItem;
+    mniPause15: TMenuItem;
+    mniPause60: TMenuItem;
+    mniPauseIndefinite: TMenuItem;
+    mniResume: TMenuItem;
+    mniSeparator2: TMenuItem;
+    mniDownloadUpdate: TMenuItem;
+    mniCheckUpdates: TMenuItem;
+    mniReport: TMenuItem;
     mniDiagnostics: TMenuItem;
     mniSeparator: TMenuItem;
     mniExit: TMenuItem;
     TrayIcons: TPngImageList;
     TimerLayout: TTimer;
+    TimerPause: TTimer;
+    TimerUpdate: TTimer;
+    lblVersion: TLabel;
+    lblAuthor: TLabel;
     chkAutorun: TCheckBox;
     chkDiagnostics: TCheckBox;
-    Label2: TLabel;
-    Label4: TLabel;
-    Label6: TLabel;
-    Label8: TLabel;
-    Label9: TLabel;
-    Panel1: TPanel;
-    Panel2: TPanel;
-    Panel3: TPanel;
-    Panel4: TPanel;
-    Panel5: TPanel;
-    Label1: TLabel;
+    chkAutorunElevated: TCheckBox;
+    grpHotkeys: TGroupBox;
+    lblConvert: TLabel;
+    cbConvert: TComboBox;
+    lblUpper: TLabel;
+    cbUpper: TComboBox;
+    lblLower: TLabel;
+    cbLower: TComboBox;
+    lblInvert: TLabel;
+    cbInvert: TComboBox;
+    lblTranslit: TLabel;
+    cbTranslit: TComboBox;
+    lblUndo: TLabel;
+    cbUndo: TComboBox;
+    lblInterval: TLabel;
+    edInterval: TEdit;
+    udInterval: TUpDown;
+    lblIntervalUnit: TLabel;
+    grpBehavior: TGroupBox;
+    chkPauseFullscreen: TCheckBox;
+    chkNotifications: TCheckBox;
+    chkDisableStickyKeys: TCheckBox;
+    chkLayoutIndicator: TCheckBox;
+    chkCheckUpdates: TCheckBox;
+    lblLanguage: TLabel;
+    cbLanguage: TComboBox;
+    lblExcluded: TLabel;
+    edExcluded: TEdit;
+    btnDefaultExcluded: TButton;
+    btnReport: TButton;
+    btnClose: TButton;
     procedure FormCreate(Sender: TObject);
     procedure FormDestroy(Sender: TObject);
-    procedure mniExitClick(Sender: TObject);
-    procedure mniDiagnosticsClick(Sender: TObject);
-    procedure TimerLayoutTimer(Sender: TObject);
-    procedure chkAutorunClick(Sender: TObject);
-    procedure chkDiagnosticsClick(Sender: TObject);
     procedure FormCloseQuery(Sender: TObject; var CanClose: Boolean);
+    procedure TimerLayoutTimer(Sender: TObject);
+    procedure TimerPauseTimer(Sender: TObject);
     procedure TrayIconDblClick(Sender: TObject);
+    procedure TrayIconBalloonClick(Sender: TObject);
+    procedure TimerUpdateTimer(Sender: TObject);
+    procedure cbLanguageChange(Sender: TObject);
+    procedure mniCheckUpdatesClick(Sender: TObject);
+    procedure mniDownloadUpdateClick(Sender: TObject);
+    procedure mniReportClick(Sender: TObject);
+    procedure chkAutorunClick(Sender: TObject);
+    procedure chkAutorunElevatedClick(Sender: TObject);
+    procedure chkDiagnosticsClick(Sender: TObject);
+    procedure cbGestureChange(Sender: TObject);
+    procedure edIntervalChange(Sender: TObject);
+    procedure edIntervalExit(Sender: TObject);
+    procedure chkBehaviorClick(Sender: TObject);
+    procedure edExcludedExit(Sender: TObject);
+    procedure btnDefaultExcludedClick(Sender: TObject);
+    procedure btnCloseClick(Sender: TObject);
+    procedure mniSettingsClick(Sender: TObject);
+    procedure mniPauseClick(Sender: TObject);
+    procedure mniResumeClick(Sender: TObject);
+    procedure mniDiagnosticsClick(Sender: TObject);
+    procedure mniExitClick(Sender: TObject);
   private
-    FBuffer: array of TBufferedChar;
+    FSettings: TLSSettings;
+    FDetector: TGestureDetector;
+    FWorker: TOperationWorker;
+    FVersion: string;
+
+    FBuffer: string;
     FBufferOverflowed: Boolean;
     FLastWindow: HWND;
-    FLastLangID: DWORD;
+    FFocusIsPassword: Boolean;
+    FLastLayout: HKL;
+    FPreviousLayout: HKL;
 
-    FSavedClipboardFormats: array of TClipboardFormatSnapshot;
-    FClipboardSnapshotValid: Boolean;
-    FClipboardWasEmpty: Boolean;
-
-    FLastShiftTime: DWORD;
-    FShiftPressed: Boolean;
-    FLastLCtrlTime: DWORD;
-    FLCtrlPressed: Boolean;
-    FLastRCtrlTime: DWORD;
-    FRCtrlPressed: Boolean;
-    FKeyDown: array[0..255] of Boolean;
-    FShiftTapEligible: Boolean;
-    FLCtrlTapEligible: Boolean;
-    FRCtrlTapEligible: Boolean;
-    FInvertChordActive: Boolean;
-
-    FSelectionWindow: HWND;
-    FSelectionIsNative: Boolean;
     FRawInputRegistered: Boolean;
-    FUpdatingDiagnosticsSetting: Boolean;
+    FUpdatingControls: Boolean;
+
+    FPaused: Boolean;
+    FPauseUntil: TDateTime;
+    FPausedIconBase: Integer;
+
+    FOperationBusy: Boolean;
+    FOperationStarted: DWORD;
+    FOperationSequence: Cardinal;
+    FNotificationTimes: TDictionary<string, DWORD>;
+    FChain: TConversionChain;
+    FPendingPlan: TBufferPlan;
+    // Sticky Keys hotkey bits this instance turned off and must restore.
+    FStickyHotkeyRemoved: DWORD;
+    // Logon task with administrator rights (uTaskAutorun).
+    FTaskInstalled: Boolean;
+    FTaskPath: string;
+    FIndicator: TLayoutIndicator;
+    FIndicatorWindow: HWND;
+    FUpdateThread: TUpdateCheckThread;
+    FUpdateVersion: string;
+    FUpdateUrl: string;
+    FBalloonUrl: string;      // Opened when the current balloon is clicked.
 
     function RegisterRawInput: Boolean;
     procedure UnregisterRawInput;
+    procedure ResetInputState(const Reason: string; Reregister: Boolean);
+    procedure ApplyStickyKeysSetting;
+    procedure RestoreStickyKeysHotkey;
     procedure HandleRawInput(RawInputHandle: THandle; EventTime: DWORD);
     procedure ProcessKeyboardEvent(EventTime: DWORD; VK, ScanCode: UINT;
       IsKeyUp: Boolean);
     procedure ProcessPointerActivity;
     procedure ProcessBufferKey(VK, ScanCode: UINT);
-    procedure CompleteShiftTap(EventTime: DWORD);
-    procedure CompleteCtrlTap(IsLeft: Boolean; EventTime: DWORD);
-    procedure QueueOperation(MessageID: UINT);
-    procedure ExecuteOperation(MessageID: UINT);
     procedure CheckWindowChanged;
+    function TryTranslateKey(VK, ScanCode: UINT; out Ch: Char): Boolean;
 
-    procedure AddChar(Ch: WideChar);
+    procedure AddChar(Ch: Char);
     procedure BufferBackspace;
     procedure ClearBuffer;
-    procedure SetBufferText(const Value: WideString);
-    procedure FinalizeWord;
-    function BufferToString: WideString;
-    function TryTranslateKey(VK, ScanCode: UINT; out Ch: WideChar): Boolean;
+    procedure SetBufferText(const Value: string);
 
-    procedure DoConvert;
-    procedure DoChangeCase(ToUpper: Boolean);
-    procedure DoInvertCase;
-    function TryGetTargetText(out Text: WideString; out IsSelection: Boolean): Boolean;
-    function GetSelectedTextInActiveWindow(out Text: WideString): Boolean;
-    function GetSelectedTextByUIAutomation(out Text: WideString): Boolean;
-    function GetSelectedTextByClipboardFallback(out Text: WideString): Boolean;
-    function ReplaceSelection(const Value: WideString): Boolean;
+    procedure QueueAction(Action: TLSAction);
+    procedure HandleOperationResult(Res: TOperationResult);
+    procedure ShowNotification(const Key, Text: string);
 
-    function SendChord(ModifierVK, VK: Word): Boolean;
-    function SendBackspaces(Count: Integer): Boolean;
-    function TypeUnicodeText(const Value: WideString): Boolean;
-    function WaitForModifiersReleased(TimeoutMS: DWORD): Boolean;
-    function WaitForClipboardChange(OldSequence: DWORD; TimeoutMS: DWORD): Boolean;
-    function DuplicateClipboardData(FormatID: UINT; SourceHandle: THandle;
-      out DataSize: NativeUInt): THandle;
-    procedure FreeClipboardData(FormatID: UINT; DataHandle: THandle);
-    function AddClipboardHistoryExclusion: Boolean;
-    function SaveClipboard: Boolean;
-    procedure DiscardClipboardSnapshot;
-    procedure RestoreClipboard;
-    function GetClipboardTextW: WideString;
+    procedure PauseFor(Minutes: Integer);
+    procedure Resume;
+    procedure UpdatePauseState;
+    procedure CreatePausedIcons;
 
-    function GetFocusedWindow: HWND;
-    function FindHKLByLangID(LangID: Word): HKL;
-    procedure SwitchGlobalLayout(ToLangID: Word);
-    function ConvertLayout(const S: WideString): WideString;
-    function ChangeStringCase(const S: WideString; ToUpper: Boolean): WideString;
-    function InvertStringCase(const S: WideString): WideString;
-    procedure UpdateTrayIcon;
+    procedure LoadControlsFromSettings;
+    procedure ApplySettings;
+    procedure ApplyExcludedFromEdit;
+    procedure SyncAutorunPath;
+    procedure UpdateAutorunControls;
+    procedure ShowSettingsWindow;
+
+    procedure UpdateTrayIcon(Force: Boolean);
+    procedure UpdateTrayHint;
+    function GestureCombos: TArray<TComboBox>;
+    procedure ApplyLanguage;
+    procedure StartUpdateCheck(Manual: Boolean);
+    procedure HandleUpdateResult(Res: TUpdateCheckResult);
+    function BuildSystemInfo: string;
   protected
+    procedure CreateWnd; override;
+    procedure DestroyWnd; override;
     procedure WndProc(var Message: TMessage); override;
   end;
 
 var
   FormMain: TFormMain;
 
+// Registered message used by a second launch to open the settings window of
+// the running instance.
+function ShowSettingsMessage: UINT;
+
 implementation
 
 {$R *.dfm}
 
 uses
-  System.Win.Registry,
-  uDiagnostics,
-  uUIAutomation;
+  System.DateUtils,
+  Winapi.ShellAPI, Winapi.ShlObj,
+  PngImage, PngFunctions,
+  uDiagnostics, uWinUtils, uTaskAutorun, uLocale, uLayoutConverter;
 
 const
-  WM_DO_CONVERT         = WM_APP + 1;
-  WM_DO_UPPERCASE       = WM_APP + 2;
-  WM_DO_LOWERCASE       = WM_APP + 3;
-  WM_DO_INVERT_CASE     = WM_APP + 4;
-
-  MAX_WORD_LEN = 50;
-  MAX_SELECTION_LEN = 1024 * 1024;
-  CLIPBOARD_COPY_TIMEOUT = 500;
-  CLIPBOARD_OPEN_TIMEOUT = 1000;
-  CLIPBOARD_RETRY_INTERVAL = 10;
-  MODIFIER_RELEASE_TIMEOUT = 150;
-  TARGET_KEYUP_SETTLE_DELAY = 30;
-  WINDOW_MESSAGE_TIMEOUT = 250;
+  WM_LS_OPERATION_DONE = WM_APP + 10;
+  WM_LS_UPDATE_RESULT = WM_APP + 11;
+  // The phrase typed since the last caret jump (spaces included).
+  MAX_PHRASE_LEN = 300;
   TO_UNICODE_NO_STATE_CHANGE = 4;
-  LS_INPUT_TAG = $4C535749; // "LSWI"
+  OPERATION_WATCHDOG_MS = 30000;
+  NOTIFICATION_THROTTLE_MS = 60000;
+  MSGFLT_ALLOW = 1;
+  // Keys tracked as held longer than this are checked against the physical
+  // keyboard state before each key press.
+  STALE_KEY_MIN_AGE_MS = 250;
+
+  WM_WTSSESSION_CHANGE = $02B1;
+  NOTIFY_FOR_THIS_SESSION = 0;
+  WTS_CONSOLE_CONNECT = $1;
+  WTS_REMOTE_CONNECT = $3;
+  WTS_SESSION_LOCK = $7;
+  WTS_SESSION_UNLOCK = $8;
+  PBT_APMRESUMESUSPEND = $7;
+  PBT_APMRESUMEAUTOMATIC = $12;
 
   HID_USAGE_PAGE_GENERIC = $01;
   HID_USAGE_GENERIC_MOUSE = $02;
@@ -181,13 +241,20 @@ const
   RI_MOUSE_BUTTON_5_DOWN = $0100;
   RI_MOUSE_WHEEL = $0400;
   RI_MOUSE_HWHEEL = $0800;
+  MOUSE_ACTIVITY_MASK = RI_MOUSE_LEFT_BUTTON_DOWN or
+    RI_MOUSE_RIGHT_BUTTON_DOWN or RI_MOUSE_MIDDLE_BUTTON_DOWN or
+    RI_MOUSE_BUTTON_4_DOWN or RI_MOUSE_BUTTON_5_DOWN or
+    RI_MOUSE_WHEEL or RI_MOUSE_HWHEEL;
 
-  EnChars: WideString = '''
-  `1234567890-=qwertyuiop[]asdfghjkl;'\zxcvbnm,./~!@#$%^&*()_+QWERTYUIOP{}ASDFGHJKL:"|ZXCVBNM<>?
-  ''';
-  RuChars: WideString = '''
-  ё1234567890-=йцукенгшщзхъфывапролджэ\ячсмитьбю.Ё!"№;%:?*()_+ЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭ/ЯЧСМИТЬБЮ,
-  ''';
+  ICON_EN = 0;
+  ICON_RU = 1;
+  LANG_EN = $0409;
+  LANG_RU = $0419;
+
+  ShortGestureNames: array[TLSGesture] of string = (
+    '', 'Shift×2', 'LCtrl×2', 'RCtrl×2', 'LCtrl+RCtrl', 'LShift+RShift', 'Caps×2');
+
+function ShortActionName(Action: TLSAction): string; forward;
 
 type
   TLSRawInputDevice = record
@@ -232,301 +299,139 @@ type
   end;
   PLSRawInput = ^TLSRawInput;
 
-  TLSGUIThreadInfo = record
-    cbSize: DWORD;
-    flags: DWORD;
-    hwndActive: HWND;
-    hwndFocus: HWND;
-    hwndCapture: HWND;
-    hwndMenuOwner: HWND;
-    hwndMoveSize: HWND;
-    hwndCaret: HWND;
-    rcCaret: TRect;
-  end;
-
 var
-  GConversionState: LongInt;
+  GShowSettingsMessage: UINT;
 
 function RegisterRawInputDevices(Devices: PLSRawInputDevice; DeviceCount,
   DeviceSize: UINT): BOOL; stdcall; external user32 name 'RegisterRawInputDevices';
 function GetRawInputData(RawInput: THandle; Command: UINT; Data: Pointer;
   var DataSize: UINT; HeaderSize: UINT): UINT; stdcall;
   external user32 name 'GetRawInputData';
+function LSWTSRegisterSessionNotification(Wnd: HWND; Flags: DWORD): BOOL;
+  stdcall; external 'wtsapi32.dll' name 'WTSRegisterSessionNotification';
+function LSWTSUnRegisterSessionNotification(Wnd: HWND): BOOL;
+  stdcall; external 'wtsapi32.dll' name 'WTSUnRegisterSessionNotification';
+function LSChangeWindowMessageFilterEx(Wnd: HWND; Msg: UINT; Action: DWORD;
+  ChangeFilterStruct: Pointer): BOOL; stdcall;
+  external user32 name 'ChangeWindowMessageFilterEx';
 
-function IsShiftKey(VK: UINT): Boolean;
+function ShowSettingsMessage: UINT;
 begin
-  Result := (VK = VK_SHIFT) or (VK = VK_LSHIFT) or (VK = VK_RSHIFT);
+  Result := GShowSettingsMessage;
 end;
 
-function IsCtrlKey(VK: UINT): Boolean;
+{ Window lifetime }
+
+procedure TFormMain.CreateWnd;
 begin
-  Result := (VK = VK_CONTROL) or (VK = VK_LCONTROL) or (VK = VK_RCONTROL);
+  inherited;
+  // Lets a second launch find this instance and allows the message through
+  // UIPI when this instance runs elevated.
+  SetProp(Handle, INSTANCE_WINDOW_PROP, 1);
+  if GShowSettingsMessage <> 0 then
+    LSChangeWindowMessageFilterEx(Handle, GShowSettingsMessage, MSGFLT_ALLOW, nil);
 end;
 
-function IsAltKey(VK: UINT): Boolean;
+procedure TFormMain.DestroyWnd;
 begin
-  Result := (VK = VK_MENU) or (VK = VK_LMENU) or (VK = VK_RMENU);
-end;
-
-function IsWinKey(VK: UINT): Boolean;
-begin
-  Result := (VK = VK_LWIN) or (VK = VK_RWIN);
-end;
-
-function IsModifierKey(VK: UINT): Boolean;
-begin
-  Result := IsShiftKey(VK) or IsCtrlKey(VK) or IsAltKey(VK) or IsWinKey(VK);
-end;
-
-function TFormMain.RegisterRawInput: Boolean;
-var
-  Devices: array[0..1] of TLSRawInputDevice;
-begin
-  FillChar(Devices, SizeOf(Devices), 0);
-
-  Devices[0].UsagePage := HID_USAGE_PAGE_GENERIC;
-  Devices[0].Usage := HID_USAGE_GENERIC_KEYBOARD;
-  Devices[0].Flags := RIDEV_INPUTSINK;
-  Devices[0].Target := Handle;
-
-  Devices[1].UsagePage := HID_USAGE_PAGE_GENERIC;
-  Devices[1].Usage := HID_USAGE_GENERIC_MOUSE;
-  Devices[1].Flags := RIDEV_INPUTSINK;
-  Devices[1].Target := Handle;
-
-  Result := RegisterRawInputDevices(@Devices[0], Length(Devices),
-    SizeOf(TLSRawInputDevice));
-  FRawInputRegistered := Result;
-end;
-
-procedure TFormMain.UnregisterRawInput;
-var
-  Devices: array[0..1] of TLSRawInputDevice;
-begin
-  if not FRawInputRegistered then
-    Exit;
-
-  FillChar(Devices, SizeOf(Devices), 0);
-  Devices[0].UsagePage := HID_USAGE_PAGE_GENERIC;
-  Devices[0].Usage := HID_USAGE_GENERIC_KEYBOARD;
-  Devices[0].Flags := RIDEV_REMOVE;
-  Devices[1].UsagePage := HID_USAGE_PAGE_GENERIC;
-  Devices[1].Usage := HID_USAGE_GENERIC_MOUSE;
-  Devices[1].Flags := RIDEV_REMOVE;
-
-  if not RegisterRawInputDevices(@Devices[0], Length(Devices),
-       SizeOf(TLSRawInputDevice)) then
-    DiagnosticsLogFmt('raw_input.unregister_failed error=%d', [GetLastError]);
-  FRawInputRegistered := False;
-end;
-
-procedure TFormMain.HandleRawInput(RawInputHandle: THandle; EventTime: DWORD);
-const
-  MOUSE_ACTIVITY_MASK = RI_MOUSE_LEFT_BUTTON_DOWN or
-    RI_MOUSE_RIGHT_BUTTON_DOWN or RI_MOUSE_MIDDLE_BUTTON_DOWN or
-    RI_MOUSE_BUTTON_4_DOWN or RI_MOUSE_BUTTON_5_DOWN or
-    RI_MOUSE_WHEEL or RI_MOUSE_HWHEEL;
-var
-  DataSize, BytesRead: UINT;
-  Data: Pointer;
-  Raw: PLSRawInput;
-  VK, ScanCode: UINT;
-  IsKeyUp: Boolean;
-begin
-  DataSize := 0;
-  BytesRead := GetRawInputData(RawInputHandle, RID_INPUT, nil, DataSize,
-    SizeOf(TLSRawInputHeader));
-  if BytesRead <> 0 then
-  begin
-    DiagnosticsLogFmt('raw_input.size_failed result=%d error=%d',
-      [BytesRead, GetLastError]);
-    Exit;
-  end;
-  if DataSize < SizeOf(TLSRawInputHeader) then
-  begin
-    DiagnosticsLogFmt('raw_input.invalid_size size=%d header=%d',
-      [DataSize, SizeOf(TLSRawInputHeader)]);
-    Exit;
-  end;
-
-  GetMem(Data, DataSize);
-  try
-    BytesRead := GetRawInputData(RawInputHandle, RID_INPUT, Data, DataSize,
-      SizeOf(TLSRawInputHeader));
-    if (BytesRead = UINT(-1)) or (BytesRead < SizeOf(TLSRawInputHeader)) then
-    begin
-      DiagnosticsLogFmt('raw_input.read_failed result=%d size=%d error=%d',
-        [BytesRead, DataSize, GetLastError]);
-      Exit;
-    end;
-
-    Raw := PLSRawInput(Data);
-    case Raw^.Header.DataType of
-      RIM_TYPEKEYBOARD:
-        begin
-          if Raw^.Keyboard.ExtraInformation = LS_INPUT_TAG then
-            Exit;
-          VK := Raw^.Keyboard.VKey;
-          if VK = $FF then
-            Exit;
-
-          ScanCode := Raw^.Keyboard.MakeCode;
-          if VK = VK_SHIFT then
-            VK := MapVirtualKey(ScanCode, MAPVK_VSC_TO_VK_EX)
-          else if VK = VK_CONTROL then
-          begin
-            if (Raw^.Keyboard.Flags and RI_KEY_E0) <> 0 then
-              VK := VK_RCONTROL
-            else
-              VK := VK_LCONTROL;
-          end
-          else if VK = VK_MENU then
-          begin
-            if (Raw^.Keyboard.Flags and RI_KEY_E0) <> 0 then
-              VK := VK_RMENU
-            else
-              VK := VK_LMENU;
-          end;
-
-          IsKeyUp := (Raw^.Keyboard.Flags and RI_KEY_BREAK) <> 0;
-          ProcessKeyboardEvent(EventTime, VK, ScanCode, IsKeyUp);
-        end;
-      RIM_TYPEMOUSE:
-        if (Raw^.Mouse.ButtonFlags and MOUSE_ACTIVITY_MASK) <> 0 then
-          ProcessPointerActivity;
-    end;
-  finally
-    FreeMem(Data);
-  end;
-end;
-
-procedure AddToStartup(const AppName, AppPath: string);
-var
-  Reg: TRegistry;
-begin
-  Reg := TRegistry.Create;
-  try
-    Reg.RootKey := HKEY_CURRENT_USER;
-    if Reg.OpenKey('Software\Microsoft\Windows\CurrentVersion\Run', True) then
-    try
-      Reg.WriteString(AppName, '"' + AppPath + '"');
-    finally
-      Reg.CloseKey;
-    end;
-  finally
-    Reg.Free;
-  end;
-end;
-
-procedure RemoveFromStartup(const AppName: string);
-var
-  Reg: TRegistry;
-begin
-  Reg := TRegistry.Create;
-  try
-    Reg.RootKey := HKEY_CURRENT_USER;
-    if Reg.OpenKey('Software\Microsoft\Windows\CurrentVersion\Run', False) then
-    try
-      if Reg.ValueExists(AppName) then
-        Reg.DeleteValue(AppName);
-    finally
-      Reg.CloseKey;
-    end;
-  finally
-    Reg.Free;
-  end;
-end;
-
-function IsInStartup(const AppName: string): Boolean;
-var
-  Reg: TRegistry;
-begin
-  Reg := TRegistry.Create;
-  try
-    Reg.RootKey := HKEY_CURRENT_USER;
-    Result := Reg.OpenKeyReadOnly('Software\Microsoft\Windows\CurrentVersion\Run') and
-              Reg.ValueExists(AppName);
-  finally
-    Reg.Free;
-  end;
-end;
-
-function IsCyrillicText(const S: WideString): Boolean;
-var
-  I: Integer;
-begin
-  Result := False;
-  for I := 1 to Length(S) do
-    if ((S[I] >= WideChar('а')) and (S[I] <= WideChar('я'))) or
-       ((S[I] >= WideChar('А')) and (S[I] <= WideChar('Я'))) or
-       (S[I] = WideChar('ё')) or (S[I] = WideChar('Ё')) then
-      Exit(True);
+  RemoveProp(Handle, INSTANCE_WINDOW_PROP);
+  inherited;
 end;
 
 procedure TFormMain.FormCreate(Sender: TObject);
 begin
-  SetLength(FBuffer, 0);
-  FBufferOverflowed := False;
-  FLastWindow := 0;
-  FLastLangID := 0;
-  SetLength(FSavedClipboardFormats, 0);
-  FClipboardSnapshotValid := False;
-  FClipboardWasEmpty := False;
-  FillChar(FKeyDown, SizeOf(FKeyDown), 0);
-  FShiftPressed := False;
-  FLCtrlPressed := False;
-  FRCtrlPressed := False;
-  FShiftTapEligible := False;
-  FLCtrlTapEligible := False;
-  FRCtrlTapEligible := False;
-  FInvertChordActive := False;
-  FSelectionWindow := 0;
-  FSelectionIsNative := False;
-  FRawInputRegistered := False;
-  FUpdatingDiagnosticsSetting := True;
+  FSettings := LoadSettings;
+  SetUILanguage(FSettings.Language);
+  FDetector := TGestureDetector.Create;
+  FChain := TConversionChain.Create;
+  FDetector.Interval := FSettings.DoubleTapInterval;
+  FNotificationTimes := TDictionary<string, DWORD>.Create;
+  FVersion := GetExecutableVersion;
+  FIndicator := TLayoutIndicator.Create;
+  ApplyLanguage;
 
+  // Assigning Checked raises OnClick; the guard keeps FormCreate from
+  // rewriting the Run key or the diagnostics preference.
+  FUpdatingControls := True;
   try
-    chkAutorun.Checked := IsInStartup('LayoutSwitcher');
     chkDiagnostics.Checked := DiagnosticsEnabled;
   finally
-    FUpdatingDiagnosticsSetting := False;
+    FUpdatingControls := False;
   end;
+  LoadControlsFromSettings;
+  FTaskInstalled := QueryAutorunTask(FTaskPath);
+  UpdateAutorunControls;
+  SyncAutorunPath;
+  ApplyStickyKeysSetting;
   mniDiagnostics.Enabled := DirectoryExists(DiagnosticsDirectory);
+
   ShowInTaskBar := False;
   SetWindowLong(Application.Handle, GWL_EXSTYLE,
     GetWindowLong(Application.Handle, GWL_EXSTYLE) and not WS_EX_APPWINDOW);
 
-  InterlockedExchange(GConversionState, 0);
+  CreatePausedIcons;
+
+  FWorker := TOperationWorker.Create(Handle, WM_LS_OPERATION_DONE);
+  if not FWorker.WaitUntilReady(5000) then
+    DiagnosticsLog('worker.start_timeout');
+
   if not RegisterRawInput then
   begin
     DiagnosticsLogFmt('raw_input.register_failed error=%d', [GetLastError]);
-    MessageBox(0, 'Cannot register Raw Input devices!', 'LayoutSwitcher',
+    MessageBox(0, PChar(T('Не удалось зарегистрировать Raw Input.',
+      'Could not register Raw Input.')), 'LayoutSwitcher',
       MB_OK or MB_ICONERROR);
   end
   else
     DiagnosticsLog('raw_input.registered keyboard=true mouse=true');
 
-  TrayIcon.Hint := 'Layout Switcher' + sLineBreak +
-    'Dbl Shift=Конвертация' + sLineBreak +
-    'Dbl LCtrl=ВЕРХНИЙ регистр' + sLineBreak +
-    'Dbl RCtrl=нижний регистр' + sLineBreak +
-    'LCtrl+RCtrl=Инвертировать регистр';
+  // Lock/unlock notifications: key releases on the secure desktop are lost.
+  if not LSWTSRegisterSessionNotification(Handle, NOTIFY_FOR_THIS_SESSION) then
+    DiagnosticsLogFmt('session.notification_register_failed error=%d', [GetLastError]);
+
+  UpdatePauseState;
+  TimerUpdate.Enabled := True;
   WindowState := wsMinimized;
   Hide;
   ShowWindow(Application.Handle, SW_HIDE);
 end;
 
 procedure TFormMain.FormDestroy(Sender: TObject);
+var
+  Msg: TMsg;
 begin
   DiagnosticsLog('form.destroy begin');
+  LSWTSUnRegisterSessionNotification(Handle);
   UnregisterRawInput;
-  RestoreClipboard;
-  DiscardClipboardSnapshot;
+  RestoreStickyKeysHotkey;
+  if Assigned(FWorker) then
+  begin
+    FWorker.Shutdown;
+    FreeAndNil(FWorker);
+  end;
+  // Results posted after the last message loop iteration.
+  while PeekMessage(Msg, Handle, WM_LS_OPERATION_DONE, WM_LS_OPERATION_DONE,
+          PM_REMOVE) do
+    TOperationResult(Msg.lParam).Free;
+  if Assigned(FUpdateThread) then
+  begin
+    // Bounded by the HTTP timeouts.
+    FUpdateThread.WaitFor;
+    FreeAndNil(FUpdateThread);
+  end;
+  while PeekMessage(Msg, Handle, WM_LS_UPDATE_RESULT, WM_LS_UPDATE_RESULT,
+          PM_REMOVE) do
+    TUpdateCheckResult(Msg.lParam).Free;
+  FreeAndNil(FIndicator);
+  FreeAndNil(FDetector);
+  FreeAndNil(FChain);
+  FreeAndNil(FNotificationTimes);
   DiagnosticsLog('form.destroy end');
 end;
 
 procedure TFormMain.FormCloseQuery(Sender: TObject; var CanClose: Boolean);
 begin
+  ApplyExcludedFromEdit;
   CanClose := False;
   Hide;
   ShowWindow(Application.Handle, SW_HIDE);
@@ -543,15 +448,8 @@ begin
         on E: Exception do
         begin
           ClearBuffer;
-          FillChar(FKeyDown, SizeOf(FKeyDown), 0);
-          FShiftTapEligible := False;
-          FLCtrlTapEligible := False;
-          FRCtrlTapEligible := False;
-          FInvertChordActive := False;
+          FDetector.ResetAll;
           DiagnosticsCaptureException('raw_input.message', E, ExceptAddr);
-          {$IFDEF DEBUG}
-          raise;
-          {$ENDIF}
         end;
       end;
     finally
@@ -561,290 +459,292 @@ begin
   end;
 
   case Message.Msg of
-    WM_DO_CONVERT, WM_DO_UPPERCASE, WM_DO_LOWERCASE, WM_DO_INVERT_CASE:
-      try
-        ExecuteOperation(Message.Msg);
-      finally
-        InterlockedExchange(GConversionState, 0);
+    WM_WTSSESSION_CHANGE:
+      case Message.WParam of
+        WTS_SESSION_LOCK:
+          ResetInputState('session_lock', False);
+        WTS_SESSION_UNLOCK, WTS_CONSOLE_CONNECT, WTS_REMOTE_CONNECT:
+          ResetInputState('session_unlock', True);
       end;
-  else
-    inherited WndProc(Message);
+    WM_POWERBROADCAST:
+      if (Message.WParam = PBT_APMRESUMEAUTOMATIC) or
+         (Message.WParam = PBT_APMRESUMESUSPEND) then
+        ResetInputState('power_resume', True);
   end;
-end;
 
-procedure TFormMain.QueueOperation(MessageID: UINT);
-begin
-  if InterlockedCompareExchange(GConversionState, 1, 0) = 0 then
+  if Message.Msg = WM_LS_UPDATE_RESULT then
   begin
-    if not PostMessage(Handle, MessageID, 0, 0) then
-    begin
-      DiagnosticsLogFmt('operation.queue_failed message=%d error=%d',
-        [MessageID, GetLastError]);
-      InterlockedExchange(GConversionState, 0);
-    end;
-  end
-  else
-    DiagnosticsLogFmt('operation.queue_ignored message=%d reason=busy',
-      [MessageID]);
+    HandleUpdateResult(TUpdateCheckResult(Message.LParam));
+    Exit;
+  end;
+
+  if Message.Msg = WM_LS_OPERATION_DONE then
+  begin
+    HandleOperationResult(TOperationResult(Message.LParam));
+    Exit;
+  end;
+
+  if (GShowSettingsMessage <> 0) and (Message.Msg = GShowSettingsMessage) then
+  begin
+    ShowSettingsWindow;
+    Exit;
+  end;
+
+  inherited WndProc(Message);
 end;
 
-procedure TFormMain.ExecuteOperation(MessageID: UINT);
+{ Raw Input }
+
+function TFormMain.RegisterRawInput: Boolean;
 var
-  OperationName, TargetClass: string;
-  Target: HWND;
-  TargetProcessID: DWORD;
-  ClassBuffer: array[0..255] of Char;
-  Success: Boolean;
+  Devices: array[0..1] of TLSRawInputDevice;
 begin
-  case MessageID of
-    WM_DO_CONVERT: OperationName := 'convert_layout';
-    WM_DO_UPPERCASE: OperationName := 'uppercase';
-    WM_DO_LOWERCASE: OperationName := 'lowercase';
-    WM_DO_INVERT_CASE: OperationName := 'invert_case';
-  else
-    OperationName := 'unknown';
-  end;
+  FillChar(Devices, SizeOf(Devices), 0);
+  Devices[0].UsagePage := HID_USAGE_PAGE_GENERIC;
+  Devices[0].Usage := HID_USAGE_GENERIC_KEYBOARD;
+  Devices[0].Flags := RIDEV_INPUTSINK;
+  Devices[0].Target := Handle;
+  Devices[1].UsagePage := HID_USAGE_PAGE_GENERIC;
+  Devices[1].Usage := HID_USAGE_GENERIC_MOUSE;
+  Devices[1].Flags := RIDEV_INPUTSINK;
+  Devices[1].Target := Handle;
+  Result := RegisterRawInputDevices(@Devices[0], Length(Devices),
+    SizeOf(TLSRawInputDevice));
+  FRawInputRegistered := Result;
+end;
 
-  Target := GetFocusedWindow;
-  TargetProcessID := 0;
-  TargetClass := '';
-  FillChar(ClassBuffer, SizeOf(ClassBuffer), 0);
-  if Target <> 0 then
-  begin
-    GetWindowThreadProcessId(Target, @TargetProcessID);
-    if GetClassName(Target, ClassBuffer, Length(ClassBuffer)) > 0 then
-      TargetClass := string(ClassBuffer);
-  end;
+procedure TFormMain.UnregisterRawInput;
+var
+  Devices: array[0..1] of TLSRawInputDevice;
+begin
+  if not FRawInputRegistered then
+    Exit;
+  FillChar(Devices, SizeOf(Devices), 0);
+  Devices[0].UsagePage := HID_USAGE_PAGE_GENERIC;
+  Devices[0].Usage := HID_USAGE_GENERIC_KEYBOARD;
+  Devices[0].Flags := RIDEV_REMOVE;
+  Devices[1].UsagePage := HID_USAGE_PAGE_GENERIC;
+  Devices[1].Usage := HID_USAGE_GENERIC_MOUSE;
+  Devices[1].Flags := RIDEV_REMOVE;
+  if not RegisterRawInputDevices(@Devices[0], Length(Devices),
+       SizeOf(TLSRawInputDevice)) then
+    DiagnosticsLogFmt('raw_input.unregister_failed error=%d', [GetLastError]);
+  FRawInputRegistered := False;
+end;
 
-  DiagnosticsBeginOperation(OperationName,
-    Format('buffer_len=%d overflow=%s target=%p target_pid=%d target_class="%s"',
-      [Length(FBuffer), BoolToStr(FBufferOverflowed, True), Pointer(Target),
-       TargetProcessID, TargetClass]));
-  Success := False;
-  try
-    try
-      case MessageID of
-        WM_DO_CONVERT: DoConvert;
-        WM_DO_UPPERCASE: DoChangeCase(True);
-        WM_DO_LOWERCASE: DoChangeCase(False);
-        WM_DO_INVERT_CASE: DoInvertCase;
-      end;
-      Success := True;
-    except
-      on E: Exception do
+procedure TFormMain.HandleRawInput(RawInputHandle: THandle; EventTime: DWORD);
+var
+  // Keyboard and mouse RAWINPUT fit easily; UInt64 keeps 8-byte alignment.
+  Buffer: array[0..31] of UInt64;
+  DataSize, BytesRead: UINT;
+  Raw: PLSRawInput;
+  VK, ScanCode: UINT;
+begin
+  // Every mouse move arrives here, so this path must not allocate.
+  DataSize := SizeOf(Buffer);
+  BytesRead := GetRawInputData(RawInputHandle, RID_INPUT, @Buffer[0], DataSize,
+    SizeOf(TLSRawInputHeader));
+  if (BytesRead = UINT(-1)) or (BytesRead < SizeOf(TLSRawInputHeader)) then
+    Exit;
+
+  Raw := PLSRawInput(@Buffer[0]);
+  case Raw^.Header.DataType of
+    RIM_TYPEMOUSE:
+      if (Raw^.Mouse.ButtonFlags and MOUSE_ACTIVITY_MASK) <> 0 then
+        ProcessPointerActivity;
+    RIM_TYPEKEYBOARD:
       begin
-        DiagnosticsCaptureException('operation.execute', E, ExceptAddr);
-        raise;
+        if Raw^.Keyboard.ExtraInformation = LS_INPUT_TAG then
+          Exit;
+        VK := Raw^.Keyboard.VKey;
+        if (VK = 0) or (VK >= $FF) then
+          Exit;
+        ScanCode := Raw^.Keyboard.MakeCode;
+        if VK = VK_SHIFT then
+          VK := MapVirtualKey(ScanCode, MAPVK_VSC_TO_VK_EX)
+        else if VK = VK_CONTROL then
+        begin
+          if (Raw^.Keyboard.Flags and RI_KEY_E0) <> 0 then
+            VK := VK_RCONTROL
+          else
+            VK := VK_LCONTROL;
+        end
+        else if VK = VK_MENU then
+        begin
+          if (Raw^.Keyboard.Flags and RI_KEY_E0) <> 0 then
+            VK := VK_RMENU
+          else
+            VK := VK_LMENU;
+        end;
+        ProcessKeyboardEvent(EventTime, VK, ScanCode,
+          (Raw^.Keyboard.Flags and RI_KEY_BREAK) <> 0);
       end;
-    end;
-  finally
-    DiagnosticsEndOperation(OperationName, Success);
   end;
 end;
 
-procedure TFormMain.CompleteShiftTap(EventTime: DWORD);
+procedure TFormMain.ResetInputState(const Reason: string; Reregister: Boolean);
 begin
-  if FShiftPressed and
-     (EventTime - FLastShiftTime <= DOUBLE_SHIFT_INTERVAL) then
+  DiagnosticsLogFmt('input.reset reason=%s held_keys=%d busy=%s',
+    [Reason, FDetector.HeldKeyCount, BoolToStr(FOperationBusy, True)]);
+  FDetector.ResetAll;
+  ClearBuffer;
+  FChain.Reset;
+  FLastWindow := 0;
+  // A request interrupted by sleep must not block the next gesture; a late
+  // result is discarded by its sequence number.
+  FOperationBusy := False;
+  if Reregister then
   begin
-    FShiftPressed := False;
-    QueueOperation(WM_DO_CONVERT);
-  end
-  else
-  begin
-    FShiftPressed := True;
-    FLastShiftTime := EventTime;
+    // Registration normally survives sleep; re-registering is harmless and
+    // covers keyboards re-enumerated on resume.
+    if not RegisterRawInput then
+      DiagnosticsLogFmt('raw_input.reregister_failed error=%d', [GetLastError]);
+    // The accessibility settings may have been changed meanwhile.
+    ApplyStickyKeysSetting;
   end;
 end;
 
-procedure TFormMain.CompleteCtrlTap(IsLeft: Boolean; EventTime: DWORD);
+procedure TFormMain.ApplyStickyKeysSetting;
+var
+  Flags, Bits: DWORD;
 begin
-  if IsLeft then
+  if not FSettings.DisableStickyKeysHotkey then
   begin
-    if FLCtrlPressed and
-       (EventTime - FLastLCtrlTime <= DOUBLE_CTRL_INTERVAL) then
-    begin
-      FLCtrlPressed := False;
-      QueueOperation(WM_DO_UPPERCASE);
-    end
-    else
-    begin
-      FLCtrlPressed := True;
-      FLastLCtrlTime := EventTime;
-    end;
+    RestoreStickyKeysHotkey;
+    Exit;
+  end;
+  if not ReadStickyKeysFlags(Flags) then
+  begin
+    DiagnosticsLogFmt('sticky_keys.read_failed error=%d', [GetLastError]);
+    Exit;
+  end;
+  Bits := Flags and STICKY_KEYS_HOTKEY_FLAGS;
+  if Bits = 0 then
+    Exit; // Already off: nothing to change and nothing to restore later.
+  if WriteStickyKeysFlags(Flags and not STICKY_KEYS_HOTKEY_FLAGS) then
+  begin
+    FStickyHotkeyRemoved := FStickyHotkeyRemoved or Bits;
+    DiagnosticsLogFmt('sticky_keys.hotkey_disabled flags=0x%.8x', [Flags]);
   end
   else
-  begin
-    if FRCtrlPressed and
-       (EventTime - FLastRCtrlTime <= DOUBLE_CTRL_INTERVAL) then
-    begin
-      FRCtrlPressed := False;
-      QueueOperation(WM_DO_LOWERCASE);
-    end
-    else
-    begin
-      FRCtrlPressed := True;
-      FLastRCtrlTime := EventTime;
-    end;
-  end;
+    DiagnosticsLogFmt('sticky_keys.write_failed error=%d', [GetLastError]);
+end;
+
+procedure TFormMain.RestoreStickyKeysHotkey;
+var
+  Flags: DWORD;
+begin
+  if FStickyHotkeyRemoved = 0 then
+    Exit;
+  // Only the bits removed by us are put back; other Sticky Keys options the
+  // user may have changed meanwhile are preserved.
+  if ReadStickyKeysFlags(Flags) and
+     WriteStickyKeysFlags(Flags or FStickyHotkeyRemoved) then
+    DiagnosticsLog('sticky_keys.hotkey_restored')
+  else
+    DiagnosticsLogFmt('sticky_keys.restore_failed error=%d', [GetLastError]);
+  FStickyHotkeyRemoved := 0;
 end;
 
 procedure TFormMain.ProcessKeyboardEvent(EventTime: DWORD; VK, ScanCode: UINT;
   IsKeyUp: Boolean);
 var
-  WasDown, HadShiftDown: Boolean;
+  Gesture: TLSGesture;
+  Released: Integer;
 begin
-  if VK > High(FKeyDown) then
+  if VK > 255 then
     Exit;
+  if not FPaused then
+    CheckWindowChanged;
 
-  CheckWindowChanged;
-  WasDown := FKeyDown[VK];
-
-  if IsKeyUp then
+  // Releases lost on the secure desktop would otherwise block every tap.
+  if not IsKeyUp then
   begin
-    FKeyDown[VK] := False;
-    if IsShiftKey(VK) and
-       not (FKeyDown[VK_SHIFT] or FKeyDown[VK_LSHIFT] or FKeyDown[VK_RSHIFT]) then
-    begin
-      if FShiftTapEligible then
-        CompleteShiftTap(EventTime);
-      FShiftTapEligible := False;
-    end;
-
-    if (VK = VK_LCONTROL) and FLCtrlTapEligible and not FInvertChordActive then
-    begin
-      CompleteCtrlTap(True, EventTime);
-      FLCtrlTapEligible := False;
-    end;
-    if (VK = VK_RCONTROL) and FRCtrlTapEligible and not FInvertChordActive then
-    begin
-      CompleteCtrlTap(False, EventTime);
-      FRCtrlTapEligible := False;
-    end;
-
-    if FInvertChordActive and
-       not FKeyDown[VK_LCONTROL] and not FKeyDown[VK_RCONTROL] then
-    begin
-      FInvertChordActive := False;
-      FLCtrlTapEligible := False;
-      FRCtrlTapEligible := False;
-      FLCtrlPressed := False;
-      FRCtrlPressed := False;
-      QueueOperation(WM_DO_INVERT_CASE);
-    end;
-    Exit;
+    Released := FDetector.ReleaseStaleKeys(
+      function(Key: Cardinal): Boolean
+      begin
+        Result := GetAsyncKeyState(Integer(Key)) < 0;
+      end, EventTime, STALE_KEY_MIN_AGE_MS);
+    if Released > 0 then
+      DiagnosticsLogFmt('input.stale_keys_released count=%d', [Released]);
   end;
 
-  if WasDown then
-  begin
-    if not IsModifierKey(VK) then
-      ProcessBufferKey(VK, ScanCode);
+  // The detector always tracks key states, even while paused, so that a
+  // modifier held across a pause/resume does not leave stale state.
+  Gesture := FDetector.KeyEvent(VK, IsKeyUp, EventTime);
+  if FPaused then
     Exit;
-  end;
-
-  HadShiftDown := FKeyDown[VK_SHIFT] or FKeyDown[VK_LSHIFT] or FKeyDown[VK_RSHIFT];
-  FKeyDown[VK] := True;
-
-  if IsShiftKey(VK) then
+  if Gesture <> lgNone then
   begin
-    if HadShiftDown then
-      FShiftTapEligible := False
-    else
-      FShiftTapEligible := not (FKeyDown[VK_LCONTROL] or FKeyDown[VK_RCONTROL] or
-        FKeyDown[VK_LMENU] or FKeyDown[VK_RMENU] or
-        FKeyDown[VK_LWIN] or FKeyDown[VK_RWIN]);
-    Exit;
-  end;
-
-  if VK = VK_LCONTROL then
-  begin
-    FLCtrlTapEligible := not (FKeyDown[VK_RCONTROL] or
-      FKeyDown[VK_SHIFT] or FKeyDown[VK_LSHIFT] or FKeyDown[VK_RSHIFT] or
-      FKeyDown[VK_LMENU] or FKeyDown[VK_RMENU] or
-      FKeyDown[VK_LWIN] or FKeyDown[VK_RWIN]);
-    if FKeyDown[VK_RCONTROL] then
+    if (Gesture = lgDoubleCapsLock) and
+       (FSettings.ActionForGesture(Gesture) <> laNone) and IsCapsLockOffByShift then
     begin
-      FInvertChordActive := True;
-      FLCtrlTapEligible := False;
-      FRCtrlTapEligible := False;
+      FBalloonUrl := '';
+      ShowNotification('caps_shiftlock', T(
+        'В Windows включено «Отключать Caps Lock клавишей Shift», поэтому после ' +
+        'двойного Caps Lock он остаётся включённым. Нажмите Shift или назначьте ' +
+        'действию другой жест.',
+        'Windows is set to turn off Caps Lock with Shift, so Caps Lock stays on ' +
+        'after a double Caps Lock. Press Shift or assign another gesture.'));
     end;
-    Exit;
+    QueueAction(FSettings.ActionForGesture(Gesture));
   end;
 
-  if VK = VK_RCONTROL then
-  begin
-    FRCtrlTapEligible := not (FKeyDown[VK_LCONTROL] or
-      FKeyDown[VK_SHIFT] or FKeyDown[VK_LSHIFT] or FKeyDown[VK_RSHIFT] or
-      FKeyDown[VK_LMENU] or FKeyDown[VK_RMENU] or
-      FKeyDown[VK_LWIN] or FKeyDown[VK_RWIN]);
-    if FKeyDown[VK_LCONTROL] then
-    begin
-      FInvertChordActive := True;
-      FLCtrlTapEligible := False;
-      FRCtrlTapEligible := False;
-    end;
+  if IsKeyUp or IsModifierKey(VK) then
     Exit;
-  end;
-
-  if IsAltKey(VK) or IsWinKey(VK) or (VK = VK_CONTROL) then
-    Exit;
-
-  if FKeyDown[VK_SHIFT] or FKeyDown[VK_LSHIFT] or FKeyDown[VK_RSHIFT] then
-    FShiftTapEligible := False;
-  if FKeyDown[VK_LCONTROL] then
-    FLCtrlTapEligible := False;
-  if FKeyDown[VK_RCONTROL] then
-    FRCtrlTapEligible := False;
-  FShiftPressed := False;
-  FLCtrlPressed := False;
-  FRCtrlPressed := False;
   ProcessBufferKey(VK, ScanCode);
 end;
 
 procedure TFormMain.ProcessPointerActivity;
 begin
   ClearBuffer;
-  FShiftPressed := False;
-  FLCtrlPressed := False;
-  FRCtrlPressed := False;
-  FShiftTapEligible := False;
-  FLCtrlTapEligible := False;
-  FRCtrlTapEligible := False;
+  FDetector.ResetTaps;
+end;
+
+procedure TFormMain.CheckWindowChanged;
+var
+  CurrentWindow: HWND;
+begin
+  CurrentWindow := GetFocusedWindow;
+  if CurrentWindow = FLastWindow then
+    Exit;
+  FLastWindow := CurrentWindow;
+  ClearBuffer;
+  FDetector.ResetTaps;
+  FFocusIsPassword := IsNativePasswordEdit(CurrentWindow);
 end;
 
 procedure TFormMain.ProcessBufferKey(VK, ScanCode: UINT);
 var
-  Ch: WideChar;
+  Ch: Char;
 begin
-  if (VK = VK_LEFT) or (VK = VK_RIGHT) or (VK = VK_UP) or (VK = VK_DOWN) or
-     (VK = VK_HOME) or (VK = VK_END) or (VK = VK_PRIOR) or (VK = VK_NEXT) or
-     (VK = VK_ESCAPE) or (VK = VK_DELETE) or (VK = VK_INSERT) then
+  // Never keep keystrokes typed into a password field.
+  if FFocusIsPassword then
   begin
     ClearBuffer;
     Exit;
   end;
 
-  if VK = VK_BACK then
-  begin
-    if FKeyDown[VK_LCONTROL] or FKeyDown[VK_RCONTROL] then
-      ClearBuffer
-    else
-      BufferBackspace;
-    Exit;
+  case VK of
+    VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN, VK_HOME, VK_END, VK_PRIOR, VK_NEXT,
+    VK_ESCAPE, VK_DELETE, VK_INSERT, VK_RETURN, VK_TAB:
+      begin
+        ClearBuffer;
+        Exit;
+      end;
+    VK_BACK:
+      begin
+        if FDetector.CtrlDown then
+          ClearBuffer
+        else
+          BufferBackspace;
+        Exit;
+      end;
+    VK_CAPITAL, VK_NUMLOCK, VK_SCROLL:
+      Exit;
   end;
 
-  if (VK = VK_RETURN) or (VK = VK_TAB) or (VK = VK_SPACE) then
-  begin
-    FinalizeWord;
-    Exit;
-  end;
-
-  if IsModifierKey(VK) then
-    Exit;
-
-  if FKeyDown[VK_LCONTROL] or FKeyDown[VK_RCONTROL] or
-     FKeyDown[VK_LMENU] or FKeyDown[VK_RMENU] or
-     FKeyDown[VK_LWIN] or FKeyDown[VK_RWIN] then
+  if FDetector.CtrlDown or FDetector.AltDown or FDetector.WinDown then
   begin
     ClearBuffer;
     Exit;
@@ -852,75 +752,15 @@ begin
 
   if TryTranslateKey(VK, ScanCode, Ch) then
     AddChar(Ch)
-  else if (VK <> VK_CAPITAL) and (VK <> VK_NUMLOCK) and (VK <> VK_SCROLL) then
+  else
     ClearBuffer;
 end;
 
-procedure TFormMain.AddChar(Ch: WideChar);
-begin
-  if FBufferOverflowed then
-    Exit;
-  if Length(FBuffer) >= MAX_WORD_LEN then
-  begin
-    SetLength(FBuffer, 0);
-    FBufferOverflowed := True;
-    Exit;
-  end;
-  SetLength(FBuffer, Length(FBuffer) + 1);
-  FBuffer[High(FBuffer)].Ch := Ch;
-end;
-
-procedure TFormMain.BufferBackspace;
-begin
-  if FBufferOverflowed then
-    Exit;
-  if Length(FBuffer) > 0 then
-    SetLength(FBuffer, Length(FBuffer) - 1);
-end;
-
-procedure TFormMain.ClearBuffer;
-begin
-  SetLength(FBuffer, 0);
-  FBufferOverflowed := False;
-end;
-
-procedure TFormMain.SetBufferText(const Value: WideString);
-var
-  I: Integer;
-begin
-  ClearBuffer;
-  if (Value = '') or (Length(Value) > MAX_WORD_LEN) then
-    Exit;
-
-  for I := 1 to Length(Value) do
-    if Ord(Value[I]) <= 32 then
-      Exit;
-
-  SetLength(FBuffer, Length(Value));
-  for I := 1 to Length(Value) do
-    FBuffer[I - 1].Ch := Value[I];
-end;
-
-procedure TFormMain.FinalizeWord;
-begin
-  ClearBuffer;
-end;
-
-function TFormMain.BufferToString: WideString;
-var
-  I: Integer;
-begin
-  SetLength(Result, Length(FBuffer));
-  for I := 0 to High(FBuffer) do
-    Result[I + 1] := FBuffer[I].Ch;
-end;
-
-function TFormMain.TryTranslateKey(VK, ScanCode: UINT; out Ch: WideChar): Boolean;
+function TFormMain.TryTranslateKey(VK, ScanCode: UINT; out Ch: Char): Boolean;
 var
   KeyState: TKeyboardState;
   Buffer: array[0..3] of WideChar;
   FocusedWindow: HWND;
-  ThreadID: DWORD;
   Layout: HKL;
   CharCount: Integer;
   TranslationVK, MappedVK: UINT;
@@ -930,28 +770,28 @@ begin
   FocusedWindow := GetFocusedWindow;
   if FocusedWindow = 0 then
     Exit;
-
-  ThreadID := GetWindowThreadProcessId(FocusedWindow, nil);
-  Layout := GetKeyboardLayout(ThreadID);
+  Layout := GetKeyboardLayout(GetWindowThreadProcessId(FocusedWindow, nil));
   if Layout = 0 then
     Exit;
 
   FillChar(KeyState, SizeOf(KeyState), 0);
-  if FKeyDown[VK_SHIFT] or FKeyDown[VK_LSHIFT] or FKeyDown[VK_RSHIFT] then
+  if FDetector.ShiftDown then
     KeyState[VK_SHIFT] := $80;
   if (GetKeyState(VK_CAPITAL) and 1) <> 0 then
     KeyState[VK_CAPITAL] := 1;
   if (GetKeyState(VK_NUMLOCK) and 1) <> 0 then
     KeyState[VK_NUMLOCK] := 1;
 
+  // Raw Input reports the VK of the system layout; the scan code identifies
+  // the physical key in the layout of the focused window.
   TranslationVK := VK;
   if ScanCode <> 0 then
   begin
     MappedVK := MapVirtualKeyEx(ScanCode, MAPVK_VSC_TO_VK_EX, Layout);
     if MappedVK <> 0 then
       TranslationVK := MappedVK;
-  end;
-  if ScanCode = 0 then
+  end
+  else
     ScanCode := MapVirtualKeyEx(TranslationVK, MAPVK_VK_TO_VSC, Layout);
   if TranslationVK <= High(KeyState) then
     KeyState[TranslationVK] := $80;
@@ -965,1107 +805,647 @@ begin
   end;
 end;
 
-function TFormMain.GetFocusedWindow: HWND;
-var
-  Foreground: HWND;
-  Info: TLSGUIThreadInfo;
+{ Word buffer }
+
+procedure TFormMain.AddChar(Ch: Char);
 begin
-  Result := 0;
+  // Any manual edit ends the word -> phrase -> revert chain.
+  FChain.Reset;
+  if FBufferOverflowed then
+    Exit;
+  if Length(FBuffer) >= MAX_PHRASE_LEN then
+  begin
+    FBuffer := '';
+    FBufferOverflowed := True;
+    Exit;
+  end;
+  FBuffer := FBuffer + Ch;
+end;
+
+procedure TFormMain.BufferBackspace;
+begin
+  FChain.Reset;
+  if not FBufferOverflowed and (FBuffer <> '') then
+    SetLength(FBuffer, Length(FBuffer) - 1);
+end;
+
+procedure TFormMain.ClearBuffer;
+begin
+  FBuffer := '';
+  FBufferOverflowed := False;
+  if Assigned(FChain) then
+    FChain.Reset;
+end;
+
+procedure TFormMain.SetBufferText(const Value: string);
+var
+  Ch: Char;
+begin
+  ClearBuffer;
+  if (Value = '') or (Length(Value) > MAX_PHRASE_LEN) then
+    Exit;
+  for Ch in Value do
+    if Ord(Ch) < 32 then
+      Exit;
+  FBuffer := Value;
+end;
+
+{ Operations }
+
+procedure TFormMain.QueueAction(Action: TLSAction);
+var
+  Foreground, Focus: HWND;
+  ProcessName: string;
+  Request: TOperationRequest;
+begin
+  if (Action = laNone) or FPaused then
+    Exit;
+
+  if FOperationBusy then
+  begin
+    if GetTickCount - FOperationStarted < OPERATION_WATCHDOG_MS then
+    begin
+      DiagnosticsLogFmt('operation.ignored action=%s reason=busy', [ActionKeys[Action]]);
+      Exit;
+    end;
+    DiagnosticsLogFmt('operation.watchdog_reset seq=%d', [FOperationSequence]);
+    FOperationBusy := False;
+  end;
+
   Foreground := GetForegroundWindow;
-  if Foreground = 0 then
+  Focus := GetFocusedWindow;
+  if (Foreground = 0) or (Focus = 0) then
     Exit;
 
-  FillChar(Info, SizeOf(Info), 0);
-  Info.cbSize := SizeOf(Info);
-  if GetGUIThreadInfo(GetWindowThreadProcessId(Foreground, nil),
-       PGUIThreadInfo(@Info)^) and (Info.hwndFocus <> 0) then
-    Result := Info.hwndFocus
-  else
-    Result := Foreground;
-end;
-
-procedure TFormMain.CheckWindowChanged;
-var
-  CurrentWindow: HWND;
-begin
-  CurrentWindow := GetFocusedWindow;
-  if CurrentWindow <> FLastWindow then
+  // Screenshot tools: their capture overlay uses Shift/Ctrl itself and a
+  // synthetic Ctrl+C makes them copy the image.
+  ProcessName := GetWindowProcessFileName(Foreground);
+  if FSettings.IsProcessExcluded(ProcessName) then
   begin
-    FLastWindow := CurrentWindow;
     ClearBuffer;
-    FShiftPressed := False;
-    FLCtrlPressed := False;
-    FRCtrlPressed := False;
-    FShiftTapEligible := False;
-    FLCtrlTapEligible := False;
-    FRCtrlTapEligible := False;
+    DiagnosticsLogFmt('operation.skipped action=%s reason=excluded_process process="%s"',
+      [ActionKeys[Action], ProcessName]);
+    Exit;
+  end;
+  if FSettings.PauseInFullscreen and IsFullscreenAppActive then
+  begin
+    DiagnosticsLogFmt('operation.skipped action=%s reason=fullscreen process="%s"',
+      [ActionKeys[Action], ProcessName]);
+    Exit;
+  end;
+  if IsWindowProcessElevatedAboveUs(Focus) then
+  begin
+    DiagnosticsLogFmt('operation.skipped action=%s reason=elevated_target process="%s"',
+      [ActionKeys[Action], ProcessName]);
+    FBalloonUrl := '';
+    ShowNotification('elevated', Format(T(
+      '%s запущен от имени администратора, поэтому Windows не позволяет ' +
+      'изменить в нём текст. Включите в настройках запуск LayoutSwitcher ' +
+      'с правами администратора.',
+      '%s runs as administrator, so Windows does not allow changing its text. ' +
+      'Turn on "Run as administrator" in the LayoutSwitcher settings.'),
+      [ProcessName]));
+    Exit;
+  end;
+
+  Request := TOperationRequest.Create;
+  Inc(FOperationSequence);
+  Request.Sequence := FOperationSequence;
+  Request.Action := Action;
+  if not FBufferOverflowed and not FFocusIsPassword then
+    Request.Plan := FChain.Plan(Action, FBuffer)
+  else
+    Request.Plan := FChain.Plan(laNone, '');
+  FPendingPlan := Request.Plan;
+  if (Action = laUndo) and (Request.Plan.Mode <> bmUndo) then
+  begin
+    Request.Free;
+    DiagnosticsLog('operation.skipped action=undo reason=nothing_to_undo');
+    Exit;
+  end;
+  Request.FocusWnd := Focus;
+  Request.WindowLayout := GetKeyboardLayout(GetWindowThreadProcessId(Focus, nil));
+  Request.PreviousLayout := FPreviousLayout;
+  Request.ExcludedProcesses := FSettings.ExcludedProcesses;
+
+  FOperationBusy := True;
+  FOperationStarted := GetTickCount;
+  if not FWorker.Post(Request) then
+  begin
+    FOperationBusy := False;
+    DiagnosticsLogFmt('operation.queue_failed error=%d', [GetLastError]);
   end;
 end;
 
-function TFormMain.GetSelectedTextInActiveWindow(out Text: WideString): Boolean;
-var
-  Target: HWND;
-  StartSel, EndSel: DWORD;
-  ClassName: array[0..255] of Char;
-  ClassText: string;
-  MessageResult: DWORD_PTR;
-  TextLength, Copied: Integer;
-  Buffer: WideString;
-  Style: NativeInt;
-  SelectionStart, SelectionEnd: DWORD;
+procedure TFormMain.HandleOperationResult(Res: TOperationResult);
 begin
-  Result := False;
-  Text := '';
-  Target := GetFocusedWindow;
-  if Target = 0 then
-    Exit;
-
-  GetClassName(Target, ClassName, Length(ClassName));
-  ClassText := LowerCase(string(ClassName));
-  if (Pos('edit', ClassText) = 0) and (Pos('richedit', ClassText) = 0) and
-     (Pos('tmemo', ClassText) = 0) and (Pos('tedit', ClassText) = 0) then
-    Exit;
-
-  Style := GetWindowLongPtr(Target, GWL_STYLE);
-  if (Style and ES_PASSWORD) <> 0 then
-    Exit;
-
-  StartSel := 0;
-  EndSel := 0;
-  MessageResult := 0;
-  if SendMessageTimeout(Target, EM_GETSEL, WPARAM(@StartSel), LPARAM(@EndSel),
-       SMTO_ABORTIFHUNG or SMTO_BLOCK, WINDOW_MESSAGE_TIMEOUT, @MessageResult) = 0 then
-    Exit;
-
-  MessageResult := 0;
-  if SendMessageTimeoutW(Target, WM_GETTEXTLENGTH, 0, 0,
-       SMTO_ABORTIFHUNG or SMTO_BLOCK, WINDOW_MESSAGE_TIMEOUT, @MessageResult) = 0 then
-    Exit;
-  TextLength := Integer(MessageResult);
-  if (TextLength <= 0) or (TextLength > MAX_SELECTION_LEN) or
-     (EndSel > DWORD(TextLength)) or (StartSel > EndSel) then
-    Exit;
-
-  SetLength(Buffer, TextLength + 1);
-  MessageResult := 0;
-  if SendMessageTimeoutW(Target, WM_GETTEXT, WPARAM(TextLength + 1),
-       LPARAM(PWideChar(Buffer)), SMTO_ABORTIFHUNG or SMTO_BLOCK,
-       WINDOW_MESSAGE_TIMEOUT, @MessageResult) = 0 then
-    Exit;
-  Copied := Integer(MessageResult);
-  if Copied <= 0 then
-    Exit;
-  SetLength(Buffer, Copied);
-  if EndSel > DWORD(Copied) then
-    Exit;
-
-  SelectionStart := StartSel;
-  SelectionEnd := EndSel;
-  if SelectionStart = SelectionEnd then
-  begin
-    if (SelectionStart = 0) or (SelectionStart > DWORD(Copied)) then
-      Exit;
-
-    // Standard Edit/RichEdit controls let us read the word immediately
-    // before the caret directly. This is more reliable than reconstructing
-    // Unicode text from global keyboard events.
-    while (SelectionStart > 0) and
-          (Ord(Buffer[SelectionStart]) > 32) do
-      Dec(SelectionStart);
-    if SelectionStart = SelectionEnd then
-      Exit;
-
-    MessageResult := 0;
-    if SendMessageTimeout(Target, EM_SETSEL, SelectionStart, SelectionEnd,
-         SMTO_ABORTIFHUNG or SMTO_BLOCK, WINDOW_MESSAGE_TIMEOUT,
-         @MessageResult) = 0 then
-      Exit;
-  end;
-
-  Text := Copy(Buffer, SelectionStart + 1, SelectionEnd - SelectionStart);
-  if Text <> '' then
-  begin
-    FSelectionWindow := Target;
-    FSelectionIsNative := True;
-    Result := True;
-  end;
-end;
-
-function TFormMain.GetSelectedTextByUIAutomation(
-  out Text: WideString): Boolean;
-var
-  Target: HWND;
-  FailureStage: string;
-  ErrorCode: HRESULT;
-begin
-  Result := False;
-  Text := '';
-  Target := GetFocusedWindow;
-  if Target = 0 then
-    Exit;
-
-  if not TryGetUIAutomationSelection(Text, FailureStage, ErrorCode) then
-  begin
-    DiagnosticsLogFmt('target.uia unavailable stage=%s result=0x%.8x',
-      [FailureStage, Cardinal(ErrorCode)]);
-    Exit;
-  end;
-  if (Text = '') or (GetFocusedWindow <> Target) then
-  begin
-    DiagnosticsLog('target.uia rejected reason=focus_changed_or_empty');
-    Text := '';
-    Exit;
-  end;
-
-  FSelectionWindow := Target;
-  FSelectionIsNative := False;
-  Result := True;
-  DiagnosticsLogFmt('target.uia success=true length=%d', [Length(Text)]);
-end;
-
-function TFormMain.WaitForClipboardChange(OldSequence, TimeoutMS: DWORD): Boolean;
-var
-  Started: DWORD;
-begin
-  Started := GetTickCount;
-  repeat
-    if GetClipboardSequenceNumber <> OldSequence then
-      Exit(True);
-    Sleep(CLIPBOARD_RETRY_INTERVAL);
-  until GetTickCount - Started >= TimeoutMS;
-  Result := False;
-end;
-
-function TFormMain.WaitForModifiersReleased(TimeoutMS: DWORD): Boolean;
-var
-  Started, Elapsed: DWORD;
-begin
-  Started := GetTickCount;
-  repeat
-    if ((GetAsyncKeyState(VK_LSHIFT) and $8000) = 0) and
-       ((GetAsyncKeyState(VK_RSHIFT) and $8000) = 0) and
-       ((GetAsyncKeyState(VK_LCONTROL) and $8000) = 0) and
-       ((GetAsyncKeyState(VK_RCONTROL) and $8000) = 0) and
-       ((GetAsyncKeyState(VK_LMENU) and $8000) = 0) and
-       ((GetAsyncKeyState(VK_RMENU) and $8000) = 0) and
-       ((GetAsyncKeyState(VK_LWIN) and $8000) = 0) and
-       ((GetAsyncKeyState(VK_RWIN) and $8000) = 0) then
-    begin
-      Elapsed := GetTickCount - Started;
-      // Raw Input reports the physical Shift release before Electron has
-      // necessarily handled the corresponding key-up message.  Without this
-      // short settling interval VS Code can interpret Ctrl+C as Ctrl+Shift+C.
-      Sleep(TARGET_KEYUP_SETTLE_DELAY);
-      DiagnosticsLogFmt('input.modifiers released=true wait_ms=%d settle_ms=%d',
-        [Elapsed, TARGET_KEYUP_SETTLE_DELAY]);
-      Exit(True);
-    end;
-    Sleep(5);
-  until GetTickCount - Started >= TimeoutMS;
-
-  DiagnosticsLogFmt(
-    'input.modifiers release_timeout shift=%d ctrl=%d alt=%d win=%d',
-    [Ord((GetAsyncKeyState(VK_SHIFT) and $8000) <> 0),
-     Ord((GetAsyncKeyState(VK_CONTROL) and $8000) <> 0),
-     Ord((GetAsyncKeyState(VK_MENU) and $8000) <> 0),
-     Ord(((GetAsyncKeyState(VK_LWIN) or GetAsyncKeyState(VK_RWIN)) and $8000) <> 0)]);
-  Result := False;
-end;
-
-function TFormMain.GetSelectedTextByClipboardFallback(out Text: WideString): Boolean;
-var
-  OldSequence: DWORD;
-  ClipboardChanged: Boolean;
-begin
-  Result := False;
-  Text := '';
-  if not WaitForModifiersReleased(MODIFIER_RELEASE_TIMEOUT) then
-  begin
-    DiagnosticsLog('target.clipboard modifiers_still_pressed');
-    Exit;
-  end;
-
-  if not SaveClipboard then
-  begin
-    DiagnosticsLog('target.clipboard save_failed');
-    Exit;
-  end;
-
-  OldSequence := GetClipboardSequenceNumber;
-  ClipboardChanged := False;
   try
-    if not SendChord(VK_CONTROL, Ord('C')) then
+    if Res.Sequence <> FOperationSequence then
     begin
-      DiagnosticsLog('target.clipboard copy_send_failed');
+      DiagnosticsLogFmt('operation.result_stale seq=%d current=%d',
+        [Res.Sequence, FOperationSequence]);
       Exit;
     end;
-    if not WaitForClipboardChange(OldSequence, CLIPBOARD_COPY_TIMEOUT) then
-    begin
-      DiagnosticsLog('target.clipboard copy_timeout');
-      Exit;
-    end;
-    ClipboardChanged := True;
+    FOperationBusy := False;
 
-    Text := GetClipboardTextW;
-    if (Text = '') or (Length(Text) > MAX_SELECTION_LEN) then
-    begin
-      DiagnosticsLogFmt('target.clipboard invalid_text length=%d', [Length(Text)]);
-      Text := '';
-      Exit;
+    if Res.FocusIsPassword and (GetFocusedWindow = FLastWindow) then
+      FFocusIsPassword := True;
+    case Res.BufferAction of
+      baClear: ClearBuffer;
+      baSet: SetBufferText(Res.NewBufferText);
     end;
-
-    // VS Code and some other editors copy the whole line when there is no selection.
-    if (Text[Length(Text)] = #10) or (Text[Length(Text)] = #13) then
-    begin
-      DiagnosticsLog('target.clipboard rejected_whole_line=true');
-      Text := '';
-      Exit;
-    end;
-
-    FSelectionWindow := GetFocusedWindow;
-    FSelectionIsNative := False;
-    Result := FSelectionWindow <> 0;
-    DiagnosticsLogFmt('target.clipboard success=%s length=%d',
-      [BoolToStr(Result, True), Length(Text)]);
-  finally
-    // Do not rewrite the clipboard when Ctrl+C was ignored.  Apart from being
-    // unnecessary, that used to contend with VS Code/ShareX for another second.
-    ClipboardChanged := ClipboardChanged or
-      (GetClipboardSequenceNumber <> OldSequence);
-    if ClipboardChanged then
-      RestoreClipboard
+    // Remember the step so that repeating the action widens it.
+    if not Res.Success or (FBuffer = '') then
+      FChain.Reset
+    else if Res.UsedBuffer then
+      FChain.Completed(FPendingPlan, Res.Action, FBuffer, Res.SourceLayout,
+        Res.TargetLayout)
     else
+      FChain.CompletedWhole(Res.Action, FBuffer, Res.OriginalText,
+        Res.SourceLayout, Res.TargetLayout);
+    if Res.Success and (Res.SourceLayout <> 0) then
+      FPreviousLayout := Res.SourceLayout;
+    if Res.Notification <> '' then
     begin
-      DiagnosticsLog('clipboard.restore skipped changed=false');
-      DiscardClipboardSnapshot;
+      FBalloonUrl := '';
+      ShowNotification(Res.NotificationKey, Res.Notification);
     end;
+  finally
+    Res.Free;
   end;
 end;
 
-function TFormMain.TryGetTargetText(out Text: WideString;
-  out IsSelection: Boolean): Boolean;
-begin
-  Result := False;
-  Text := '';
-  IsSelection := False;
-  FSelectionWindow := 0;
-  FSelectionIsNative := False;
-
-  if GetSelectedTextInActiveWindow(Text) then
-  begin
-    IsSelection := True;
-    DiagnosticsLogFmt('target.selected source=native length=%d', [Length(Text)]);
-    Exit(True);
-  end;
-
-  // The locally tracked word is reliable and does not touch the system clipboard.
-  if not FBufferOverflowed and (Length(FBuffer) > 0) then
-  begin
-    Text := BufferToString;
-    DiagnosticsLogFmt('target.selected source=buffer length=%d', [Length(Text)]);
-    Exit(Text <> '');
-  end;
-
-  if GetSelectedTextByUIAutomation(Text) then
-  begin
-    IsSelection := True;
-    DiagnosticsLogFmt('target.selected source=uia length=%d', [Length(Text)]);
-    Exit(True);
-  end;
-
-  if GetSelectedTextByClipboardFallback(Text) then
-  begin
-    IsSelection := True;
-    DiagnosticsLogFmt('target.selected source=clipboard length=%d', [Length(Text)]);
-    Exit(True);
-  end;
-  DiagnosticsLog('target.selected source=none');
-end;
-
-function TFormMain.ReplaceSelection(const Value: WideString): Boolean;
+procedure TFormMain.ShowNotification(const Key, Text: string);
 var
-  MessageResult: DWORD_PTR;
+  LastShown: DWORD;
 begin
-  Result := False;
-  if (FSelectionWindow = 0) or (GetFocusedWindow <> FSelectionWindow) then
+  DiagnosticsLogFmt('notification key=%s shown=%s', [Key,
+    BoolToStr(FSettings.ShowNotifications, True)]);
+  if not FSettings.ShowNotifications then
     Exit;
+  if FNotificationTimes.TryGetValue(Key, LastShown) and
+     (GetTickCount - LastShown < NOTIFICATION_THROTTLE_MS) then
+    Exit;
+  FNotificationTimes.AddOrSetValue(Key, GetTickCount);
+  TrayIcon.BalloonTitle := 'LayoutSwitcher';
+  TrayIcon.BalloonHint := Text;
+  TrayIcon.BalloonFlags := bfInfo;
+  TrayIcon.ShowBalloonHint;
+end;
 
-  if FSelectionIsNative then
+{ Pause }
+
+procedure TFormMain.PauseFor(Minutes: Integer);
+begin
+  FPaused := True;
+  ClearBuffer;
+  FDetector.ResetTaps;
+  TimerPause.Enabled := False;
+  if Minutes > 0 then
   begin
-    MessageResult := 0;
-    Result := SendMessageTimeoutW(FSelectionWindow, EM_REPLACESEL, 1,
-      LPARAM(PWideChar(Value)), SMTO_ABORTIFHUNG or SMTO_BLOCK,
-      WINDOW_MESSAGE_TIMEOUT, @MessageResult) <> 0;
+    FPauseUntil := IncMinute(Now, Minutes);
+    TimerPause.Interval := 15000;
+    TimerPause.Enabled := True;
   end
   else
-    Result := TypeUnicodeText(Value);
+    FPauseUntil := 0;
+  DiagnosticsLogFmt('pause.start minutes=%d', [Minutes]);
+  UpdatePauseState;
 end;
 
-function TFormMain.SendChord(ModifierVK, VK: Word): Boolean;
-var
-  Inputs: array[0..3] of TInput;
+procedure TFormMain.Resume;
 begin
-  FillChar(Inputs, SizeOf(Inputs), 0);
-  Inputs[0].Itype := INPUT_KEYBOARD;
-  Inputs[0].ki.wVk := ModifierVK;
-  Inputs[0].ki.dwExtraInfo := LS_INPUT_TAG;
-  Inputs[1].Itype := INPUT_KEYBOARD;
-  Inputs[1].ki.wVk := VK;
-  Inputs[1].ki.dwExtraInfo := LS_INPUT_TAG;
-  Inputs[2] := Inputs[1];
-  Inputs[2].ki.dwFlags := KEYEVENTF_KEYUP;
-  Inputs[3] := Inputs[0];
-  Inputs[3].ki.dwFlags := KEYEVENTF_KEYUP;
-  Result := SendInput(Length(Inputs), Inputs[0], SizeOf(TInput)) = UINT(Length(Inputs));
-  if not Result then
-    DiagnosticsLogFmt('send_input.chord_failed modifier=%d key=%d error=%d',
-      [ModifierVK, VK, GetLastError]);
+  if not FPaused then
+    Exit;
+  FPaused := False;
+  TimerPause.Enabled := False;
+  FPauseUntil := 0;
+  FLastWindow := 0;
+  DiagnosticsLog('pause.end');
+  UpdatePauseState;
 end;
 
-function TFormMain.SendBackspaces(Count: Integer): Boolean;
-const
-  MAX_INPUTS_PER_BATCH = 128;
-var
-  Inputs: array[0..MAX_INPUTS_PER_BATCH - 1] of TInput;
-  BatchChars, I, InputCount, Remaining: Integer;
+procedure TFormMain.TimerPauseTimer(Sender: TObject);
 begin
-  Result := True;
-  Remaining := Count;
-  while Remaining > 0 do
-  begin
-    BatchChars := Remaining;
-    if BatchChars > MAX_INPUTS_PER_BATCH div 2 then
-      BatchChars := MAX_INPUTS_PER_BATCH div 2;
-    InputCount := BatchChars * 2;
-    FillChar(Inputs, SizeOf(Inputs), 0);
-    for I := 0 to BatchChars - 1 do
-    begin
-      Inputs[I * 2].Itype := INPUT_KEYBOARD;
-      Inputs[I * 2].ki.wVk := VK_BACK;
-      Inputs[I * 2].ki.dwExtraInfo := LS_INPUT_TAG;
-      Inputs[I * 2 + 1] := Inputs[I * 2];
-      Inputs[I * 2 + 1].ki.dwFlags := KEYEVENTF_KEYUP;
-    end;
-    if SendInput(InputCount, Inputs[0], SizeOf(TInput)) <> UINT(InputCount) then
-    begin
-      DiagnosticsLogFmt('send_input.backspace_failed remaining=%d batch=%d error=%d',
-        [Remaining, BatchChars, GetLastError]);
-      Exit(False);
-    end;
-    Dec(Remaining, BatchChars);
-  end;
+  // Polling keeps the pause correct across sleep/hibernation.
+  if FPaused and (FPauseUntil <> 0) and (Now >= FPauseUntil) then
+    Resume;
 end;
 
-function TFormMain.TypeUnicodeText(const Value: WideString): Boolean;
-const
-  MAX_CHARS_PER_BATCH = 64;
-var
-  Inputs: array[0..MAX_CHARS_PER_BATCH * 2 - 1] of TInput;
-  Offset, BatchChars, I, InputCount: Integer;
+procedure TFormMain.UpdatePauseState;
 begin
-  Result := True;
-  Offset := 1;
-  while Offset <= Length(Value) do
-  begin
-    BatchChars := Length(Value) - Offset + 1;
-    if BatchChars > MAX_CHARS_PER_BATCH then
-      BatchChars := MAX_CHARS_PER_BATCH;
-    InputCount := BatchChars * 2;
-    FillChar(Inputs, SizeOf(Inputs), 0);
-    for I := 0 to BatchChars - 1 do
-    begin
-      Inputs[I * 2].Itype := INPUT_KEYBOARD;
-      Inputs[I * 2].ki.wScan := Ord(Value[Offset + I]);
-      Inputs[I * 2].ki.dwFlags := KEYEVENTF_UNICODE;
-      Inputs[I * 2].ki.dwExtraInfo := LS_INPUT_TAG;
-      Inputs[I * 2 + 1] := Inputs[I * 2];
-      Inputs[I * 2 + 1].ki.dwFlags := KEYEVENTF_UNICODE or KEYEVENTF_KEYUP;
-    end;
-    if SendInput(InputCount, Inputs[0], SizeOf(TInput)) <> UINT(InputCount) then
-    begin
-      DiagnosticsLogFmt('send_input.unicode_failed offset=%d batch=%d error=%d',
-        [Offset, BatchChars, GetLastError]);
-      Exit(False);
-    end;
-    Inc(Offset, BatchChars);
-  end;
+  mniResume.Visible := FPaused;
+  mniPause15.Enabled := not FPaused;
+  mniPause60.Enabled := not FPaused;
+  mniPauseIndefinite.Enabled := not FPaused;
+  UpdateTrayHint;
+  UpdateTrayIcon(True);
 end;
 
-function TFormMain.DuplicateClipboardData(FormatID: UINT;
-  SourceHandle: THandle; out DataSize: NativeUInt): THandle;
-var
-  SourceData, TargetData: Pointer;
-  SourcePict, TargetPict: PMetaFilePict;
-  NewMetaFile: HMETAFILE;
-  EntryCount: UINT;
-  PaletteSize: NativeUInt;
-  LogPalette: PLogPalette;
-  DummyPaletteEntry: TPaletteEntry;
-begin
-  Result := 0;
-  DataSize := 0;
-  if SourceHandle = 0 then
-    Exit;
-
-  case FormatID of
-    CF_BITMAP, CF_DSPBITMAP:
-      begin
-        Result := THandle(CopyImage(SourceHandle, IMAGE_BITMAP, 0, 0,
-          LR_CREATEDIBSECTION));
-        Exit;
-      end;
-
-    CF_PALETTE:
-      begin
-        EntryCount := GetPaletteEntries(HPALETTE(SourceHandle), 0, 0,
-          DummyPaletteEntry);
-        if (EntryCount = 0) or (EntryCount > High(Word)) then
-          Exit;
-        PaletteSize := SizeOf(TLogPalette) +
-          (EntryCount - 1) * SizeOf(TPaletteEntry);
-        GetMem(LogPalette, PaletteSize);
-        try
-          FillChar(LogPalette^, PaletteSize, 0);
-          LogPalette^.palVersion := $0300;
-          LogPalette^.palNumEntries := Word(EntryCount);
-          if GetPaletteEntries(HPALETTE(SourceHandle), 0, EntryCount,
-               LogPalette^.palPalEntry[0]) <> EntryCount then
-            Exit;
-          Result := THandle(CreatePalette(LogPalette^));
-        finally
-          FreeMem(LogPalette);
-        end;
-        Exit;
-      end;
-
-    CF_ENHMETAFILE, CF_DSPENHMETAFILE:
-      begin
-        Result := THandle(CopyEnhMetaFile(HENHMETAFILE(SourceHandle), nil));
-        Exit;
-      end;
-
-    CF_METAFILEPICT, CF_DSPMETAFILEPICT:
-      begin
-        SourcePict := GlobalLock(HGLOBAL(SourceHandle));
-        if SourcePict = nil then
-          Exit;
-        try
-          NewMetaFile := CopyMetaFile(SourcePict^.hMF, nil);
-          if NewMetaFile = 0 then
-            Exit;
-          Result := GlobalAlloc(GMEM_MOVEABLE or GMEM_ZEROINIT,
-            SizeOf(TMetaFilePict));
-          if Result = 0 then
-          begin
-            DeleteMetaFile(NewMetaFile);
-            Exit;
-          end;
-          TargetPict := GlobalLock(HGLOBAL(Result));
-          if TargetPict = nil then
-          begin
-            GlobalFree(HGLOBAL(Result));
-            DeleteMetaFile(NewMetaFile);
-            Result := 0;
-            Exit;
-          end;
-          TargetPict^ := SourcePict^;
-          TargetPict^.hMF := NewMetaFile;
-          GlobalUnlock(HGLOBAL(Result));
-          DataSize := SizeOf(TMetaFilePict);
-        finally
-          GlobalUnlock(HGLOBAL(SourceHandle));
-        end;
-        Exit;
-      end;
-  end;
-
-  // Text, HTML, RTF, PNG, DIB, file lists and nearly all registered formats
-  // are movable global-memory blocks.  Copy the bytes now so the snapshot no
-  // longer depends on the original clipboard owner or a delayed IDataObject.
-  DataSize := GlobalSize(HGLOBAL(SourceHandle));
-  if DataSize = 0 then
-    Exit;
-  SourceData := GlobalLock(HGLOBAL(SourceHandle));
-  if SourceData = nil then
-    Exit;
-  try
-    Result := GlobalAlloc(GMEM_MOVEABLE or GMEM_ZEROINIT, DataSize);
-    if Result = 0 then
-      Exit;
-    TargetData := GlobalLock(HGLOBAL(Result));
-    if TargetData = nil then
-    begin
-      GlobalFree(HGLOBAL(Result));
-      Result := 0;
-      Exit;
-    end;
-    Move(SourceData^, TargetData^, DataSize);
-    GlobalUnlock(HGLOBAL(Result));
-  finally
-    GlobalUnlock(HGLOBAL(SourceHandle));
-  end;
-end;
-
-procedure TFormMain.FreeClipboardData(FormatID: UINT; DataHandle: THandle);
-var
-  MetaFilePict: PMetaFilePict;
-begin
-  if DataHandle = 0 then
-    Exit;
-  case FormatID of
-    CF_BITMAP, CF_DSPBITMAP, CF_PALETTE:
-      DeleteObject(HGDIOBJ(DataHandle));
-    CF_ENHMETAFILE, CF_DSPENHMETAFILE:
-      DeleteEnhMetaFile(HENHMETAFILE(DataHandle));
-    CF_METAFILEPICT, CF_DSPMETAFILEPICT:
-      begin
-        MetaFilePict := GlobalLock(HGLOBAL(DataHandle));
-        if MetaFilePict <> nil then
-        try
-          if MetaFilePict^.hMF <> 0 then
-            DeleteMetaFile(MetaFilePict^.hMF);
-        finally
-          GlobalUnlock(HGLOBAL(DataHandle));
-        end;
-        GlobalFree(HGLOBAL(DataHandle));
-      end;
-  else
-    GlobalFree(HGLOBAL(DataHandle));
-  end;
-end;
-
-function TFormMain.AddClipboardHistoryExclusion: Boolean;
-const
-  EXCLUSION_FORMAT_NAME = 'ExcludeClipboardContentFromMonitorProcessing';
-var
-  FormatID: UINT;
-  DataHandle: HGLOBAL;
-  Data: PCardinal;
-begin
-  Result := False;
-  FormatID := RegisterClipboardFormat(EXCLUSION_FORMAT_NAME);
-  if FormatID = 0 then
-  begin
-    DiagnosticsLogFmt('clipboard.history_exclusion register_failed error=%d',
-      [GetLastError]);
-    Exit;
-  end;
-  if IsClipboardFormatAvailable(FormatID) then
-    Exit(True);
-
-  DataHandle := GlobalAlloc(GMEM_MOVEABLE or GMEM_ZEROINIT,
-    SizeOf(Cardinal));
-  if DataHandle = 0 then
-  begin
-    DiagnosticsLogFmt('clipboard.history_exclusion alloc_failed error=%d',
-      [GetLastError]);
-    Exit;
-  end;
-  Data := GlobalLock(DataHandle);
-  if Data = nil then
-  begin
-    GlobalFree(DataHandle);
-    DiagnosticsLogFmt('clipboard.history_exclusion lock_failed error=%d',
-      [GetLastError]);
-    Exit;
-  end;
-  Data^ := 1;
-  GlobalUnlock(DataHandle);
-
-  if SetClipboardData(FormatID, DataHandle) <> 0 then
-  begin
-    // The system owns the handle after SetClipboardData succeeds.
-    DataHandle := 0;
-    Result := True;
-  end
-  else
-    DiagnosticsLogFmt('clipboard.history_exclusion set_failed error=%d',
-      [GetLastError]);
-  if DataHandle <> 0 then
-    GlobalFree(DataHandle);
-end;
-
-function TFormMain.SaveClipboard: Boolean;
-var
-  Started: DWORD;
-  ClipboardOpened: Boolean;
-  FormatID, NextFormat, EnumerationError: UINT;
-  SourceHandle: THandle;
-  Snapshot: TClipboardFormatSnapshot;
-  SourceFormatCount, SkippedFormatCount: Integer;
-  TotalBytes: UInt64;
-begin
-  Result := False;
-
-  // A failed restore must never poison all subsequent conversions.
-  if FClipboardSnapshotValid or (Length(FSavedClipboardFormats) > 0) then
-  begin
-    DiagnosticsLog('clipboard.save stale_snapshot_reset=true');
-    DiscardClipboardSnapshot;
-  end;
-
-  ClipboardOpened := False;
-  Started := GetTickCount;
-  repeat
-    if OpenClipboard(Handle) then
-    begin
-      ClipboardOpened := True;
-      Break;
-    end;
-    Sleep(CLIPBOARD_RETRY_INTERVAL);
-  until GetTickCount - Started >= CLIPBOARD_OPEN_TIMEOUT;
-  if not ClipboardOpened then
-  begin
-    DiagnosticsLogFmt('clipboard.save open_timeout error=%d', [GetLastError]);
-    Exit;
-  end;
-
-  SourceFormatCount := 0;
-  SkippedFormatCount := 0;
-  TotalBytes := 0;
-  EnumerationError := ERROR_SUCCESS;
-  try
-    FClipboardWasEmpty := CountClipboardFormats = 0;
-    if FClipboardWasEmpty then
-    begin
-      FClipboardSnapshotValid := True;
-      Result := True;
-    end
-    else
-    begin
-      FormatID := 0;
-      while True do
-      begin
-        SetLastError(ERROR_SUCCESS);
-        NextFormat := EnumClipboardFormats(FormatID);
-        if NextFormat = 0 then
-        begin
-          EnumerationError := GetLastError;
-          Break;
-        end;
-        FormatID := NextFormat;
-        Inc(SourceFormatCount);
-
-        SetLastError(ERROR_SUCCESS);
-        SourceHandle := GetClipboardData(FormatID);
-        if SourceHandle = 0 then
-        begin
-          Inc(SkippedFormatCount);
-          DiagnosticsLogFmt(
-            'clipboard.save format_skipped id=%d reason=get_data error=%d',
-            [FormatID, GetLastError]);
-          Continue;
-        end;
-
-        FillChar(Snapshot, SizeOf(Snapshot), 0);
-        Snapshot.FormatID := FormatID;
-        try
-          Snapshot.DataHandle := DuplicateClipboardData(FormatID, SourceHandle,
-            Snapshot.DataSize);
-        except
-          on E: Exception do
-          begin
-            Snapshot.DataHandle := 0;
-            DiagnosticsLogFmt(
-              'clipboard.save format_exception id=%d class=%s message="%s"',
-              [FormatID, E.ClassName, E.Message]);
-          end;
-        end;
-        if Snapshot.DataHandle = 0 then
-        begin
-          Inc(SkippedFormatCount);
-          DiagnosticsLogFmt(
-            'clipboard.save format_skipped id=%d reason=duplicate error=%d',
-            [FormatID, GetLastError]);
-          Continue;
-        end;
-
-        SetLength(FSavedClipboardFormats,
-          Length(FSavedClipboardFormats) + 1);
-        FSavedClipboardFormats[High(FSavedClipboardFormats)] := Snapshot;
-        Inc(TotalBytes, Snapshot.DataSize);
-      end;
-      FClipboardSnapshotValid := Length(FSavedClipboardFormats) > 0;
-      Result := FClipboardSnapshotValid;
-    end;
-  finally
-    CloseClipboard;
-  end;
-
-  if (EnumerationError <> ERROR_SUCCESS) then
-    DiagnosticsLogFmt('clipboard.save enumeration_failed error=%d',
-      [EnumerationError]);
-  DiagnosticsLogFmt(
-    'clipboard.save success=%s empty=%s source_formats=%d saved_formats=%d skipped_formats=%d bytes=%d',
-    [BoolToStr(Result, True), BoolToStr(FClipboardWasEmpty, True),
-     SourceFormatCount, Length(FSavedClipboardFormats), SkippedFormatCount,
-     Int64(TotalBytes)]);
-
-  if not Result then
-    DiscardClipboardSnapshot;
-end;
-
-procedure TFormMain.DiscardClipboardSnapshot;
+procedure TFormMain.CreatePausedIcons;
 var
   I: Integer;
+  Png: TPngImage;
 begin
-  FClipboardSnapshotValid := False;
-  FClipboardWasEmpty := False;
-  for I := 0 to High(FSavedClipboardFormats) do
-  begin
-    FreeClipboardData(FSavedClipboardFormats[I].FormatID,
-      FSavedClipboardFormats[I].DataHandle);
-    FSavedClipboardFormats[I].DataHandle := 0;
-  end;
-  SetLength(FSavedClipboardFormats, 0);
-end;
-
-procedure TFormMain.RestoreClipboard;
-var
-  WasEmpty, ClipboardOpened, ClipboardEmptied, Restored: Boolean;
-  Started, LastErrorCode: DWORD;
-  I, RestoredFormatCount, FailedFormatCount: Integer;
-begin
-  if not FClipboardSnapshotValid then
-    Exit;
-
-  WasEmpty := FClipboardWasEmpty;
-  ClipboardOpened := False;
-  ClipboardEmptied := False;
-  RestoredFormatCount := 0;
-  FailedFormatCount := 0;
-  LastErrorCode := ERROR_SUCCESS;
-  DiagnosticsLogFmt('clipboard.restore begin was_empty=%s formats=%d',
-    [BoolToStr(WasEmpty, True), Length(FSavedClipboardFormats)]);
+  // Grey, half-transparent copies of the EN/RU icons for the paused state.
+  FPausedIconBase := -1;
   try
-    Started := GetTickCount;
-    repeat
-      if OpenClipboard(Handle) then
-      begin
-        ClipboardOpened := True;
-        Break;
+    FPausedIconBase := TrayIcons.Count;
+    for I := ICON_EN to ICON_RU do
+    begin
+      Png := TPngImage.Create;
+      try
+        Png.Assign(TrayIcons.PngImages[I].PngImage);
+        MakeImageGrayscale(Png);
+        MakeImageBlended(Png, 160);
+        TrayIcons.AddPng(Png);
+      finally
+        Png.Free;
       end;
-      LastErrorCode := GetLastError;
-      Sleep(CLIPBOARD_RETRY_INTERVAL);
-    until GetTickCount - Started >= CLIPBOARD_OPEN_TIMEOUT;
-
-    if ClipboardOpened then
-    try
-      ClipboardEmptied := EmptyClipboard;
-      if not ClipboardEmptied then
-        LastErrorCode := GetLastError
-      else
-        for I := 0 to High(FSavedClipboardFormats) do
-        begin
-          SetLastError(ERROR_SUCCESS);
-          if SetClipboardData(FSavedClipboardFormats[I].FormatID,
-               FSavedClipboardFormats[I].DataHandle) <> 0 then
-          begin
-            // Ownership belongs to the system after a successful call.
-            FSavedClipboardFormats[I].DataHandle := 0;
-            Inc(RestoredFormatCount);
-          end
-          else
-          begin
-            LastErrorCode := GetLastError;
-            Inc(FailedFormatCount);
-            DiagnosticsLogFmt(
-              'clipboard.restore format_failed id=%d error=%d',
-              [FSavedClipboardFormats[I].FormatID, LastErrorCode]);
-          end;
-        end;
-      if ClipboardEmptied and not WasEmpty then
-        DiagnosticsLogFmt('clipboard.history_exclusion success=%s',
-          [BoolToStr(AddClipboardHistoryExclusion, True)]);
-    finally
-      CloseClipboard;
     end;
-
-    Restored := ClipboardEmptied and
-      (WasEmpty or ((RestoredFormatCount > 0) and (FailedFormatCount = 0)));
-    DiagnosticsLogFmt(
-      'clipboard.restore success=%s opened=%s emptied=%s restored_formats=%d failed_formats=%d error=%d',
-      [BoolToStr(Restored, True), BoolToStr(ClipboardOpened, True),
-       BoolToStr(ClipboardEmptied, True), RestoredFormatCount,
-       FailedFormatCount, LastErrorCode]);
-  finally
-    DiscardClipboardSnapshot;
-  end;
-end;
-
-function TFormMain.GetClipboardTextW: WideString;
-var
-  DataHandle: HGLOBAL;
-  Data: Pointer;
-  Started: DWORD;
-begin
-  Result := '';
-  Started := GetTickCount;
-  while not OpenClipboard(Handle) do
-  begin
-    if GetTickCount - Started >= CLIPBOARD_OPEN_TIMEOUT then
-      Exit;
-    Sleep(CLIPBOARD_RETRY_INTERVAL);
-  end;
-  try
-    DataHandle := GetClipboardData(CF_UNICODETEXT);
-    if DataHandle = 0 then
-      Exit;
-    Data := GlobalLock(DataHandle);
-    if Data <> nil then
-    try
-      Result := WideString(PWideChar(Data));
-    finally
-      GlobalUnlock(DataHandle);
+  except
+    on E: Exception do
+    begin
+      FPausedIconBase := -1;
+      DiagnosticsLogException('tray.paused_icons', E);
     end;
-  finally
-    CloseClipboard;
   end;
 end;
 
-function TFormMain.FindHKLByLangID(LangID: Word): HKL;
+procedure TFormMain.UpdateTrayIcon(Force: Boolean);
 var
-  Layouts: array[0..63] of HKL;
-  Count, I: Integer;
-begin
-  Result := 0;
-  Count := GetKeyboardLayoutList(Length(Layouts), Layouts[0]);
-  for I := 0 to Count - 1 do
-    if LOWORD(Layouts[I]) = LangID then
-      Exit(Layouts[I]);
-end;
-
-procedure TFormMain.SwitchGlobalLayout(ToLangID: Word);
-var
+  Target: HWND;
   Layout: HKL;
-  Target: HWND;
+  LangID: Word;
+  Index: Integer;
+  Icon: TIcon;
 begin
-  Layout := FindHKLByLangID(ToLangID);
-  if Layout = 0 then
-    Exit;
   Target := GetFocusedWindow;
+  Layout := 0;
   if Target <> 0 then
-    PostMessage(Target, WM_INPUTLANGCHANGEREQUEST, 0, LPARAM(Layout));
-end;
-
-function TFormMain.ConvertLayout(const S: WideString): WideString;
-var
-  I, J: Integer;
-  Ch: WideChar;
-  Found, ToRussian: Boolean;
-begin
-  Result := '';
-  if S = '' then
-    Exit;
-  ToRussian := not IsCyrillicText(S);
-
-  for I := 1 to Length(S) do
+    Layout := GetKeyboardLayout(GetWindowThreadProcessId(Target, nil));
+  if (Layout <> 0) and (Layout <> FLastLayout) then
   begin
-    Ch := S[I];
-    Found := False;
-    if ToRussian then
-    begin
-      for J := 1 to Length(EnChars) do
-        if EnChars[J] = Ch then
-        begin
-          Result := Result + RuChars[J];
-          Found := True;
-          Break;
-        end;
-    end
-    else
-    begin
-      for J := 1 to Length(RuChars) do
-        if RuChars[J] = Ch then
-        begin
-          Result := Result + EnChars[J];
-          Found := True;
-          Break;
-        end;
-    end;
-    if not Found then
-      Result := Result + Ch;
+    if FLastLayout <> 0 then
+      FPreviousLayout := FLastLayout;
+    // The badge is shown only when the layout of the same window changes,
+    // not when the user merely switches to a window with another layout.
+    if FSettings.ShowLayoutIndicator and not FPaused and (FLastLayout <> 0) and
+       (Target = FIndicatorWindow) then
+      FIndicator.ShowLayout(Layout);
+    FLastLayout := Layout;
+    Force := True;
   end;
-end;
+  FIndicatorWindow := Target;
+  if not Force then
+    Exit;
 
-function TFormMain.ChangeStringCase(const S: WideString;
-  ToUpper: Boolean): WideString;
-begin
-  if ToUpper then
-    Result := WideUpperCase(S)
+  LangID := LoWord(NativeUInt(FLastLayout));
+  case LangID of
+    LANG_EN: Index := ICON_EN;
+    LANG_RU: Index := ICON_RU;
   else
-    Result := WideLowerCase(S);
-end;
-
-function TFormMain.InvertStringCase(const S: WideString): WideString;
-var
-  I: Integer;
-  Ch: WideChar;
-begin
-  Result := '';
-  for I := 1 to Length(S) do
+    Index := -1;
+  end;
+  if FPaused and (FPausedIconBase >= 0) then
   begin
-    Ch := S[I];
-    if (Ch >= WideChar('a')) and (Ch <= WideChar('z')) then
-      Result := Result + WideChar(Ord(Ch) - Ord('a') + Ord('A'))
-    else if (Ch >= WideChar('A')) and (Ch <= WideChar('Z')) then
-      Result := Result + WideChar(Ord(Ch) - Ord('A') + Ord('a'))
-    else if (Ch >= WideChar('а')) and (Ch <= WideChar('я')) then
-      Result := Result + WideChar(Ord(Ch) - Ord('а') + Ord('А'))
-    else if (Ch >= WideChar('А')) and (Ch <= WideChar('Я')) then
-      Result := Result + WideChar(Ord(Ch) - Ord('А') + Ord('а'))
-    else if Ch = WideChar('ё') then
-      Result := Result + WideChar('Ё')
-    else if Ch = WideChar('Ё') then
-      Result := Result + WideChar('ё')
-    else
-      Result := Result + Ch;
+    if Index < 0 then
+      Index := ICON_EN;
+    Index := FPausedIconBase + Index;
+  end;
+
+  if Index < 0 then
+  begin
+    TrayIcon.Icon := Application.Icon;
+    Exit;
+  end;
+  Icon := TIcon.Create;
+  try
+    TrayIcons.GetIcon(Index, Icon);
+    TrayIcon.Icon := Icon;
+  finally
+    Icon.Free;
   end;
 end;
 
-procedure TFormMain.DoConvert;
+procedure TFormMain.UpdateTrayHint;
+const
+  MAX_TIP = 127;
 var
-  Text, ConvertedText: WideString;
-  IsSelection: Boolean;
-  Count: Integer;
-  TargetLangID: Word;
+  Hint: string;
+  Action: TLSAction;
+  Gesture: TLSGesture;
 begin
-  if not TryGetTargetText(Text, IsSelection) or (Text = '') then
+  Hint := 'LayoutSwitcher';
+  if FPaused then
   begin
-    DiagnosticsLog('convert.no_target');
-    Exit;
-  end;
-
-  ConvertedText := ConvertLayout(Text);
-  DiagnosticsLogFmt('convert.prepared input_length=%d output_length=%d selection=%s',
-    [Length(Text), Length(ConvertedText), BoolToStr(IsSelection, True)]);
-  if IsCyrillicText(Text) then
-    TargetLangID := $0409
-  else
-    TargetLangID := $0419;
-
-  if IsSelection then
-  begin
-    if ReplaceSelection(ConvertedText) then
-    begin
-      SetBufferText(ConvertedText);
-      SwitchGlobalLayout(TargetLangID);
-      DiagnosticsLog('convert.replace success=true source=selection');
-    end
+    if FPauseUntil <> 0 then
+      Hint := Hint + T(' — пауза до ', ' - paused until ') +
+        FormatDateTime('hh:nn', FPauseUntil)
     else
-    begin
-      ClearBuffer;
-      DiagnosticsLog('convert.replace success=false source=selection');
-    end;
-    Exit;
-  end;
-
-  Count := Length(FBuffer);
-  ClearBuffer;
-  if (Count > 0) and SendBackspaces(Count) and TypeUnicodeText(ConvertedText) then
-  begin
-    SetBufferText(ConvertedText);
-    SwitchGlobalLayout(TargetLangID);
-    DiagnosticsLog('convert.replace success=true source=buffer');
+      Hint := Hint + T(' — пауза', ' - paused');
   end
   else
-    DiagnosticsLog('convert.replace success=false source=buffer');
+    for Action := Low(FSettings.ActionGestures) to High(FSettings.ActionGestures) do
+    begin
+      Gesture := FSettings.GestureForAction(Action);
+      if Gesture <> lgNone then
+        // #10 instead of CRLF and no spaces: the tray tip holds 127 chars.
+        Hint := Hint + #10 + ShortGestureNames[Gesture] + '=' +
+          ShortActionName(Action);
+    end;
+  if Length(Hint) > MAX_TIP then
+    SetLength(Hint, MAX_TIP);
+  TrayIcon.Hint := Hint;
 end;
 
-procedure TFormMain.DoChangeCase(ToUpper: Boolean);
-var
-  Text, ConvertedText: WideString;
-  IsSelection: Boolean;
-  Count: Integer;
+procedure TFormMain.TimerLayoutTimer(Sender: TObject);
 begin
-  if not TryGetTargetText(Text, IsSelection) or (Text = '') then
-  begin
-    DiagnosticsLog('change_case.no_target');
-    Exit;
-  end;
-  ConvertedText := ChangeStringCase(Text, ToUpper);
-  DiagnosticsLogFmt('change_case.prepared length=%d selection=%s upper=%s',
-    [Length(Text), BoolToStr(IsSelection, True), BoolToStr(ToUpper, True)]);
-
-  if IsSelection then
-  begin
-    if ReplaceSelection(ConvertedText) then
-      SetBufferText(ConvertedText)
-    else
-      ClearBuffer;
-    Exit;
-  end;
-
-  Count := Length(FBuffer);
-  ClearBuffer;
-  if Count > 0 then
-    if SendBackspaces(Count) then
-      if TypeUnicodeText(ConvertedText) then
-        SetBufferText(ConvertedText);
+  UpdateTrayIcon(False);
 end;
 
-procedure TFormMain.DoInvertCase;
-var
-  Text, ConvertedText: WideString;
-  IsSelection: Boolean;
-  Count: Integer;
+{ Settings UI }
+
+procedure TFormMain.LoadControlsFromSettings;
 begin
-  if not TryGetTargetText(Text, IsSelection) or (Text = '') then
-  begin
-    DiagnosticsLog('invert_case.no_target');
-    Exit;
+  FUpdatingControls := True;
+  try
+    cbConvert.ItemIndex := Ord(FSettings.GestureForAction(laConvert));
+    cbUpper.ItemIndex := Ord(FSettings.GestureForAction(laUpperCase));
+    cbLower.ItemIndex := Ord(FSettings.GestureForAction(laLowerCase));
+    cbInvert.ItemIndex := Ord(FSettings.GestureForAction(laInvertCase));
+    cbTranslit.ItemIndex := Ord(FSettings.GestureForAction(laTransliterate));
+    cbUndo.ItemIndex := Ord(FSettings.GestureForAction(laUndo));
+    udInterval.Position := Integer(FSettings.DoubleTapInterval);
+    edInterval.Text := IntToStr(FSettings.DoubleTapInterval);
+    chkPauseFullscreen.Checked := FSettings.PauseInFullscreen;
+    chkNotifications.Checked := FSettings.ShowNotifications;
+    chkDisableStickyKeys.Checked := FSettings.DisableStickyKeysHotkey;
+    chkLayoutIndicator.Checked := FSettings.ShowLayoutIndicator;
+    chkCheckUpdates.Checked := FSettings.CheckForUpdates;
+    cbLanguage.ItemIndex := Ord(FSettings.Language);
+    edExcluded.Text := ProcessListToText(FSettings.ExcludedProcesses);
+  finally
+    FUpdatingControls := False;
   end;
-  ConvertedText := InvertStringCase(Text);
-  DiagnosticsLogFmt('invert_case.prepared length=%d selection=%s',
-    [Length(Text), BoolToStr(IsSelection, True)]);
+end;
 
-  if IsSelection then
-  begin
-    if ReplaceSelection(ConvertedText) then
-      SetBufferText(ConvertedText)
-    else
-      ClearBuffer;
+procedure TFormMain.ApplySettings;
+begin
+  FDetector.Interval := FSettings.DoubleTapInterval;
+  if not SaveSettings(FSettings) then
+    DiagnosticsLog('settings.save_failed');
+  UpdateTrayHint;
+  DiagnosticsLogFmt('settings.applied convert=%d upper=%d lower=%d invert=%d interval=%d fullscreen=%s notifications=%s excluded="%s"',
+    [Ord(FSettings.ActionGestures[laConvert]), Ord(FSettings.ActionGestures[laUpperCase]),
+     Ord(FSettings.ActionGestures[laLowerCase]), Ord(FSettings.ActionGestures[laInvertCase]),
+     FSettings.DoubleTapInterval, BoolToStr(FSettings.PauseInFullscreen, True),
+     BoolToStr(FSettings.ShowNotifications, True),
+     ProcessListToText(FSettings.ExcludedProcesses)]);
+end;
+
+procedure TFormMain.cbGestureChange(Sender: TObject);
+var
+  Combo: TComboBox;
+begin
+  if FUpdatingControls then
     Exit;
-  end;
+  Combo := Sender as TComboBox;
+  if Combo.ItemIndex < 0 then
+    Exit;
+  // A gesture can drive only one action; the previous owner is disabled.
+  FSettings.AssignGesture(TLSAction(Combo.Tag), TLSGesture(Combo.ItemIndex));
+  LoadControlsFromSettings;
+  ApplySettings;
+end;
 
-  Count := Length(FBuffer);
-  ClearBuffer;
-  if Count > 0 then
-    if SendBackspaces(Count) then
-      if TypeUnicodeText(ConvertedText) then
-        SetBufferText(ConvertedText);
+procedure TFormMain.edIntervalChange(Sender: TObject);
+var
+  Value: Integer;
+begin
+  if FUpdatingControls then
+    Exit;
+  if TryStrToInt(edInterval.Text, Value) and
+     (Value >= MIN_DOUBLE_TAP_INTERVAL) and (Value <= MAX_DOUBLE_TAP_INTERVAL) and
+     (Cardinal(Value) <> FSettings.DoubleTapInterval) then
+  begin
+    FSettings.DoubleTapInterval := Cardinal(Value);
+    ApplySettings;
+  end;
+end;
+
+procedure TFormMain.edIntervalExit(Sender: TObject);
+begin
+  FSettings.DoubleTapInterval :=
+    ClampDoubleTapInterval(StrToIntDef(edInterval.Text, DEFAULT_DOUBLE_TAP_INTERVAL));
+  LoadControlsFromSettings;
+  ApplySettings;
+end;
+
+procedure TFormMain.chkBehaviorClick(Sender: TObject);
+begin
+  if FUpdatingControls then
+    Exit;
+  FSettings.PauseInFullscreen := chkPauseFullscreen.Checked;
+  FSettings.ShowNotifications := chkNotifications.Checked;
+  FSettings.DisableStickyKeysHotkey := chkDisableStickyKeys.Checked;
+  FSettings.ShowLayoutIndicator := chkLayoutIndicator.Checked;
+  FSettings.CheckForUpdates := chkCheckUpdates.Checked;
+  if not FSettings.ShowLayoutIndicator then
+    FIndicator.HideNow;
+  ApplySettings;
+  ApplyStickyKeysSetting;
+end;
+
+procedure TFormMain.ApplyExcludedFromEdit;
+var
+  List: TArray<string>;
+begin
+  List := ParseProcessList(edExcluded.Text);
+  if ProcessListToText(List) <> ProcessListToText(FSettings.ExcludedProcesses) then
+  begin
+    FSettings.ExcludedProcesses := List;
+    ApplySettings;
+  end;
+  LoadControlsFromSettings;
+end;
+
+procedure TFormMain.edExcludedExit(Sender: TObject);
+begin
+  ApplyExcludedFromEdit;
+end;
+
+procedure TFormMain.btnDefaultExcludedClick(Sender: TObject);
+begin
+  FSettings.ExcludedProcesses := TLSSettings.Defaults.ExcludedProcesses;
+  LoadControlsFromSettings;
+  ApplySettings;
+end;
+
+procedure TFormMain.btnCloseClick(Sender: TObject);
+begin
+  Close;
+end;
+
+procedure TFormMain.UpdateAutorunControls;
+begin
+  FUpdatingControls := True;
+  try
+    chkAutorun.Checked := FTaskInstalled or IsInStartup(STARTUP_VALUE_NAME);
+    chkAutorunElevated.Checked := FTaskInstalled;
+    chkAutorunElevated.Enabled := chkAutorun.Checked;
+  finally
+    FUpdatingControls := False;
+  end;
 end;
 
 procedure TFormMain.chkAutorunClick(Sender: TObject);
+var
+  ErrorText: string;
 begin
+  if FUpdatingControls then
+    Exit;
   if chkAutorun.Checked then
-    AddToStartup('LayoutSwitcher', Application.ExeName)
+    AddToStartup(STARTUP_VALUE_NAME, Application.ExeName)
   else
-    RemoveFromStartup('LayoutSwitcher');
+  begin
+    if FTaskInstalled then
+    begin
+      if not RemoveAutorunTask(ErrorText) then
+      begin
+        DiagnosticsLogFmt('autorun.task_remove_failed error="%s"', [ErrorText]);
+        UpdateAutorunControls;
+        MessageBox(Handle, PChar(T('Не удалось отключить автозапуск с правами ' +
+          'администратора.', 'Could not turn off running as administrator.') +
+          sLineBreak + ErrorText), 'LayoutSwitcher',
+          MB_OK or MB_ICONERROR);
+        Exit;
+      end;
+      FTaskInstalled := False;
+    end;
+    RemoveFromStartup(STARTUP_VALUE_NAME);
+  end;
+  UpdateAutorunControls;
+  DiagnosticsLogFmt('ui.autorun_changed enabled=%s path="%s"',
+    [BoolToStr(chkAutorun.Checked, True), Application.ExeName]);
+end;
+
+procedure TFormMain.chkAutorunElevatedClick(Sender: TObject);
+var
+  ErrorText: string;
+begin
+  if FUpdatingControls then
+    Exit;
+  if chkAutorunElevated.Checked then
+  begin
+    if not InstallAutorunTask(Application.ExeName, ErrorText) then
+    begin
+      DiagnosticsLogFmt('autorun.task_install_failed error="%s"', [ErrorText]);
+      UpdateAutorunControls;
+      MessageBox(Handle, PChar(T('Не удалось включить автозапуск с правами ' +
+        'администратора.', 'Could not turn on running as administrator.') +
+        sLineBreak + ErrorText), 'LayoutSwitcher',
+        MB_OK or MB_ICONERROR);
+      Exit;
+    end;
+    FTaskInstalled := True;
+    // The task replaces the Run key; both would start two copies.
+    RemoveFromStartup(STARTUP_VALUE_NAME);
+    DiagnosticsLog('autorun.task_installed');
+    if not IsProcessElevated then
+      MessageBox(Handle, PChar(T('С правами администратора программа будет запускаться ' +
+        'со следующего входа в Windows. Чтобы работать в окнах администратора ' +
+        'уже сейчас, закройте LayoutSwitcher и запустите его от имени администратора.',
+        'LayoutSwitcher will run as administrator from the next sign-in. To work ' +
+        'in administrator windows right now, exit LayoutSwitcher and start it ' +
+        'as administrator.')),
+        'LayoutSwitcher', MB_OK or MB_ICONINFORMATION);
+  end
+  else
+  begin
+    if not RemoveAutorunTask(ErrorText) then
+    begin
+      DiagnosticsLogFmt('autorun.task_remove_failed error="%s"', [ErrorText]);
+      UpdateAutorunControls;
+      MessageBox(Handle, PChar(T('Не удалось отключить автозапуск с правами ' +
+        'администратора.', 'Could not turn off running as administrator.') +
+        sLineBreak + ErrorText), 'LayoutSwitcher',
+        MB_OK or MB_ICONERROR);
+      Exit;
+    end;
+    FTaskInstalled := False;
+    AddToStartup(STARTUP_VALUE_NAME, Application.ExeName);
+    DiagnosticsLog('autorun.task_removed');
+  end;
+  UpdateAutorunControls;
+end;
+
+procedure TFormMain.SyncAutorunPath;
+var
+  Registered: string;
+begin
+  if FTaskInstalled then
+  begin
+    // A leftover Run entry would start a second, non-elevated copy.
+    if IsInStartup(STARTUP_VALUE_NAME) then
+    begin
+      RemoveFromStartup(STARTUP_VALUE_NAME);
+      DiagnosticsLog('autorun.run_key_removed reason=task_installed');
+    end;
+    if (FTaskPath = '') or SameText(ExpandFileName(FTaskPath), Application.ExeName) then
+      Exit;
+    {$IFDEF DEBUG}
+    DiagnosticsLogFmt('autorun.task_path_mismatch registered="%s" current="%s" updated=false',
+      [FTaskPath, Application.ExeName]);
+    {$ELSE}
+    // Updating the task needs elevation; do it silently only when we have it.
+    var ErrorText: string;
+    if IsProcessElevated and InstallAutorunTask(Application.ExeName, ErrorText) then
+      DiagnosticsLogFmt('autorun.task_path_mismatch registered="%s" current="%s" updated=true',
+        [FTaskPath, Application.ExeName])
+    else
+      DiagnosticsLogFmt('autorun.task_path_mismatch registered="%s" current="%s" updated=false',
+        [FTaskPath, Application.ExeName]);
+    {$ENDIF}
+    Exit;
+  end;
+
+  if not chkAutorun.Checked then
+    Exit;
+  Registered := StartupCommandToPath(GetStartupCommand(STARTUP_VALUE_NAME));
+  if SameText(ExpandFileName(Registered), Application.ExeName) then
+    Exit;
+  {$IFDEF DEBUG}
+  // Debug builds started from the IDE must not hijack the user's autorun.
+  DiagnosticsLogFmt('autorun.path_mismatch registered="%s" current="%s" updated=false',
+    [Registered, Application.ExeName]);
+  {$ELSE}
+  AddToStartup(STARTUP_VALUE_NAME, Application.ExeName);
+  DiagnosticsLogFmt('autorun.path_mismatch registered="%s" current="%s" updated=true',
+    [Registered, Application.ExeName]);
+  {$ENDIF}
 end;
 
 procedure TFormMain.chkDiagnosticsClick(Sender: TObject);
 var
   Enabled: Boolean;
 begin
-  if FUpdatingDiagnosticsSetting then
+  if FUpdatingControls then
     Exit;
-
   Enabled := chkDiagnostics.Checked;
   if not SetDiagnosticsEnabled(Enabled) then
   begin
-    FUpdatingDiagnosticsSetting := True;
+    FUpdatingControls := True;
     try
       chkDiagnostics.Checked := DiagnosticsEnabled;
     finally
-      FUpdatingDiagnosticsSetting := False;
+      FUpdatingControls := False;
     end;
-    MessageBox(Handle,
-      'Не удалось сохранить настройку диагностики в реестре.',
+    MessageBox(Handle, PChar(T('Не удалось сохранить настройку диагностики в реестре.',
+      'Could not save the diagnostics setting to the registry.')),
       'LayoutSwitcher', MB_OK or MB_ICONERROR);
     Exit;
   end;
-
   if Enabled then
   begin
     InitializeDiagnostics;
@@ -2079,43 +1459,35 @@ begin
   mniDiagnostics.Enabled := DirectoryExists(DiagnosticsDirectory);
 end;
 
-procedure TFormMain.TimerLayoutTimer(Sender: TObject);
+procedure TFormMain.ShowSettingsWindow;
 begin
-  UpdateTrayIcon;
-end;
-
-procedure TFormMain.UpdateTrayIcon;
-var
-  Target: HWND;
-  ThreadID: DWORD;
-  Layout: HKL;
-  LangID: Word;
-begin
-  Target := GetFocusedWindow;
-  if Target = 0 then
-    Exit;
-  ThreadID := GetWindowThreadProcessId(Target, nil);
-  Layout := GetKeyboardLayout(ThreadID);
-  LangID := LOWORD(Layout);
-  if LangID = FLastLangID then
-    Exit;
-  FLastLangID := LangID;
-
-  case LangID of
-    $0409: TrayIcon.IconIndex := 0;
-    $0419: TrayIcon.IconIndex := 1;
-  else
-    TrayIcon.Icon := Application.Icon;
-  end;
+  DiagnosticsLog('ui.settings_open');
+  LoadControlsFromSettings;
+  Show;
+  WindowState := wsNormal;
+  ShowWindow(Application.Handle, SW_SHOW);
+  Application.BringToFront;
+  SetForegroundWindow(Handle);
 end;
 
 procedure TFormMain.TrayIconDblClick(Sender: TObject);
 begin
-  DiagnosticsLog('ui.settings_open');
-  Show;
-  WindowState := wsNormal;
-  Application.BringToFront;
-  ShowWindow(Application.Handle, SW_SHOW);
+  ShowSettingsWindow;
+end;
+
+procedure TFormMain.mniSettingsClick(Sender: TObject);
+begin
+  ShowSettingsWindow;
+end;
+
+procedure TFormMain.mniPauseClick(Sender: TObject);
+begin
+  PauseFor((Sender as TMenuItem).Tag);
+end;
+
+procedure TFormMain.mniResumeClick(Sender: TObject);
+begin
+  Resume;
 end;
 
 procedure TFormMain.mniDiagnosticsClick(Sender: TObject);
@@ -2129,5 +1501,289 @@ begin
   DiagnosticsLog('ui.exit_requested');
   Application.Terminate;
 end;
+
+function ShortActionName(Action: TLSAction): string;
+begin
+  case Action of
+    laConvert: Result := T('Раскладка', 'Layout');
+    laUpperCase: Result := T('ВЕРХНИЙ', 'UPPER');
+    laLowerCase: Result := T('нижний', 'lower');
+    laInvertCase: Result := T('иНВЕРСИЯ', 'iNVERT');
+    laTransliterate: Result := T('Транслит', 'Translit');
+    laUndo: Result := T('Отмена', 'Undo');
+  else
+    Result := '';
+  end;
+end;
+
+function TFormMain.GestureCombos: TArray<TComboBox>;
+begin
+  Result := [cbConvert, cbUpper, cbLower, cbInvert, cbTranslit, cbUndo];
+end;
+
+procedure TFormMain.ApplyLanguage;
+var
+  Combo: TComboBox;
+  Gesture: TLSGesture;
+  Index: Integer;
+begin
+  FUpdatingControls := True;
+  try
+    Caption := T('LayoutSwitcher - Переключатель раскладок клавиатуры',
+      'LayoutSwitcher - Keyboard layout switcher');
+    chkAutorun.Caption := T('Автозапуск при старте системы', 'Start with Windows');
+    chkDiagnostics.Caption := T('Вести диагностический журнал', 'Keep a diagnostic log');
+    chkAutorunElevated.Caption := T(
+      'Запускать с правами администратора (для окон, открытых от имени администратора)',
+      'Run as administrator (to work in windows opened as administrator)');
+
+    grpHotkeys.Caption := T('Сочетания клавиш', 'Shortcuts');
+    lblConvert.Caption := ActionName(laConvert);
+    lblUpper.Caption := ActionName(laUpperCase);
+    lblLower.Caption := ActionName(laLowerCase);
+    lblInvert.Caption := ActionName(laInvertCase);
+    lblTranslit.Caption := ActionName(laTransliterate);
+    lblUndo.Caption := ActionName(laUndo);
+    lblInterval.Caption := T('Интервал двойного нажатия:', 'Double-tap interval:');
+    lblIntervalUnit.Caption := T('мс', 'ms');
+    for Combo in GestureCombos do
+    begin
+      Index := Combo.ItemIndex;
+      Combo.Items.BeginUpdate;
+      try
+        Combo.Items.Clear;
+        for Gesture := Low(TLSGesture) to High(TLSGesture) do
+          Combo.Items.Add(GestureName(Gesture));
+      finally
+        Combo.Items.EndUpdate;
+      end;
+      Combo.ItemIndex := Index;
+    end;
+
+    grpBehavior.Caption := T('Поведение', 'Behaviour');
+    chkPauseFullscreen.Caption := T('Не работать в полноэкранных приложениях и играх',
+      'Do not work in full-screen applications and games');
+    chkNotifications.Caption := T('Показывать уведомление, если действие невозможно',
+      'Show a notification when an action is not possible');
+    chkDisableStickyKeys.Caption := T(
+      'Отключить вызов залипания клавиш пятикратным нажатием Shift',
+      'Turn off the Sticky Keys prompt on pressing Shift five times');
+    chkLayoutIndicator.Caption := T('Показывать раскладку рядом с курсором при переключении',
+      'Show the layout next to the caret when it changes');
+    chkCheckUpdates.Caption := T('Проверять наличие новой версии раз в день',
+      'Check for a new version once a day');
+    lblLanguage.Caption := T('Язык интерфейса / Language:', 'Language / Язык интерфейса:');
+    Index := cbLanguage.ItemIndex;
+    cbLanguage.Items.Clear;
+    cbLanguage.Items.Add(T('Как в Windows', 'As in Windows'));
+    cbLanguage.Items.Add('Русский');
+    cbLanguage.Items.Add('English');
+    cbLanguage.ItemIndex := Index;
+    lblExcluded.Caption := T('Не работать в программах (имена exe через точку с запятой):',
+      'Do not work in these programs (exe names separated by semicolons):');
+    btnDefaultExcluded.Caption := T('По умолчанию', 'Defaults');
+    btnReport.Caption := T('Собрать отчёт...', 'Create report...');
+    btnClose.Caption := T('Закрыть', 'Close');
+    lblVersion.Caption := T('Версия ', 'Version ') + FVersion;
+    lblAuthor.Left := lblVersion.Left + lblVersion.Width + 12;
+
+    mniSettings.Caption := T('Настройки...', 'Settings...');
+    mniPause15.Caption := T('Приостановить на 15 минут', 'Pause for 15 minutes');
+    mniPause60.Caption := T('Приостановить на 1 час', 'Pause for 1 hour');
+    mniPauseIndefinite.Caption := T('Приостановить до возобновления', 'Pause until resumed');
+    mniResume.Caption := T('Возобновить работу', 'Resume');
+    mniCheckUpdates.Caption := T('Проверить обновления', 'Check for updates');
+    if FUpdateVersion <> '' then
+      mniDownloadUpdate.Caption := Format(T('Скачать версию %s', 'Download version %s'),
+        [FUpdateVersion]);
+    mniReport.Caption := T('Собрать отчёт...', 'Create report...');
+    mniDiagnostics.Caption := T('Открыть папку диагностики', 'Open diagnostics folder');
+    mniExit.Caption := T('Выход', 'Exit');
+  finally
+    FUpdatingControls := False;
+  end;
+  UpdateTrayHint;
+end;
+
+procedure TFormMain.cbLanguageChange(Sender: TObject);
+begin
+  if FUpdatingControls or (cbLanguage.ItemIndex < 0) then
+    Exit;
+  FSettings.Language := TLSLanguage(cbLanguage.ItemIndex);
+  SetUILanguage(FSettings.Language);
+  ApplyLanguage;
+  ApplySettings;
+end;
+
+{ Updates }
+
+procedure TFormMain.StartUpdateCheck(Manual: Boolean);
+begin
+  if Assigned(FUpdateThread) then
+  begin
+    if not FUpdateThread.Finished then
+      Exit;
+    FreeAndNil(FUpdateThread);
+  end;
+  DiagnosticsLogFmt('update.check_start manual=%s', [BoolToStr(Manual, True)]);
+  FUpdateThread := TUpdateCheckThread.Create(Handle, WM_LS_UPDATE_RESULT, FVersion,
+    Manual);
+end;
+
+procedure TFormMain.TimerUpdateTimer(Sender: TObject);
+begin
+  // First tick a minute after start, then hourly; a check runs once a day.
+  TimerUpdate.Interval := 60 * 60 * 1000;
+  if FSettings.CheckForUpdates and (Now - FSettings.LastUpdateCheck >= 1) then
+    StartUpdateCheck(False);
+end;
+
+procedure TFormMain.HandleUpdateResult(Res: TUpdateCheckResult);
+begin
+  try
+    DiagnosticsLogFmt('update.check_done success=%s latest=%s newer=%s error="%s"',
+      [BoolToStr(Res.Success, True), Res.LatestVersion,
+       BoolToStr(Res.IsNewer, True), Res.ErrorText]);
+    if Res.Success then
+    begin
+      FSettings.LastUpdateCheck := Now;
+      SaveSettings(FSettings);
+    end;
+
+    if Res.Success and Res.IsNewer then
+    begin
+      FUpdateVersion := Res.LatestVersion;
+      FUpdateUrl := Res.ReleaseUrl;
+      mniDownloadUpdate.Caption := Format(T('Скачать версию %s', 'Download version %s'),
+        [FUpdateVersion]);
+      mniDownloadUpdate.Visible := True;
+      FBalloonUrl := FUpdateUrl;
+      if Res.Manual then
+        FNotificationTimes.Remove('update');
+      ShowNotification('update', Format(T(
+        'Доступна новая версия LayoutSwitcher %s. Щёлкните, чтобы открыть страницу загрузки.',
+        'LayoutSwitcher %s is available. Click to open the download page.'),
+        [FUpdateVersion]));
+    end
+    else if Res.Manual then
+    begin
+      FNotificationTimes.Remove('update_status');
+      FBalloonUrl := '';
+      if Res.Success then
+        ShowNotification('update_status', Format(T(
+          'Установлена последняя версия (%s).', 'You have the latest version (%s).'),
+          [FVersion]))
+      else
+        ShowNotification('update_status', T(
+          'Не удалось проверить обновления: ', 'Could not check for updates: ') +
+          Res.ErrorText);
+    end;
+  finally
+    Res.Free;
+  end;
+end;
+
+procedure TFormMain.mniCheckUpdatesClick(Sender: TObject);
+begin
+  StartUpdateCheck(True);
+end;
+
+procedure TFormMain.mniDownloadUpdateClick(Sender: TObject);
+begin
+  if FUpdateUrl <> '' then
+    ShellExecute(0, 'open', PChar(FUpdateUrl), nil, nil, SW_SHOWNORMAL);
+end;
+
+procedure TFormMain.TrayIconBalloonClick(Sender: TObject);
+begin
+  if FBalloonUrl <> '' then
+    ShellExecute(0, 'open', PChar(FBalloonUrl), nil, nil, SW_SHOWNORMAL);
+end;
+
+{ Report }
+
+function TFormMain.BuildSystemInfo: string;
+var
+  Lines: TStringList;
+  Layout: HKL;
+  Action: TLSAction;
+  NameBuffer: array[0..KL_NAMELENGTH] of Char;
+begin
+  Lines := TStringList.Create;
+  try
+    Lines.Add('LayoutSwitcher ' + FVersion);
+    Lines.Add('Created: ' + FormatDateTime('yyyy-mm-dd hh:nn:ss', Now));
+    Lines.Add('Executable: ' + Application.ExeName);
+    Lines.Add(Format('Bits: %d', [SizeOf(Pointer) * 8]));
+    Lines.Add('OS: ' + TOSVersion.ToString);
+    Lines.Add('Elevated: ' + BoolToStr(IsProcessElevated, True));
+    Lines.Add('UI language: ' + T('ru', 'en'));
+    Lines.Add('');
+    Lines.Add('[Keyboard layouts]');
+    for Layout in TKeyboardLayoutCatalog.InstalledLayouts do
+      Lines.Add(Format('%.8x %s', [NativeUInt(Layout), LayoutShortName(Layout)]));
+    if GetKeyboardLayoutName(NameBuffer) then
+      Lines.Add('Active layout name: ' + string(NameBuffer));
+    Lines.Add('');
+    Lines.Add('[Settings]');
+    for Action := Low(FSettings.ActionGestures) to High(FSettings.ActionGestures) do
+      Lines.Add(Format('%s = %s', [ActionKeys[Action],
+        GestureName(FSettings.ActionGestures[Action])]));
+    Lines.Add(Format('DoubleTapInterval = %d', [FSettings.DoubleTapInterval]));
+    Lines.Add('PauseInFullscreen = ' + BoolToStr(FSettings.PauseInFullscreen, True));
+    Lines.Add('ShowNotifications = ' + BoolToStr(FSettings.ShowNotifications, True));
+    Lines.Add('DisableStickyKeysHotkey = ' + BoolToStr(FSettings.DisableStickyKeysHotkey, True));
+    Lines.Add('ShowLayoutIndicator = ' + BoolToStr(FSettings.ShowLayoutIndicator, True));
+    Lines.Add('CheckForUpdates = ' + BoolToStr(FSettings.CheckForUpdates, True));
+    Lines.Add('ExcludedProcesses = ' + ProcessListToText(FSettings.ExcludedProcesses));
+    Lines.Add('Diagnostics = ' + BoolToStr(DiagnosticsEnabled, True));
+    Lines.Add('Paused = ' + BoolToStr(FPaused, True));
+    Lines.Add('');
+    Lines.Add('[Autorun]');
+    Lines.Add('Run key = ' + GetStartupCommand(STARTUP_VALUE_NAME));
+    Lines.Add('Elevated task = ' + BoolToStr(FTaskInstalled, True) + ' ' + FTaskPath);
+    if not DiagnosticsEnabled then
+    begin
+      Lines.Add('');
+      Lines.Add('Diagnostics are disabled: the report contains only older logs, if any.');
+    end;
+    Result := Lines.Text;
+  finally
+    Lines.Free;
+  end;
+end;
+
+procedure TFormMain.mniReportClick(Sender: TObject);
+var
+  Dialog: TSaveDialog;
+  DesktopPath: array[0..MAX_PATH] of Char;
+  ErrorText: string;
+begin
+  Dialog := TSaveDialog.Create(nil);
+  try
+    Dialog.Title := T('Сохранить отчёт LayoutSwitcher', 'Save LayoutSwitcher report');
+    Dialog.Filter := T('Архив ZIP', 'ZIP archive') + ' (*.zip)|*.zip';
+    Dialog.DefaultExt := 'zip';
+    Dialog.FileName := 'LayoutSwitcher-report-' +
+      FormatDateTime('yyyymmdd-hhnn', Now) + '.zip';
+    if SHGetFolderPath(0, CSIDL_DESKTOPDIRECTORY, 0, 0, DesktopPath) = S_OK then
+      Dialog.InitialDir := DesktopPath;
+    Dialog.Options := Dialog.Options + [ofOverwritePrompt];
+    if not Dialog.Execute then
+      Exit;
+    if CreateDiagnosticsReport(Dialog.FileName, BuildSystemInfo, ErrorText) then
+      ShellExecute(0, 'open', 'explorer.exe',
+        PChar('/select,"' + Dialog.FileName + '"'), nil, SW_SHOWNORMAL)
+    else
+      MessageBox(Handle, PChar(T('Не удалось создать отчёт: ',
+        'Could not create the report: ') + ErrorText), 'LayoutSwitcher',
+        MB_OK or MB_ICONERROR);
+  finally
+    Dialog.Free;
+  end;
+end;
+
+initialization
+  GShowSettingsMessage := RegisterWindowMessage('LayoutSwitcher.ShowSettings.v2');
 
 end.

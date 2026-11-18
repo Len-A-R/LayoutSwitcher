@@ -4,8 +4,8 @@ object FormMain: TFormMain
   BorderIcons = [biSystemMenu]
   BorderStyle = bsSingle
   Caption = 'LayoutSwitcher - '#1055#1077#1088#1077#1082#1083#1102#1095#1072#1090#1077#1083#1100' '#1088#1072#1089#1082#1083#1072#1076#1086#1082' '#1082#1083#1072#1074#1080#1072#1090#1091#1088#1099
-  ClientHeight = 144
-  ClientWidth = 472
+  ClientHeight = 561
+  ClientWidth = 520
   Color = clBtnFace
   Font.Charset = DEFAULT_CHARSET
   Font.Color = clWindowText
@@ -16,16 +16,25 @@ object FormMain: TFormMain
   OnCloseQuery = FormCloseQuery
   OnCreate = FormCreate
   OnDestroy = FormDestroy
-  DesignSize = (
-    472
-    144)
   TextHeight = 13
-  object Label2: TLabel
-    Left = 422
-    Top = 123
-    Width = 32
+  object lblVersion: TLabel
+    Left = 8
+    Top = 534
+    Width = 8
     Height = 13
-    Anchors = [akRight, akBottom]
+    Caption = #1042#1077#1088#1089#1080#1103
+    Font.Charset = DEFAULT_CHARSET
+    Font.Color = cl3DDkShadow
+    Font.Height = -11
+    Font.Name = 'Tahoma'
+    Font.Style = []
+    ParentFont = False
+  end
+  object lblAuthor: TLabel
+    Left = 120
+    Top = 534
+    Width = 8
+    Height = 13
     Caption = 'len-a-r'
     Font.Charset = DEFAULT_CHARSET
     Font.Color = cl3DDkShadow
@@ -34,155 +43,299 @@ object FormMain: TFormMain
     Font.Style = []
     ParentFont = False
   end
-  object Label4: TLabel
-    Left = 166
-    Top = 36
-    Width = 142
-    Height = 13
-    Caption = #1050#1086#1085#1074#1077#1088#1090#1080#1088#1086#1074#1072#1090#1100' '#1088#1072#1089#1082#1083#1072#1076#1082#1091
-  end
-  object Label6: TLabel
-    Left = 166
-    Top = 64
-    Width = 178
-    Height = 13
-    Caption = #1055#1088#1077#1086#1073#1088#1072#1079#1086#1074#1072#1090#1100' '#1074' '#1042#1045#1056#1061#1053#1048#1049' '#1088#1077#1075#1080#1089#1090#1088
-  end
-  object Label8: TLabel
-    Left = 166
-    Top = 92
-    Width = 171
-    Height = 13
-    Caption = #1055#1088#1077#1086#1073#1088#1072#1079#1086#1074#1072#1090#1100' '#1074' '#1085#1080#1078#1085#1080#1081' '#1088#1077#1075#1080#1089#1090#1088
-  end
-  object Label9: TLabel
-    Left = 166
-    Top = 120
-    Width = 125
-    Height = 13
-    Caption = #1048#1085#1074#1077#1088#1090#1080#1088#1086#1074#1072#1090#1100'  '#1088#1077#1075#1080#1089#1090#1088
-  end
-  object Label1: TLabel
-    Left = 71
-    Top = 120
-    Width = 8
-    Height = 13
-    Caption = '+'
-  end
   object chkAutorun: TCheckBox
     Left = 8
     Top = 8
-    Width = 201
+    Width = 240
     Height = 17
     Caption = #1040#1074#1090#1086#1079#1072#1087#1091#1089#1082' '#1087#1088#1080' '#1089#1090#1072#1088#1090#1077' '#1089#1080#1089#1090#1077#1084#1099
     TabOrder = 0
     OnClick = chkAutorunClick
   end
   object chkDiagnostics: TCheckBox
-    Left = 232
+    Left = 264
     Top = 8
-    Width = 224
+    Width = 248
     Height = 17
     Caption = #1042#1077#1089#1090#1080' '#1076#1080#1072#1075#1085#1086#1089#1090#1080#1095#1077#1089#1082#1080#1081' '#1078#1091#1088#1085#1072#1083
     TabOrder = 1
     OnClick = chkDiagnosticsClick
   end
-  object Panel1: TPanel
-    Left = 8
-    Top = 32
-    Width = 97
-    Height = 22
-    BevelKind = bkFlat
-    BevelOuter = bvNone
-    Caption = 'Double SHIFT'
-    Color = clGainsboro
-    Font.Charset = DEFAULT_CHARSET
-    Font.Color = clWindowText
-    Font.Height = -11
-    Font.Name = 'Tahoma'
-    Font.Style = [fsBold]
-    ParentBackground = False
-    ParentFont = False
+  object chkAutorunElevated: TCheckBox
+    Left = 26
+    Top = 30
+    Width = 486
+    Height = 17
+    Caption = #1047#1072#1087#1091#1089#1082#1072#1090#1100' '#1089' '#1087#1088#1072#1074#1072#1084#1080' '#1072#1076#1084#1080#1085#1080#1089#1090#1088#1072#1090#1086#1088#1072' ('#1076#1083#1103' '#1086#1082#1086#1085', '#1086#1090#1082#1088#1099#1090#1099#1093' '#1086#1090' '#1080#1084#1077#1085#1080' '#1072#1076#1084#1080#1085#1080#1089#1090#1088#1072#1090#1086#1088#1072')'
     TabOrder = 2
+    OnClick = chkAutorunElevatedClick
   end
-  object Panel2: TPanel
+  object grpHotkeys: TGroupBox
     Left = 8
-    Top = 60
-    Width = 105
-    Height = 22
-    BevelKind = bkFlat
-    BevelOuter = bvNone
-    Caption = 'Double Left Ctrl'
-    Color = clGainsboro
-    Font.Charset = DEFAULT_CHARSET
-    Font.Color = clWindowText
-    Font.Height = -11
-    Font.Name = 'Tahoma'
-    Font.Style = [fsBold]
-    ParentBackground = False
-    ParentFont = False
+    Top = 56
+    Width = 504
+    Height = 227
+    Caption = #1057#1086#1095#1077#1090#1072#1085#1080#1103' '#1082#1083#1072#1074#1080#1096
     TabOrder = 3
+    object lblConvert: TLabel
+      Left = 12
+      Top = 27
+      Width = 8
+      Height = 13
+      Caption = #1050#1086#1085#1074#1077#1088#1090#1080#1088#1086#1074#1072#1090#1100' '#1088#1072#1089#1082#1083#1072#1076#1082#1091
+    end
+    object cbConvert: TComboBox
+      Left = 230
+      Top = 24
+      Width = 262
+      Height = 21
+      Style = csDropDownList
+      Tag = 1
+      TabOrder = 0
+      OnChange = cbGestureChange
+    end
+    object lblUpper: TLabel
+      Left = 12
+      Top = 55
+      Width = 8
+      Height = 13
+      Caption = #1055#1088#1077#1086#1073#1088#1072#1079#1086#1074#1072#1090#1100' '#1074' '#1042#1045#1056#1061#1053#1048#1049' '#1088#1077#1075#1080#1089#1090#1088
+    end
+    object cbUpper: TComboBox
+      Left = 230
+      Top = 52
+      Width = 262
+      Height = 21
+      Style = csDropDownList
+      Tag = 2
+      TabOrder = 1
+      OnChange = cbGestureChange
+    end
+    object lblLower: TLabel
+      Left = 12
+      Top = 83
+      Width = 8
+      Height = 13
+      Caption = #1055#1088#1077#1086#1073#1088#1072#1079#1086#1074#1072#1090#1100' '#1074' '#1085#1080#1078#1085#1080#1081' '#1088#1077#1075#1080#1089#1090#1088
+    end
+    object cbLower: TComboBox
+      Left = 230
+      Top = 80
+      Width = 262
+      Height = 21
+      Style = csDropDownList
+      Tag = 3
+      TabOrder = 2
+      OnChange = cbGestureChange
+    end
+    object lblInvert: TLabel
+      Left = 12
+      Top = 111
+      Width = 8
+      Height = 13
+      Caption = #1048#1085#1074#1077#1088#1090#1080#1088#1086#1074#1072#1090#1100' '#1088#1077#1075#1080#1089#1090#1088
+    end
+    object cbInvert: TComboBox
+      Left = 230
+      Top = 108
+      Width = 262
+      Height = 21
+      Style = csDropDownList
+      Tag = 4
+      TabOrder = 3
+      OnChange = cbGestureChange
+    end
+    object lblTranslit: TLabel
+      Left = 12
+      Top = 139
+      Width = 8
+      Height = 13
+      Caption = #1058#1088#1072#1085#1089#1083#1080#1090#1077#1088#1072#1094#1080#1103
+    end
+    object cbTranslit: TComboBox
+      Left = 230
+      Top = 136
+      Width = 262
+      Height = 21
+      Style = csDropDownList
+      Tag = 5
+      TabOrder = 4
+      OnChange = cbGestureChange
+    end
+    object lblUndo: TLabel
+      Left = 12
+      Top = 167
+      Width = 8
+      Height = 13
+      Caption = #1054#1090#1084#1077#1085#1080#1090#1100' '#1087#1086#1089#1083#1077#1076#1085#1077#1077' '#1080#1089#1087#1088#1072#1074#1083#1077#1085#1080#1077
+    end
+    object cbUndo: TComboBox
+      Left = 230
+      Top = 164
+      Width = 262
+      Height = 21
+      Style = csDropDownList
+      Tag = 6
+      TabOrder = 5
+      OnChange = cbGestureChange
+    end
+    object lblInterval: TLabel
+      Left = 12
+      Top = 195
+      Width = 8
+      Height = 13
+      Caption = #1048#1085#1090#1077#1088#1074#1072#1083' '#1076#1074#1086#1081#1085#1086#1075#1086' '#1085#1072#1078#1072#1090#1080#1103':'
+    end
+    object edInterval: TEdit
+      Left = 230
+      Top = 192
+      Width = 57
+      Height = 21
+      NumbersOnly = True
+      TabOrder = 6
+      Text = '500'
+      OnChange = edIntervalChange
+      OnExit = edIntervalExit
+    end
+    object udInterval: TUpDown
+      Left = 287
+      Top = 192
+      Width = 16
+      Height = 21
+      Associate = edInterval
+      Min = 200
+      Max = 1000
+      Increment = 50
+      Position = 500
+      TabOrder = 7
+      Thousands = False
+    end
+    object lblIntervalUnit: TLabel
+      Left = 310
+      Top = 195
+      Width = 8
+      Height = 13
+      Caption = #1084#1089
+    end
   end
-  object Panel3: TPanel
+  object grpBehavior: TGroupBox
     Left = 8
-    Top = 88
-    Width = 108
-    Height = 22
-    BevelKind = bkFlat
-    BevelOuter = bvNone
-    Caption = 'Double Right Ctrl'
-    Color = clGainsboro
-    Font.Charset = DEFAULT_CHARSET
-    Font.Color = clWindowText
-    Font.Height = -11
-    Font.Name = 'Tahoma'
-    Font.Style = [fsBold]
-    ParentBackground = False
-    ParentFont = False
+    Top = 291
+    Width = 504
+    Height = 227
+    Caption = #1055#1086#1074#1077#1076#1077#1085#1080#1077
     TabOrder = 4
+    object chkPauseFullscreen: TCheckBox
+      Left = 12
+      Top = 22
+      Width = 480
+      Height = 17
+      Caption = #1053#1077' '#1088#1072#1073#1086#1090#1072#1090#1100' '#1074' '#1087#1086#1083#1085#1086#1101#1082#1088#1072#1085#1085#1099#1093' '#1087#1088#1080#1083#1086#1078#1077#1085#1080#1103#1093' '#1080' '#1080#1075#1088#1072#1093
+      TabOrder = 0
+      OnClick = chkBehaviorClick
+    end
+    object chkNotifications: TCheckBox
+      Left = 12
+      Top = 46
+      Width = 480
+      Height = 17
+      Caption = #1055#1086#1082#1072#1079#1099#1074#1072#1090#1100' '#1091#1074#1077#1076#1086#1084#1083#1077#1085#1080#1077', '#1077#1089#1083#1080' '#1076#1077#1081#1089#1090#1074#1080#1077' '#1085#1077#1074#1086#1079#1084#1086#1078#1085#1086
+      TabOrder = 1
+      OnClick = chkBehaviorClick
+    end
+    object chkDisableStickyKeys: TCheckBox
+      Left = 12
+      Top = 70
+      Width = 480
+      Height = 17
+      Caption = #1054#1090#1082#1083#1102#1095#1080#1090#1100' '#1074#1099#1079#1086#1074' '#1079#1072#1083#1080#1087#1072#1085#1080#1103' '#1082#1083#1072#1074#1080#1096' '#1087#1103#1090#1080#1082#1088#1072#1090#1085#1099#1084' '#1085#1072#1078#1072#1090#1080#1077#1084' Shift'
+      TabOrder = 2
+      OnClick = chkBehaviorClick
+    end
+    object chkLayoutIndicator: TCheckBox
+      Left = 12
+      Top = 94
+      Width = 480
+      Height = 17
+      Caption = #1055#1086#1082#1072#1079#1099#1074#1072#1090#1100' '#1088#1072#1089#1082#1083#1072#1076#1082#1091' '#1088#1103#1076#1086#1084' '#1089' '#1082#1091#1088#1089#1086#1088#1086#1084' '#1087#1088#1080' '#1087#1077#1088#1077#1082#1083#1102#1095#1077#1085#1080#1080
+      TabOrder = 3
+      OnClick = chkBehaviorClick
+    end
+    object chkCheckUpdates: TCheckBox
+      Left = 12
+      Top = 118
+      Width = 480
+      Height = 17
+      Caption = #1055#1088#1086#1074#1077#1088#1103#1090#1100' '#1085#1072#1083#1080#1095#1080#1077' '#1085#1086#1074#1086#1081' '#1074#1077#1088#1089#1080#1080' '#1088#1072#1079' '#1074' '#1076#1077#1085#1100
+      TabOrder = 4
+      OnClick = chkBehaviorClick
+    end
+    object lblLanguage: TLabel
+      Left = 12
+      Top = 147
+      Width = 8
+      Height = 13
+      Caption = #1071#1079#1099#1082' '#1080#1085#1090#1077#1088#1092#1077#1081#1089#1072' / Language:'
+    end
+    object cbLanguage: TComboBox
+      Left = 230
+      Top = 144
+      Width = 170
+      Height = 21
+      Style = csDropDownList
+      TabOrder = 5
+      OnChange = cbLanguageChange
+    end
+    object lblExcluded: TLabel
+      Left = 12
+      Top = 174
+      Width = 8
+      Height = 13
+      Caption = #1053#1077' '#1088#1072#1073#1086#1090#1072#1090#1100' '#1074' '#1087#1088#1086#1075#1088#1072#1084#1084#1072#1093' ('#1080#1084#1077#1085#1072' exe '#1095#1077#1088#1077#1079' '#1090#1086#1095#1082#1091' '#1089' '#1079#1072#1087#1103#1090#1086#1081'):'
+    end
+    object edExcluded: TEdit
+      Left = 12
+      Top = 192
+      Width = 388
+      Height = 21
+      TabOrder = 6
+      OnExit = edExcludedExit
+    end
+    object btnDefaultExcluded: TButton
+      Left = 406
+      Top = 190
+      Width = 86
+      Height = 25
+      Caption = #1055#1086' '#1091#1084#1086#1083#1095#1072#1085#1080#1102
+      TabOrder = 7
+      OnClick = btnDefaultExcludedClick
+    end
   end
-  object Panel4: TPanel
-    Left = 8
-    Top = 116
-    Width = 57
-    Height = 22
-    BevelKind = bkFlat
-    BevelOuter = bvNone
-    Caption = 'Left Ctrl'
-    Color = clGainsboro
-    Font.Charset = DEFAULT_CHARSET
-    Font.Color = clWindowText
-    Font.Height = -11
-    Font.Name = 'Tahoma'
-    Font.Style = [fsBold]
-    ParentBackground = False
-    ParentFont = False
+  object btnReport: TButton
+    Left = 290
+    Top = 528
+    Width = 136
+    Height = 25
+    Caption = #1057#1086#1073#1088#1072#1090#1100' '#1086#1090#1095#1105#1090'...'
     TabOrder = 5
+    OnClick = mniReportClick
   end
-  object Panel5: TPanel
-    Left = 86
-    Top = 116
-    Width = 65
-    Height = 22
-    BevelKind = bkFlat
-    BevelOuter = bvNone
-    Caption = 'Right Ctrl'
-    Color = clGainsboro
-    Font.Charset = DEFAULT_CHARSET
-    Font.Color = clWindowText
-    Font.Height = -11
-    Font.Name = 'Tahoma'
-    Font.Style = [fsBold]
-    ParentBackground = False
-    ParentFont = False
+  object btnClose: TButton
+    Left = 432
+    Top = 528
+    Width = 80
+    Height = 25
+    Cancel = True
+    Caption = #1047#1072#1082#1088#1099#1090#1100
     TabOrder = 6
+    OnClick = btnCloseClick
   end
   object TrayIcon: TTrayIcon
     Hint = 'LayoutSwitcher'
-    BalloonTitle = 'Layout Switcher'
-    Icons = TrayIcons
+    BalloonTitle = 'LayoutSwitcher'
     PopupMenu = PopupMenu
     Visible = True
+    OnBalloonClick = TrayIconBalloonClick
     OnDblClick = TrayIconDblClick
     Left = 416
     Top = 8
@@ -190,16 +343,60 @@ object FormMain: TFormMain
   object PopupMenu: TPopupMenu
     Left = 416
     Top = 64
+    object mniSettings: TMenuItem
+      Default = True
+      OnClick = mniSettingsClick
+      Caption = #1053#1072#1089#1090#1088#1086#1081#1082#1080'...'
+    end
+    object mniSeparator1: TMenuItem
+      Caption = '-'
+    end
+    object mniPause15: TMenuItem
+      Tag = 15
+      OnClick = mniPauseClick
+      Caption = #1055#1088#1080#1086#1089#1090#1072#1085#1086#1074#1080#1090#1100' '#1085#1072' 15 '#1084#1080#1085#1091#1090
+    end
+    object mniPause60: TMenuItem
+      Tag = 60
+      OnClick = mniPauseClick
+      Caption = #1055#1088#1080#1086#1089#1090#1072#1085#1086#1074#1080#1090#1100' '#1085#1072' 1 '#1095#1072#1089
+    end
+    object mniPauseIndefinite: TMenuItem
+      Tag = -1
+      OnClick = mniPauseClick
+      Caption = #1055#1088#1080#1086#1089#1090#1072#1085#1086#1074#1080#1090#1100' '#1076#1086' '#1074#1086#1079#1086#1073#1085#1086#1074#1083#1077#1085#1080#1103
+    end
+    object mniResume: TMenuItem
+      Visible = False
+      OnClick = mniResumeClick
+      Caption = #1042#1086#1079#1086#1073#1085#1086#1074#1080#1090#1100' '#1088#1072#1073#1086#1090#1091
+    end
+    object mniSeparator2: TMenuItem
+      Caption = '-'
+    end
+    object mniDownloadUpdate: TMenuItem
+      Visible = False
+      OnClick = mniDownloadUpdateClick
+      Caption = #1057#1082#1072#1095#1072#1090#1100' '#1085#1086#1074#1091#1102' '#1074#1077#1088#1089#1080#1102
+    end
+    object mniCheckUpdates: TMenuItem
+      OnClick = mniCheckUpdatesClick
+      Caption = #1055#1088#1086#1074#1077#1088#1080#1090#1100' '#1086#1073#1085#1086#1074#1083#1077#1085#1080#1103
+    end
+    object mniReport: TMenuItem
+      OnClick = mniReportClick
+      Caption = #1057#1086#1073#1088#1072#1090#1100' '#1086#1090#1095#1105#1090'...'
+    end
     object mniDiagnostics: TMenuItem
-      Caption = #1054#1090#1082#1088#1099#1090#1100' '#1087#1072#1087#1082#1091' '#1076#1080#1072#1075#1085#1086#1089#1090#1080#1082#1080
       OnClick = mniDiagnosticsClick
+      Caption = #1054#1090#1082#1088#1099#1090#1100' '#1087#1072#1087#1082#1091' '#1076#1080#1072#1075#1085#1086#1089#1090#1080#1082#1080
     end
     object mniSeparator: TMenuItem
       Caption = '-'
     end
     object mniExit: TMenuItem
-      Caption = #1042#1099#1093#1086#1076
       OnClick = mniExitClick
+      Caption = #1042#1099#1093#1086#1076
     end
   end
   object TrayIcons: TPngImageList
@@ -361,9 +558,22 @@ object FormMain: TFormMain
     Bitmap = {}
   end
   object TimerLayout: TTimer
-    Interval = 500
+    Interval = 250
     OnTimer = TimerLayoutTimer
     Left = 352
+    Top = 8
+  end
+  object TimerPause: TTimer
+    Enabled = False
+    OnTimer = TimerPauseTimer
+    Left = 296
+    Top = 8
+  end
+  object TimerUpdate: TTimer
+    Enabled = False
+    Interval = 60000
+    OnTimer = TimerUpdateTimer
+    Left = 240
     Top = 8
   end
 end
