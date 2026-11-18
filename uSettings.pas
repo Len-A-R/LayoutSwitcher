@@ -7,16 +7,16 @@ interface
 
 uses
   System.SysUtils,
-  uLocale;
+  uLocale, uSettingsStore;
 
 type
   // New values are only ever appended: the ordinal values are stored in the
   // registry.
   TLSAction = (laNone, laConvert, laUpperCase, laLowerCase, laInvertCase,
-    laTransliterate, laUndo);
+    laTransliterate, laUndo, laTranslate, laWebSearch);
   TLSGesture = (lgNone, lgDoubleShift, lgDoubleLCtrl, lgDoubleRCtrl, lgBothCtrl,
-    lgBothShift, lgDoubleCapsLock);
-  TLSActionGestures = array[laConvert..laUndo] of TLSGesture;
+    lgBothShift, lgDoubleCapsLock, lgDoubleRAlt, lgDoubleLAlt);
+  TLSActionGestures = array[laConvert..laWebSearch] of TLSGesture;
 
   TLSSettings = record
     ActionGestures: TLSActionGestures;
@@ -31,6 +31,14 @@ type
     Language: TLSLanguage;
     CheckForUpdates: Boolean;
     LastUpdateCheck: TDateTime;
+    // Automatic corrections after a word is finished with a space.
+    FixCapsLock: Boolean;
+    FixTwoCapitals: Boolean;
+    TwoCapitalsExceptions: TArray<string>;
+    SnippetsEnabled: Boolean;
+    Snippets: string;        // "abbreviation=text" lines
+    Translator: Integer;     // TRANSLATOR_* in uTextTools
+    SearchEngine: Integer;   // SEARCH_* in uTextTools
     class function Defaults: TLSSettings; static;
     function ActionForGesture(Gesture: TLSGesture): TLSAction;
     function GestureForAction(Action: TLSAction): TLSGesture;
@@ -44,13 +52,13 @@ const
   MAX_DOUBLE_TAP_INTERVAL = 1000;
   DEFAULT_DOUBLE_TAP_INTERVAL = 500;
   // 2: transliteration and undo got default gestures.
-  CURRENT_SETTINGS_VERSION = 2;
-  SETTINGS_REGISTRY_KEY = 'Software\LayoutSwitcher';
+  // 3: translation and web search got default gestures.
+  CURRENT_SETTINGS_VERSION = 3;
   STARTUP_VALUE_NAME = 'LayoutSwitcher';
 
   ActionKeys: array[TLSAction] of string = (
     'none', 'convert_layout', 'uppercase', 'lowercase', 'invert_case',
-    'transliterate', 'undo');
+    'transliterate', 'undo', 'translate', 'web_search');
 
   // Screenshot tools own full-screen overlays, use Shift/Ctrl themselves and
   // monitor the clipboard.  LayoutSwitcher must not inject input into them.
@@ -67,10 +75,21 @@ function GestureName(Gesture: TLSGesture): string;
 
 // Settings written by an older version: gives actions introduced later
 // their default gesture, unless the user already uses that gesture.
-procedure MigrateActionGestures(var Gestures: TLSActionGestures);
+// FromVersion is the SettingsVersion the values were written with (1 when
+// the value is missing).
+procedure MigrateActionGestures(var Gestures: TLSActionGestures;
+  FromVersion: Integer = 1);
 
 function LoadSettings: TLSSettings;
 function SaveSettings(const Settings: TLSSettings): Boolean;
+function LoadSettingsFrom(Store: TSettingsStore): TLSSettings;
+function SaveSettingsTo(const Settings: TLSSettings; Store: TSettingsStore): Boolean;
+function ExportSettings(const Settings: TLSSettings; const FileName: string;
+  DiagnosticsEnabled: Boolean): Boolean;
+function ImportSettings(const FileName: string; out Settings: TLSSettings;
+  out DiagnosticsEnabled: Boolean): Boolean;
+// Words separated by spaces, commas or semicolons; case is kept.
+function ParseWordList(const Text: string): TArray<string>;
 function ParseProcessList(const Text: string): TArray<string>;
 function ProcessListToText(const List: TArray<string>): string;
 function ClampDoubleTapInterval(Value: Integer): Cardinal;
@@ -85,7 +104,8 @@ implementation
 
 uses
   Winapi.Windows,
-  System.Win.Registry;
+  System.Win.Registry,
+  uTextTools;
 
 const
   RUN_KEY = 'Software\Microsoft\Windows\CurrentVersion\Run';
@@ -100,6 +120,14 @@ const
   VALUE_LAST_UPDATE_CHECK = 'LastUpdateCheck';
   VALUE_SETTINGS_VERSION = 'SettingsVersion';
   VALUE_GESTURE_PREFIX = 'Gesture.';
+  VALUE_FIX_CAPS_LOCK = 'FixCapsLock';
+  VALUE_FIX_TWO_CAPITALS = 'FixTwoCapitals';
+  VALUE_TWO_CAPITALS_EXCEPTIONS = 'TwoCapitalsExceptions';
+  VALUE_SNIPPETS_ENABLED = 'SnippetsEnabled';
+  VALUE_SNIPPETS = 'Snippets';
+  VALUE_TRANSLATOR = 'Translator';
+  VALUE_SEARCH_ENGINE = 'SearchEngine';
+  VALUE_DIAGNOSTICS = 'EnableDiagnostics';
 
 { TLSSettings }
 
@@ -124,6 +152,17 @@ begin
   Result.Language := llAuto;
   Result.CheckForUpdates := True;
   Result.LastUpdateCheck := 0;
+  Result.FixCapsLock := True;
+  Result.FixTwoCapitals := False;
+  SetLength(Result.TwoCapitalsExceptions, Length(DefaultTwoCapitalsExceptions));
+  for I := 0 to High(DefaultTwoCapitalsExceptions) do
+    Result.TwoCapitalsExceptions[I] := DefaultTwoCapitalsExceptions[I];
+  Result.SnippetsEnabled := True;
+  Result.Snippets := DEFAULT_SNIPPETS;
+  Result.Translator := TRANSLATOR_YANDEX;
+  Result.SearchEngine := SEARCH_YANDEX;
+  Result.ActionGestures[laTranslate] := lgDoubleRAlt;
+  Result.ActionGestures[laWebSearch] := lgDoubleLAlt;
 end;
 
 function ActionName(Action: TLSAction): string;
@@ -135,6 +174,8 @@ begin
     laInvertCase: Result := T('Инвертировать регистр', 'iNVERT cASE');
     laTransliterate: Result := T('Транслитерация (привет ↔ privet)', 'Transliterate (привет ↔ privet)');
     laUndo: Result := T('Отменить последнее исправление', 'Undo last correction');
+    laTranslate: Result := T('Перевести выделенное', 'Translate selection');
+    laWebSearch: Result := T('Найти выделенное в интернете', 'Search the web for selection');
   else
     Result := T('Нет', 'None');
   end;
@@ -149,6 +190,8 @@ begin
     lgBothCtrl: Result := T('Левый Ctrl + правый Ctrl', 'Left Ctrl + right Ctrl');
     lgBothShift: Result := T('Левый Shift + правый Shift', 'Left Shift + right Shift');
     lgDoubleCapsLock: Result := T('Двойной Caps Lock', 'Double Caps Lock');
+    lgDoubleRAlt: Result := T('Двойной правый Alt', 'Double right Alt');
+    lgDoubleLAlt: Result := T('Двойной левый Alt', 'Double left Alt');
   else
     Result := T('Отключено', 'Disabled');
   end;
@@ -245,17 +288,27 @@ begin
   Result := string.Join('; ', List);
 end;
 
-procedure MigrateActionGestures(var Gestures: TLSActionGestures);
+procedure MigrateActionGestures(var Gestures: TLSActionGestures;
+  FromVersion: Integer);
 const
-  NewActions: array[0..1] of TLSAction = (laTransliterate, laUndo);
+  // Actions that received a default gesture in the given settings version.
+  NewActions: array[0..3] of TLSAction = (laTransliterate, laUndo, laTranslate,
+    laWebSearch);
+  IntroducedIn: array[0..3] of Integer = (2, 2, 3, 3);
 var
   Defaults: TLSActionGestures;
   NewAction, Other: TLSAction;
   Taken: Boolean;
+  I: Integer;
 begin
   Defaults := TLSSettings.Defaults.ActionGestures;
-  for NewAction in NewActions do
+  for I := Low(NewActions) to High(NewActions) do
   begin
+    NewAction := NewActions[I];
+    // Settings written by a version that already offered this default may
+    // hold a deliberate "disabled": keep it.
+    if FromVersion >= IntroducedIn[I] then
+      Continue;
     if Gestures[NewAction] <> lgNone then
       Continue;
     Taken := False;
@@ -267,6 +320,16 @@ begin
   end;
 end;
 
+function ParseWordList(const Text: string): TArray<string>;
+var
+  Part: string;
+begin
+  Result := nil;
+  for Part in Text.Split([';', ',', ' ', #13, #10, #9]) do
+    if Trim(Part) <> '' then
+      Result := Result + [Trim(Part)];
+end;
+
 function GestureFromInteger(Value: Integer; Default: TLSGesture): TLSGesture;
 begin
   if (Value >= Ord(Low(TLSGesture))) and (Value <= Ord(High(TLSGesture))) then
@@ -275,113 +338,173 @@ begin
     Result := Default;
 end;
 
-function LoadSettings: TLSSettings;
+function LoadSettingsFrom(Store: TSettingsStore): TLSSettings;
 var
-  Registry: TRegistry;
   Action: TLSAction;
   Loaded: TLSActionGestures;
   ValueName: string;
   Gesture: TLSGesture;
   Used: set of TLSGesture;
+  LanguageValue: Integer;
 begin
   Result := TLSSettings.Defaults;
-  Registry := TRegistry.Create(KEY_READ);
   try
-    Registry.RootKey := HKEY_CURRENT_USER;
-    try
-      if not Registry.OpenKeyReadOnly(SETTINGS_REGISTRY_KEY) then
-        Exit;
-
-      Loaded := Result.ActionGestures;
-      for Action := Low(Loaded) to High(Loaded) do
-      begin
-        ValueName := VALUE_GESTURE_PREFIX + ActionKeys[Action];
-        if Registry.ValueExists(ValueName) then
-          Loaded[Action] := GestureFromInteger(Registry.ReadInteger(ValueName),
-            Loaded[Action]);
-      end;
-      // Reject a stored configuration that assigns one gesture twice.
-      Used := [];
-      for Action := Low(Loaded) to High(Loaded) do
-      begin
-        Gesture := Loaded[Action];
-        if Gesture = lgNone then
-          Continue;
-        if Gesture in Used then
-        begin
-          Loaded := TLSSettings.Defaults.ActionGestures;
-          Break;
-        end;
-        Include(Used, Gesture);
-      end;
-      if not Registry.ValueExists(VALUE_SETTINGS_VERSION) or
-         (Registry.ReadInteger(VALUE_SETTINGS_VERSION) < CURRENT_SETTINGS_VERSION) then
-        MigrateActionGestures(Loaded);
-      Result.ActionGestures := Loaded;
-
-      if Registry.ValueExists(VALUE_INTERVAL) then
-        Result.DoubleTapInterval :=
-          ClampDoubleTapInterval(Registry.ReadInteger(VALUE_INTERVAL));
-      if Registry.ValueExists(VALUE_EXCLUDED) then
-        Result.ExcludedProcesses :=
-          ParseProcessList(Registry.ReadString(VALUE_EXCLUDED));
-      if Registry.ValueExists(VALUE_PAUSE_FULLSCREEN) then
-        Result.PauseInFullscreen := Registry.ReadBool(VALUE_PAUSE_FULLSCREEN);
-      if Registry.ValueExists(VALUE_NOTIFICATIONS) then
-        Result.ShowNotifications := Registry.ReadBool(VALUE_NOTIFICATIONS);
-      if Registry.ValueExists(VALUE_DISABLE_STICKY_HOTKEY) then
-        Result.DisableStickyKeysHotkey :=
-          Registry.ReadBool(VALUE_DISABLE_STICKY_HOTKEY);
-      if Registry.ValueExists(VALUE_LAYOUT_INDICATOR) then
-        Result.ShowLayoutIndicator := Registry.ReadBool(VALUE_LAYOUT_INDICATOR);
-      if Registry.ValueExists(VALUE_LANGUAGE) then
-        Result.Language := ReadLanguageSetting;
-      if Registry.ValueExists(VALUE_CHECK_UPDATES) then
-        Result.CheckForUpdates := Registry.ReadBool(VALUE_CHECK_UPDATES);
-      if Registry.ValueExists(VALUE_LAST_UPDATE_CHECK) then
-        Result.LastUpdateCheck := Registry.ReadDateTime(VALUE_LAST_UPDATE_CHECK);
-    except
-      // A damaged value must not prevent the application from starting.
-      Result := TLSSettings.Defaults;
+    Loaded := Result.ActionGestures;
+    for Action := Low(Loaded) to High(Loaded) do
+    begin
+      ValueName := VALUE_GESTURE_PREFIX + ActionKeys[Action];
+      if Store.ValueExists(ValueName) then
+        Loaded[Action] := GestureFromInteger(Store.ReadInteger(ValueName, 0),
+          Loaded[Action]);
     end;
+    // Reject a stored configuration that assigns one gesture twice.
+    Used := [];
+    for Action := Low(Loaded) to High(Loaded) do
+    begin
+      Gesture := Loaded[Action];
+      if Gesture = lgNone then
+        Continue;
+      if Gesture in Used then
+      begin
+        Loaded := TLSSettings.Defaults.ActionGestures;
+        Break;
+      end;
+      Include(Used, Gesture);
+    end;
+    if Store.ValueExists(VALUE_GESTURE_PREFIX + ActionKeys[laConvert]) and
+       (Store.ReadInteger(VALUE_SETTINGS_VERSION, 0) < CURRENT_SETTINGS_VERSION) then
+      MigrateActionGestures(Loaded, Store.ReadInteger(VALUE_SETTINGS_VERSION, 1));
+    Result.ActionGestures := Loaded;
+
+    Result.DoubleTapInterval := ClampDoubleTapInterval(
+      Store.ReadInteger(VALUE_INTERVAL, DEFAULT_DOUBLE_TAP_INTERVAL));
+    if Store.ValueExists(VALUE_EXCLUDED) then
+      Result.ExcludedProcesses := ParseProcessList(Store.ReadString(VALUE_EXCLUDED, ''));
+    Result.PauseInFullscreen := Store.ReadBool(VALUE_PAUSE_FULLSCREEN,
+      Result.PauseInFullscreen);
+    Result.ShowNotifications := Store.ReadBool(VALUE_NOTIFICATIONS,
+      Result.ShowNotifications);
+    Result.DisableStickyKeysHotkey := Store.ReadBool(VALUE_DISABLE_STICKY_HOTKEY,
+      Result.DisableStickyKeysHotkey);
+    Result.ShowLayoutIndicator := Store.ReadBool(VALUE_LAYOUT_INDICATOR,
+      Result.ShowLayoutIndicator);
+    LanguageValue := Store.ReadInteger(VALUE_LANGUAGE, Ord(llAuto));
+    if (LanguageValue >= Ord(Low(TLSLanguage))) and
+       (LanguageValue <= Ord(High(TLSLanguage))) then
+      Result.Language := TLSLanguage(LanguageValue);
+    Result.CheckForUpdates := Store.ReadBool(VALUE_CHECK_UPDATES,
+      Result.CheckForUpdates);
+    Result.LastUpdateCheck := Store.ReadFloat(VALUE_LAST_UPDATE_CHECK, 0);
+    Result.FixCapsLock := Store.ReadBool(VALUE_FIX_CAPS_LOCK, Result.FixCapsLock);
+    Result.FixTwoCapitals := Store.ReadBool(VALUE_FIX_TWO_CAPITALS,
+      Result.FixTwoCapitals);
+    if Store.ValueExists(VALUE_TWO_CAPITALS_EXCEPTIONS) then
+      Result.TwoCapitalsExceptions := ParseWordList(
+        Store.ReadString(VALUE_TWO_CAPITALS_EXCEPTIONS, ''));
+    Result.SnippetsEnabled := Store.ReadBool(VALUE_SNIPPETS_ENABLED,
+      Result.SnippetsEnabled);
+    Result.Snippets := Store.ReadString(VALUE_SNIPPETS, Result.Snippets);
+    Result.Translator := Store.ReadInteger(VALUE_TRANSLATOR, Result.Translator);
+    Result.SearchEngine := Store.ReadInteger(VALUE_SEARCH_ENGINE, Result.SearchEngine);
+  except
+    // A damaged value must not prevent the application from starting.
+    Result := TLSSettings.Defaults;
+  end;
+end;
+
+function SaveSettingsTo(const Settings: TLSSettings; Store: TSettingsStore): Boolean;
+var
+  Action: TLSAction;
+begin
+  try
+    for Action := Low(Settings.ActionGestures) to High(Settings.ActionGestures) do
+      Store.WriteInteger(VALUE_GESTURE_PREFIX + ActionKeys[Action],
+        Ord(Settings.ActionGestures[Action]));
+    Store.WriteInteger(VALUE_INTERVAL, Integer(Settings.DoubleTapInterval));
+    Store.WriteString(VALUE_EXCLUDED, ProcessListToText(Settings.ExcludedProcesses));
+    Store.WriteBool(VALUE_PAUSE_FULLSCREEN, Settings.PauseInFullscreen);
+    Store.WriteBool(VALUE_NOTIFICATIONS, Settings.ShowNotifications);
+    Store.WriteBool(VALUE_DISABLE_STICKY_HOTKEY, Settings.DisableStickyKeysHotkey);
+    Store.WriteBool(VALUE_LAYOUT_INDICATOR, Settings.ShowLayoutIndicator);
+    Store.WriteInteger(VALUE_LANGUAGE, Ord(Settings.Language));
+    Store.WriteBool(VALUE_CHECK_UPDATES, Settings.CheckForUpdates);
+    Store.WriteFloat(VALUE_LAST_UPDATE_CHECK, Settings.LastUpdateCheck);
+    Store.WriteBool(VALUE_FIX_CAPS_LOCK, Settings.FixCapsLock);
+    Store.WriteBool(VALUE_FIX_TWO_CAPITALS, Settings.FixTwoCapitals);
+    Store.WriteString(VALUE_TWO_CAPITALS_EXCEPTIONS,
+      string.Join('; ', Settings.TwoCapitalsExceptions));
+    Store.WriteBool(VALUE_SNIPPETS_ENABLED, Settings.SnippetsEnabled);
+    Store.WriteString(VALUE_SNIPPETS, Settings.Snippets);
+    Store.WriteInteger(VALUE_TRANSLATOR, Settings.Translator);
+    Store.WriteInteger(VALUE_SEARCH_ENGINE, Settings.SearchEngine);
+    Store.WriteInteger(VALUE_SETTINGS_VERSION, CURRENT_SETTINGS_VERSION);
+    Result := Store.Flush;
+  except
+    Result := False;
+  end;
+end;
+
+function LoadSettings: TLSSettings;
+var
+  Store: TSettingsStore;
+begin
+  Store := OpenSettingsStore(False);
+  try
+    Result := LoadSettingsFrom(Store);
   finally
-    Registry.Free;
+    Store.Free;
   end;
 end;
 
 function SaveSettings(const Settings: TLSSettings): Boolean;
 var
-  Registry: TRegistry;
-  Action: TLSAction;
+  Store: TSettingsStore;
+begin
+  Store := OpenSettingsStore(True);
+  try
+    Result := SaveSettingsTo(Settings, Store);
+  finally
+    Store.Free;
+  end;
+end;
+
+function ExportSettings(const Settings: TLSSettings; const FileName: string;
+  DiagnosticsEnabled: Boolean): Boolean;
+var
+  Store: TIniSettingsStore;
+begin
+  if FileExists(FileName) then
+    System.SysUtils.DeleteFile(FileName);
+  Store := TIniSettingsStore.Create(FileName);
+  try
+    Store.WriteBool(VALUE_DIAGNOSTICS, DiagnosticsEnabled);
+    Result := SaveSettingsTo(Settings, Store);
+  finally
+    Store.Free;
+  end;
+end;
+
+function ImportSettings(const FileName: string; out Settings: TLSSettings;
+  out DiagnosticsEnabled: Boolean): Boolean;
+var
+  Store: TIniSettingsStore;
 begin
   Result := False;
-  Registry := TRegistry.Create(KEY_READ or KEY_WRITE);
+  DiagnosticsEnabled := False;
+  if not FileExists(FileName) then
+    Exit;
+  Store := TIniSettingsStore.Create(FileName);
   try
-    Registry.RootKey := HKEY_CURRENT_USER;
-    try
-      if not Registry.OpenKey(SETTINGS_REGISTRY_KEY, True) then
-        Exit;
-      for Action := Low(Settings.ActionGestures) to High(Settings.ActionGestures) do
-        Registry.WriteInteger(VALUE_GESTURE_PREFIX + ActionKeys[Action],
-          Ord(Settings.ActionGestures[Action]));
-      Registry.WriteInteger(VALUE_INTERVAL, Integer(Settings.DoubleTapInterval));
-      Registry.WriteString(VALUE_EXCLUDED,
-        ProcessListToText(Settings.ExcludedProcesses));
-      Registry.WriteBool(VALUE_PAUSE_FULLSCREEN, Settings.PauseInFullscreen);
-      Registry.WriteBool(VALUE_NOTIFICATIONS, Settings.ShowNotifications);
-      Registry.WriteBool(VALUE_DISABLE_STICKY_HOTKEY,
-        Settings.DisableStickyKeysHotkey);
-      Registry.WriteBool(VALUE_LAYOUT_INDICATOR, Settings.ShowLayoutIndicator);
-      Registry.WriteInteger(VALUE_LANGUAGE, Ord(Settings.Language));
-      Registry.WriteBool(VALUE_CHECK_UPDATES, Settings.CheckForUpdates);
-      Registry.WriteDateTime(VALUE_LAST_UPDATE_CHECK, Settings.LastUpdateCheck);
-      Registry.WriteInteger(VALUE_SETTINGS_VERSION, CURRENT_SETTINGS_VERSION);
-      Result := True;
-    except
-      Result := False;
-    end;
+    // A file without any known value is not a settings export.
+    if not Store.ValueExists(VALUE_GESTURE_PREFIX + ActionKeys[laConvert]) then
+      Exit;
+    Settings := LoadSettingsFrom(Store);
+    // The time of the last update check belongs to this computer.
+    Settings.LastUpdateCheck := 0;
+    DiagnosticsEnabled := Store.ReadBool(VALUE_DIAGNOSTICS, False);
+    Result := True;
   finally
-    Registry.Free;
+    Store.Free;
   end;
 end;
 

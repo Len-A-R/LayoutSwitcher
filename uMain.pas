@@ -12,7 +12,7 @@ uses
   Vcl.Graphics, Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.ExtCtrls, Vcl.Menus,
   System.ImageList, Vcl.ImgList, PngImageList, Vcl.StdCtrls, Vcl.ComCtrls,
   uSettings, uGestureDetector, uOperationWorker, uConversionChain,
-  uLayoutIndicator, uUpdateCheck;
+  uLayoutIndicator, uUpdateCheck, uLayoutConverter, uTextTools;
 
 const
   INSTANCE_WINDOW_PROP = 'LayoutSwitcher.Instance.v2';
@@ -43,7 +43,11 @@ type
     chkAutorun: TCheckBox;
     chkDiagnostics: TCheckBox;
     chkAutorunElevated: TCheckBox;
-    grpHotkeys: TGroupBox;
+    pcMain: TPageControl;
+    tsGeneral: TTabSheet;
+    tsHotkeys: TTabSheet;
+    tsCorrections: TTabSheet;
+    tsExclusions: TTabSheet;
     lblConvert: TLabel;
     cbConvert: TComboBox;
     lblUpper: TLabel;
@@ -60,7 +64,6 @@ type
     edInterval: TEdit;
     udInterval: TUpDown;
     lblIntervalUnit: TLabel;
-    grpBehavior: TGroupBox;
     chkPauseFullscreen: TCheckBox;
     chkNotifications: TCheckBox;
     chkDisableStickyKeys: TCheckBox;
@@ -69,7 +72,32 @@ type
     lblLanguage: TLabel;
     cbLanguage: TComboBox;
     lblExcluded: TLabel;
-    edExcluded: TEdit;
+    edExcluded: TMemo;
+    lblStorage: TLabel;
+    btnExport: TButton;
+    btnImport: TButton;
+    lblTranslate: TLabel;
+    cbTranslate: TComboBox;
+    lblWebSearch: TLabel;
+    cbWebSearch: TComboBox;
+    lblTranslator: TLabel;
+    cbTranslator: TComboBox;
+    lblSearchEngine: TLabel;
+    cbSearchEngine: TComboBox;
+    chkFixCapsLock: TCheckBox;
+    chkFixTwoCapitals: TCheckBox;
+    lblTwoCapsExceptions: TLabel;
+    edTwoCapsExceptions: TEdit;
+    chkSnippets: TCheckBox;
+    lblSnippetsHint: TLabel;
+    memSnippets: TMemo;
+    lblCorrectionsNote: TLabel;
+    mniClipboard: TMenuItem;
+    mniClipConvert: TMenuItem;
+    mniClipUpper: TMenuItem;
+    mniClipLower: TMenuItem;
+    mniClipTranslit: TMenuItem;
+    mniSeparator3: TMenuItem;
     btnDefaultExcluded: TButton;
     btnReport: TButton;
     btnClose: TButton;
@@ -85,6 +113,11 @@ type
     procedure mniCheckUpdatesClick(Sender: TObject);
     procedure mniDownloadUpdateClick(Sender: TObject);
     procedure mniReportClick(Sender: TObject);
+    procedure btnExportClick(Sender: TObject);
+    procedure btnImportClick(Sender: TObject);
+    procedure cbServiceChange(Sender: TObject);
+    procedure edCorrectionsExit(Sender: TObject);
+    procedure mniClipboardClick(Sender: TObject);
     procedure chkAutorunClick(Sender: TObject);
     procedure chkAutorunElevatedClick(Sender: TObject);
     procedure chkDiagnosticsClick(Sender: TObject);
@@ -137,6 +170,21 @@ type
     FUpdateVersion: string;
     FUpdateUrl: string;
     FBalloonUrl: string;      // Opened when the current balloon is clicked.
+    FBalloonInstall: Boolean; // A balloon click installs the update.
+    FUpdateInstallable: Boolean;
+    FInstallerUrl: string;
+    FInstallerName: string;
+    FInstallerSha256: string;
+    FDownloadThread: TUpdateDownloadThread;
+    FCatalog: TKeyboardLayoutCatalog;
+    FSnippets: TArray<TSnippet>;
+    // Caps Lock state tracked from Raw Input: GetKeyState in this thread does
+    // not see key messages of other applications.
+    FCapsOn: Boolean;
+    FCapsShiftLock: Boolean;
+    FPendingAutomatic: Boolean;
+    FSettleFocusNext: Boolean;
+    FPendingToggleCaps: Boolean;
 
     function RegisterRawInput: Boolean;
     procedure UnregisterRawInput;
@@ -179,6 +227,13 @@ type
     procedure StartUpdateCheck(Manual: Boolean);
     procedure HandleUpdateResult(Res: TUpdateCheckResult);
     function BuildSystemInfo: string;
+    procedure QueueRequest(Action: TLSAction; const Plan: TBufferPlan;
+      Automatic, ToggleCaps: Boolean);
+    procedure CheckAutoCorrections;
+    procedure ApplyCorrectionsFromEdit;
+    procedure UpdateDownloadMenuCaption;
+    procedure StartUpdateInstall;
+    procedure HandleDownloadResult(Res: TUpdateDownloadResult);
   protected
     procedure CreateWnd; override;
     procedure DestroyWnd; override;
@@ -200,11 +255,13 @@ uses
   System.DateUtils,
   Winapi.ShellAPI, Winapi.ShlObj,
   PngImage, PngFunctions,
-  uDiagnostics, uWinUtils, uTaskAutorun, uLocale, uLayoutConverter;
+  System.StrUtils,
+  uDiagnostics, uWinUtils, uTaskAutorun, uLocale, uSettingsStore, uClipboardSnapshot;
 
 const
   WM_LS_OPERATION_DONE = WM_APP + 10;
   WM_LS_UPDATE_RESULT = WM_APP + 11;
+  WM_LS_UPDATE_DOWNLOADED = WM_APP + 12;
   // The phrase typed since the last caret jump (spaces included).
   MAX_PHRASE_LEN = 300;
   TO_UNICODE_NO_STATE_CHANGE = 4;
@@ -252,7 +309,8 @@ const
   LANG_RU = $0419;
 
   ShortGestureNames: array[TLSGesture] of string = (
-    '', 'Shift×2', 'LCtrl×2', 'RCtrl×2', 'LCtrl+RCtrl', 'LShift+RShift', 'Caps×2');
+    '', 'Shift×2', 'LCtrl×2', 'RCtrl×2', 'Ctrl+Ctrl', 'Shift+Shift', 'Caps×2',
+    'RAlt×2', 'LAlt×2');
 
 function ShortActionName(Action: TLSAction): string; forward;
 
@@ -348,6 +406,10 @@ begin
   FNotificationTimes := TDictionary<string, DWORD>.Create;
   FVersion := GetExecutableVersion;
   FIndicator := TLayoutIndicator.Create;
+  FCatalog := TKeyboardLayoutCatalog.Create;
+  FSnippets := ParseSnippets(FSettings.Snippets);
+  FCapsShiftLock := IsCapsLockOffByShift;
+  FCapsOn := (GetKeyState(VK_CAPITAL) and 1) <> 0;
   ApplyLanguage;
 
   // Assigning Checked raises OnClick; the guard keeps FormCreate from
@@ -422,7 +484,16 @@ begin
   while PeekMessage(Msg, Handle, WM_LS_UPDATE_RESULT, WM_LS_UPDATE_RESULT,
           PM_REMOVE) do
     TUpdateCheckResult(Msg.lParam).Free;
+  if Assigned(FDownloadThread) then
+  begin
+    FDownloadThread.WaitFor;
+    FreeAndNil(FDownloadThread);
+  end;
+  while PeekMessage(Msg, Handle, WM_LS_UPDATE_DOWNLOADED, WM_LS_UPDATE_DOWNLOADED,
+          PM_REMOVE) do
+    TUpdateDownloadResult(Msg.lParam).Free;
   FreeAndNil(FIndicator);
+  FreeAndNil(FCatalog);
   FreeAndNil(FDetector);
   FreeAndNil(FChain);
   FreeAndNil(FNotificationTimes);
@@ -432,6 +503,7 @@ end;
 procedure TFormMain.FormCloseQuery(Sender: TObject; var CanClose: Boolean);
 begin
   ApplyExcludedFromEdit;
+  ApplyCorrectionsFromEdit;
   CanClose := False;
   Hide;
   ShowWindow(Application.Handle, SW_HIDE);
@@ -470,6 +542,12 @@ begin
       if (Message.WParam = PBT_APMRESUMEAUTOMATIC) or
          (Message.WParam = PBT_APMRESUMESUSPEND) then
         ResetInputState('power_resume', True);
+  end;
+
+  if Message.Msg = WM_LS_UPDATE_DOWNLOADED then
+  begin
+    HandleDownloadResult(TUpdateDownloadResult(Message.LParam));
+    Exit;
   end;
 
   if Message.Msg = WM_LS_UPDATE_RESULT then
@@ -589,6 +667,7 @@ begin
   FDetector.ResetAll;
   ClearBuffer;
   FChain.Reset;
+  FCapsOn := (GetKeyState(VK_CAPITAL) and 1) <> 0;
   FLastWindow := 0;
   // A request interrupted by sleep must not block the next gesture; a late
   // result is discarded by its sequence number.
@@ -654,7 +733,13 @@ var
 begin
   if VK > 255 then
     Exit;
-  if not FPaused then
+  if IsModifierKey(VK) then
+    DiagnosticsLogFmt('input.modifier vk=0x%.2x up=%s focus=%p',
+      [VK, BoolToStr(IsKeyUp, True), Pointer(GetFocusedWindow)]);
+  // Alt moves the focus into the menu bar of many applications (Windows 11
+  // Notepad, Office): that is not a window change and must neither reset a
+  // pending double Alt nor drop the text typed so far.
+  if not FPaused and not IsAltKey(VK) then
     CheckWindowChanged;
 
   // Releases lost on the secure desktop would otherwise block every tap.
@@ -669,6 +754,23 @@ begin
       DiagnosticsLogFmt('input.stale_keys_released count=%d', [Released]);
   end;
 
+  if not IsKeyUp and not FDetector.IsDown(VK) then
+  begin
+    // Caps Lock state, following the "press Shift to turn it off" option.
+    if VK = VK_CAPITAL then
+    begin
+      if FCapsShiftLock then
+        FCapsOn := True
+      else
+        FCapsOn := not FCapsOn;
+    end
+    else if FCapsShiftLock and IsShiftKey(VK) then
+      FCapsOn := False;
+    // Automatic corrections are dropped once the user types on.
+    if not IsModifierKey(VK) then
+      AtomicIncrement(GKeystrokeCount);
+  end;
+
   // The detector always tracks key states, even while paused, so that a
   // modifier held across a pause/resume does not leave stale state.
   Gesture := FDetector.KeyEvent(VK, IsKeyUp, EventTime);
@@ -676,10 +778,13 @@ begin
     Exit;
   if Gesture <> lgNone then
   begin
+    DiagnosticsLogFmt('gesture.detected gesture=%d action=%s',
+      [Ord(Gesture), ActionKeys[FSettings.ActionForGesture(Gesture)]]);
     if (Gesture = lgDoubleCapsLock) and
        (FSettings.ActionForGesture(Gesture) <> laNone) and IsCapsLockOffByShift then
     begin
       FBalloonUrl := '';
+      FBalloonInstall := False;
       ShowNotification('caps_shiftlock', T(
         'В Windows включено «Отключать Caps Lock клавишей Shift», поэтому после ' +
         'двойного Caps Lock он остаётся включённым. Нажмите Shift или назначьте ' +
@@ -687,7 +792,10 @@ begin
         'Windows is set to turn off Caps Lock with Shift, so Caps Lock stays on ' +
         'after a double Caps Lock. Press Shift or assign another gesture.'));
     end;
+    // After a double Alt the application still has to leave its menu mode.
+    FSettleFocusNext := Gesture in [lgDoubleRAlt, lgDoubleLAlt];
     QueueAction(FSettings.ActionForGesture(Gesture));
+    FSettleFocusNext := False;
   end;
 
   if IsKeyUp or IsModifierKey(VK) then
@@ -751,7 +859,11 @@ begin
   end;
 
   if TryTranslateKey(VK, ScanCode, Ch) then
-    AddChar(Ch)
+  begin
+    AddChar(Ch);
+    if Ch = ' ' then
+      CheckAutoCorrections;
+  end
   else
     ClearBuffer;
 end;
@@ -777,7 +889,7 @@ begin
   FillChar(KeyState, SizeOf(KeyState), 0);
   if FDetector.ShiftDown then
     KeyState[VK_SHIFT] := $80;
-  if (GetKeyState(VK_CAPITAL) and 1) <> 0 then
+  if FCapsOn then
     KeyState[VK_CAPITAL] := 1;
   if (GetKeyState(VK_NUMLOCK) and 1) <> 0 then
     KeyState[VK_NUMLOCK] := 1;
@@ -854,16 +966,34 @@ end;
 
 procedure TFormMain.QueueAction(Action: TLSAction);
 var
+  Plan: TBufferPlan;
+begin
+  if (Action = laNone) or FPaused then
+    Exit;
+  if not FBufferOverflowed and not FFocusIsPassword then
+    Plan := FChain.Plan(Action, FBuffer)
+  else
+    Plan := FChain.Plan(laNone, '');
+  if (Action = laUndo) and (Plan.Mode <> bmUndo) then
+  begin
+    DiagnosticsLog('operation.skipped action=undo reason=nothing_to_undo');
+    Exit;
+  end;
+  QueueRequest(Action, Plan, False, False);
+end;
+
+procedure TFormMain.QueueRequest(Action: TLSAction; const Plan: TBufferPlan;
+  Automatic, ToggleCaps: Boolean);
+var
   Foreground, Focus: HWND;
   ProcessName: string;
   Request: TOperationRequest;
 begin
-  if (Action = laNone) or FPaused then
+  if FPaused then
     Exit;
-
   if FOperationBusy then
   begin
-    if GetTickCount - FOperationStarted < OPERATION_WATCHDOG_MS then
+    if Automatic or (GetTickCount - FOperationStarted < OPERATION_WATCHDOG_MS) then
     begin
       DiagnosticsLogFmt('operation.ignored action=%s reason=busy', [ActionKeys[Action]]);
       Exit;
@@ -897,14 +1027,18 @@ begin
   begin
     DiagnosticsLogFmt('operation.skipped action=%s reason=elevated_target process="%s"',
       [ActionKeys[Action], ProcessName]);
-    FBalloonUrl := '';
-    ShowNotification('elevated', Format(T(
-      '%s запущен от имени администратора, поэтому Windows не позволяет ' +
-      'изменить в нём текст. Включите в настройках запуск LayoutSwitcher ' +
-      'с правами администратора.',
-      '%s runs as administrator, so Windows does not allow changing its text. ' +
-      'Turn on "Run as administrator" in the LayoutSwitcher settings.'),
-      [ProcessName]));
+    if not Automatic then
+    begin
+      FBalloonUrl := '';
+      FBalloonInstall := False;
+      ShowNotification('elevated', Format(T(
+        '%s запущен от имени администратора, поэтому Windows не позволяет ' +
+        'изменить в нём текст. Включите в настройках запуск LayoutSwitcher ' +
+        'с правами администратора.',
+        '%s runs as administrator, so Windows does not allow changing its text. ' +
+        'Turn on "Run as administrator" in the LayoutSwitcher settings.'),
+        [ProcessName]));
+    end;
     Exit;
   end;
 
@@ -912,21 +1046,22 @@ begin
   Inc(FOperationSequence);
   Request.Sequence := FOperationSequence;
   Request.Action := Action;
-  if not FBufferOverflowed and not FFocusIsPassword then
-    Request.Plan := FChain.Plan(Action, FBuffer)
+  Request.Plan := Plan;
+  Request.Automatic := Automatic;
+  Request.KeystrokeStamp := AtomicCmpExchange(GKeystrokeCount, 0, 0);
+  Request.ToggleCapsLock := ToggleCaps;
+  Request.SettleFocus := FSettleFocusNext;
+  if FCapsShiftLock then
+    Request.CapsOffKey := VK_SHIFT
   else
-    Request.Plan := FChain.Plan(laNone, '');
-  FPendingPlan := Request.Plan;
-  if (Action = laUndo) and (Request.Plan.Mode <> bmUndo) then
-  begin
-    Request.Free;
-    DiagnosticsLog('operation.skipped action=undo reason=nothing_to_undo');
-    Exit;
-  end;
+    Request.CapsOffKey := VK_CAPITAL;
   Request.FocusWnd := Focus;
   Request.WindowLayout := GetKeyboardLayout(GetWindowThreadProcessId(Focus, nil));
   Request.PreviousLayout := FPreviousLayout;
   Request.ExcludedProcesses := FSettings.ExcludedProcesses;
+  FPendingPlan := Plan;
+  FPendingAutomatic := Automatic;
+  FPendingToggleCaps := ToggleCaps;
 
   FOperationBusy := True;
   FOperationStarted := GetTickCount;
@@ -948,6 +1083,28 @@ begin
     end;
     FOperationBusy := False;
 
+    if Res.Action in [laTranslate, laWebSearch] then
+    begin
+      if Res.Success then
+      begin
+        if Res.Action = laTranslate then
+          ShellExecute(0, 'open', PChar(BuildTranslateUrl(FSettings.Translator,
+            Res.LookupText)), nil, nil, SW_SHOWNORMAL)
+        else
+          ShellExecute(0, 'open', PChar(BuildSearchUrl(FSettings.SearchEngine,
+            Res.LookupText)), nil, nil, SW_SHOWNORMAL);
+      end
+      else if Res.Notification <> '' then
+      begin
+        FBalloonUrl := '';
+        FBalloonInstall := False;
+        ShowNotification(Res.NotificationKey, Res.Notification);
+      end;
+      Exit;
+    end;
+    if Res.Success and FPendingToggleCaps then
+      FCapsOn := False;
+
     if Res.FocusIsPassword and (GetFocusedWindow = FLastWindow) then
       FFocusIsPassword := True;
     case Res.BufferAction of
@@ -965,9 +1122,11 @@ begin
         Res.SourceLayout, Res.TargetLayout);
     if Res.Success and (Res.SourceLayout <> 0) then
       FPreviousLayout := Res.SourceLayout;
-    if Res.Notification <> '' then
+    // Automatic corrections never bother the user with notifications.
+    if (Res.Notification <> '') and not FPendingAutomatic then
     begin
       FBalloonUrl := '';
+      FBalloonInstall := False;
       ShowNotification(Res.NotificationKey, Res.Notification);
     end;
   finally
@@ -1132,7 +1291,7 @@ procedure TFormMain.UpdateTrayHint;
 const
   MAX_TIP = 127;
 var
-  Hint: string;
+  Hint, Line: string;
   Action: TLSAction;
   Gesture: TLSGesture;
 begin
@@ -1149,10 +1308,18 @@ begin
     for Action := Low(FSettings.ActionGestures) to High(FSettings.ActionGestures) do
     begin
       Gesture := FSettings.GestureForAction(Action);
-      if Gesture <> lgNone then
-        // #10 instead of CRLF and no spaces: the tray tip holds 127 chars.
-        Hint := Hint + #10 + ShortGestureNames[Gesture] + '=' +
-          ShortActionName(Action);
+      if Gesture = lgNone then
+        Continue;
+      // #10 instead of CRLF and no spaces: the tray tip holds 127 chars.
+      // Lines that do not fit are replaced by an ellipsis; the settings
+      // window lists everything.
+      Line := #10 + ShortGestureNames[Gesture] + '=' + ShortActionName(Action);
+      if Length(Hint) + Length(Line) > MAX_TIP - 2 then
+      begin
+        Hint := Hint + #10'…';
+        Break;
+      end;
+      Hint := Hint + Line;
     end;
   if Length(Hint) > MAX_TIP then
     SetLength(Hint, MAX_TIP);
@@ -1176,6 +1343,15 @@ begin
     cbInvert.ItemIndex := Ord(FSettings.GestureForAction(laInvertCase));
     cbTranslit.ItemIndex := Ord(FSettings.GestureForAction(laTransliterate));
     cbUndo.ItemIndex := Ord(FSettings.GestureForAction(laUndo));
+    cbTranslate.ItemIndex := Ord(FSettings.GestureForAction(laTranslate));
+    cbWebSearch.ItemIndex := Ord(FSettings.GestureForAction(laWebSearch));
+    cbTranslator.ItemIndex := FSettings.Translator;
+    cbSearchEngine.ItemIndex := FSettings.SearchEngine;
+    chkFixCapsLock.Checked := FSettings.FixCapsLock;
+    chkFixTwoCapitals.Checked := FSettings.FixTwoCapitals;
+    edTwoCapsExceptions.Text := string.Join('; ', FSettings.TwoCapitalsExceptions);
+    chkSnippets.Checked := FSettings.SnippetsEnabled;
+    memSnippets.Text := FSettings.Snippets;
     udInterval.Position := Integer(FSettings.DoubleTapInterval);
     edInterval.Text := IntToStr(FSettings.DoubleTapInterval);
     chkPauseFullscreen.Checked := FSettings.PauseInFullscreen;
@@ -1184,7 +1360,7 @@ begin
     chkLayoutIndicator.Checked := FSettings.ShowLayoutIndicator;
     chkCheckUpdates.Checked := FSettings.CheckForUpdates;
     cbLanguage.ItemIndex := Ord(FSettings.Language);
-    edExcluded.Text := ProcessListToText(FSettings.ExcludedProcesses);
+    edExcluded.Text := string.Join(sLineBreak, FSettings.ExcludedProcesses);
   finally
     FUpdatingControls := False;
   end;
@@ -1193,6 +1369,7 @@ end;
 procedure TFormMain.ApplySettings;
 begin
   FDetector.Interval := FSettings.DoubleTapInterval;
+  FSnippets := ParseSnippets(FSettings.Snippets);
   if not SaveSettings(FSettings) then
     DiagnosticsLog('settings.save_failed');
   UpdateTrayHint;
@@ -1251,6 +1428,9 @@ begin
   FSettings.DisableStickyKeysHotkey := chkDisableStickyKeys.Checked;
   FSettings.ShowLayoutIndicator := chkLayoutIndicator.Checked;
   FSettings.CheckForUpdates := chkCheckUpdates.Checked;
+  FSettings.FixCapsLock := chkFixCapsLock.Checked;
+  FSettings.FixTwoCapitals := chkFixTwoCapitals.Checked;
+  FSettings.SnippetsEnabled := chkSnippets.Checked;
   if not FSettings.ShowLayoutIndicator then
     FIndicator.HideNow;
   ApplySettings;
@@ -1509,6 +1689,8 @@ begin
     laUpperCase: Result := T('ВЕРХНИЙ', 'UPPER');
     laLowerCase: Result := T('нижний', 'lower');
     laInvertCase: Result := T('иНВЕРСИЯ', 'iNVERT');
+    laTranslate: Result := T('Перевод', 'Translate');
+    laWebSearch: Result := T('Поиск', 'Search');
     laTransliterate: Result := T('Транслит', 'Translit');
     laUndo: Result := T('Отмена', 'Undo');
   else
@@ -1518,7 +1700,8 @@ end;
 
 function TFormMain.GestureCombos: TArray<TComboBox>;
 begin
-  Result := [cbConvert, cbUpper, cbLower, cbInvert, cbTranslit, cbUndo];
+  Result := [cbConvert, cbUpper, cbLower, cbInvert, cbTranslit, cbUndo, cbTranslate,
+    cbWebSearch];
 end;
 
 procedure TFormMain.ApplyLanguage;
@@ -1526,24 +1709,64 @@ var
   Combo: TComboBox;
   Gesture: TLSGesture;
   Index: Integer;
+
+  procedure FillCombo(Box: TComboBox; const Items: array of string);
+  var
+    Saved: Integer;
+    Item: string;
+  begin
+    Saved := Box.ItemIndex;
+    Box.Items.Clear;
+    for Item in Items do
+      Box.Items.Add(Item);
+    Box.ItemIndex := Saved;
+  end;
+
 begin
   FUpdatingControls := True;
   try
     Caption := T('LayoutSwitcher - Переключатель раскладок клавиатуры',
       'LayoutSwitcher - Keyboard layout switcher');
+    tsGeneral.Caption := T('Основные', 'General');
+    tsHotkeys.Caption := T('Сочетания', 'Shortcuts');
+    tsCorrections.Caption := T('Исправления', 'Corrections');
+    tsExclusions.Caption := T('Исключения', 'Exclusions');
+
     chkAutorun.Caption := T('Автозапуск при старте системы', 'Start with Windows');
-    chkDiagnostics.Caption := T('Вести диагностический журнал', 'Keep a diagnostic log');
     chkAutorunElevated.Caption := T(
       'Запускать с правами администратора (для окон, открытых от имени администратора)',
       'Run as administrator (to work in windows opened as administrator)');
+    chkDiagnostics.Caption := T('Вести диагностический журнал', 'Keep a diagnostic log');
+    chkCheckUpdates.Caption := T('Проверять наличие новой версии раз в день',
+      'Check for a new version once a day');
+    chkPauseFullscreen.Caption := T('Не работать в полноэкранных приложениях и играх',
+      'Do not work in full-screen applications and games');
+    chkNotifications.Caption := T('Показывать уведомление, если действие невозможно',
+      'Show a notification when an action is not possible');
+    chkDisableStickyKeys.Caption := T(
+      'Отключить вызов залипания клавиш пятикратным нажатием Shift',
+      'Turn off the Sticky Keys prompt on pressing Shift five times');
+    chkLayoutIndicator.Caption := T('Показывать раскладку рядом с курсором при переключении',
+      'Show the layout next to the caret when it changes');
+    lblLanguage.Caption := T('Язык интерфейса / Language:', 'Language / Язык интерфейса:');
+    FillCombo(cbLanguage, [T('Как в Windows', 'As in Windows'), 'Русский', 'English']);
+    if IsPortableMode then
+      lblStorage.Caption := T('Переносной режим: настройки хранятся в файле ',
+        'Portable mode: settings are stored in ') + PortableIniFile
+    else
+      lblStorage.Caption := T('Настройки хранятся в реестре Windows.',
+        'Settings are stored in the Windows registry.');
+    btnExport.Caption := T('Экспорт настроек...', 'Export settings...');
+    btnImport.Caption := T('Импорт настроек...', 'Import settings...');
 
-    grpHotkeys.Caption := T('Сочетания клавиш', 'Shortcuts');
     lblConvert.Caption := ActionName(laConvert);
     lblUpper.Caption := ActionName(laUpperCase);
     lblLower.Caption := ActionName(laLowerCase);
     lblInvert.Caption := ActionName(laInvertCase);
     lblTranslit.Caption := ActionName(laTransliterate);
     lblUndo.Caption := ActionName(laUndo);
+    lblTranslate.Caption := ActionName(laTranslate);
+    lblWebSearch.Caption := ActionName(laWebSearch);
     lblInterval.Caption := T('Интервал двойного нажатия:', 'Double-tap interval:');
     lblIntervalUnit.Caption := T('мс', 'ms');
     for Combo in GestureCombos do
@@ -1559,28 +1782,30 @@ begin
       end;
       Combo.ItemIndex := Index;
     end;
+    lblTranslator.Caption := T('Переводчик:', 'Translator:');
+    FillCombo(cbTranslator, [T('Яндекс Переводчик', 'Yandex Translate'),
+      'Google Translate', 'DeepL']);
+    lblSearchEngine.Caption := T('Поиск:', 'Search engine:');
+    FillCombo(cbSearchEngine, [T('Яндекс', 'Yandex'), 'Google', 'Bing', 'DuckDuckGo']);
 
-    grpBehavior.Caption := T('Поведение', 'Behaviour');
-    chkPauseFullscreen.Caption := T('Не работать в полноэкранных приложениях и играх',
-      'Do not work in full-screen applications and games');
-    chkNotifications.Caption := T('Показывать уведомление, если действие невозможно',
-      'Show a notification when an action is not possible');
-    chkDisableStickyKeys.Caption := T(
-      'Отключить вызов залипания клавиш пятикратным нажатием Shift',
-      'Turn off the Sticky Keys prompt on pressing Shift five times');
-    chkLayoutIndicator.Caption := T('Показывать раскладку рядом с курсором при переключении',
-      'Show the layout next to the caret when it changes');
-    chkCheckUpdates.Caption := T('Проверять наличие новой версии раз в день',
-      'Check for a new version once a day');
-    lblLanguage.Caption := T('Язык интерфейса / Language:', 'Language / Язык интерфейса:');
-    Index := cbLanguage.ItemIndex;
-    cbLanguage.Items.Clear;
-    cbLanguage.Items.Add(T('Как в Windows', 'As in Windows'));
-    cbLanguage.Items.Add('Русский');
-    cbLanguage.Items.Add('English');
-    cbLanguage.ItemIndex := Index;
-    lblExcluded.Caption := T('Не работать в программах (имена exe через точку с запятой):',
-      'Do not work in these programs (exe names separated by semicolons):');
+    chkFixCapsLock.Caption := T(
+      'Исправлять слова, набранные с включённым Caps Lock (пРИВЕТ → Привет)',
+      'Fix words typed with Caps Lock on (hELLO → Hello)');
+    chkFixTwoCapitals.Caption := T(
+      'Исправлять две заглавные буквы в начале слова (ПРивет → Привет)',
+      'Fix two capitals at the start of a word (HEllo → Hello)');
+    lblTwoCapsExceptions.Caption := T('Исключения:', 'Exceptions:');
+    chkSnippets.Caption := T('Заменять шаблоны: сокращение и пробел',
+      'Expand templates: abbreviation followed by a space');
+    lblSnippetsHint.Caption := T(
+      'Каждая строка: сокращение=текст. Подстановки: {date}, {time}, {datetime}.',
+      'One per line: abbreviation=text. Placeholders: {date}, {time}, {datetime}.');
+    lblCorrectionsNote.Caption := T(
+      'Исправления выполняются после пробела. Отменить последнее — двойной Caps Lock.',
+      'Corrections are made after a space. Undo the last one with a double Caps Lock.');
+
+    lblExcluded.Caption := T('Не работать в программах (имя exe в строке):',
+      'Do not work in these programs (one exe name per line):');
     btnDefaultExcluded.Caption := T('По умолчанию', 'Defaults');
     btnReport.Caption := T('Собрать отчёт...', 'Create report...');
     btnClose.Caption := T('Закрыть', 'Close');
@@ -1588,14 +1813,17 @@ begin
     lblAuthor.Left := lblVersion.Left + lblVersion.Width + 12;
 
     mniSettings.Caption := T('Настройки...', 'Settings...');
+    mniClipboard.Caption := T('Текст в буфере обмена', 'Text in the clipboard');
+    mniClipConvert.Caption := T('Исправить раскладку', 'Fix keyboard layout');
+    mniClipUpper.Caption := T('ВЕРХНИЙ регистр', 'UPPER case');
+    mniClipLower.Caption := T('нижний регистр', 'lower case');
+    mniClipTranslit.Caption := T('Транслитерация', 'Transliterate');
     mniPause15.Caption := T('Приостановить на 15 минут', 'Pause for 15 minutes');
     mniPause60.Caption := T('Приостановить на 1 час', 'Pause for 1 hour');
     mniPauseIndefinite.Caption := T('Приостановить до возобновления', 'Pause until resumed');
     mniResume.Caption := T('Возобновить работу', 'Resume');
     mniCheckUpdates.Caption := T('Проверить обновления', 'Check for updates');
-    if FUpdateVersion <> '' then
-      mniDownloadUpdate.Caption := Format(T('Скачать версию %s', 'Download version %s'),
-        [FUpdateVersion]);
+    UpdateDownloadMenuCaption;
     mniReport.Caption := T('Собрать отчёт...', 'Create report...');
     mniDiagnostics.Caption := T('Открыть папку диагностики', 'Open diagnostics folder');
     mniExit.Caption := T('Выход', 'Exit');
@@ -1639,6 +1867,8 @@ begin
 end;
 
 procedure TFormMain.HandleUpdateResult(Res: TUpdateCheckResult);
+var
+  PerMachine: Boolean;
 begin
   try
     DiagnosticsLogFmt('update.check_done success=%s latest=%s newer=%s error="%s"',
@@ -1654,21 +1884,36 @@ begin
     begin
       FUpdateVersion := Res.LatestVersion;
       FUpdateUrl := Res.ReleaseUrl;
-      mniDownloadUpdate.Caption := Format(T('Скачать версию %s', 'Download version %s'),
-        [FUpdateVersion]);
+      FInstallerUrl := Res.InstallerUrl;
+      FInstallerName := Res.InstallerName;
+      FInstallerSha256 := Res.InstallerSha256;
+      // One-click installation only for a copy put there by the installer;
+      // a copy run from elsewhere would be duplicated, not updated.
+      FUpdateInstallable := (FInstallerUrl <> '') and IsInstalledCopy(PerMachine);
+      UpdateDownloadMenuCaption;
       mniDownloadUpdate.Visible := True;
-      FBalloonUrl := FUpdateUrl;
+      FBalloonInstall := FUpdateInstallable;
+      if FUpdateInstallable then
+        FBalloonUrl := ''
+      else
+        FBalloonUrl := FUpdateUrl;
       if Res.Manual then
         FNotificationTimes.Remove('update');
-      ShowNotification('update', Format(T(
-        'Доступна новая версия LayoutSwitcher %s. Щёлкните, чтобы открыть страницу загрузки.',
-        'LayoutSwitcher %s is available. Click to open the download page.'),
-        [FUpdateVersion]));
+      if FUpdateInstallable then
+        ShowNotification('update', Format(T(
+          'Доступна новая версия LayoutSwitcher %s. Щёлкните, чтобы установить её.',
+          'LayoutSwitcher %s is available. Click to install it.'), [FUpdateVersion]))
+      else
+        ShowNotification('update', Format(T(
+          'Доступна новая версия LayoutSwitcher %s. Щёлкните, чтобы открыть страницу загрузки.',
+          'LayoutSwitcher %s is available. Click to open the download page.'),
+          [FUpdateVersion]));
     end
     else if Res.Manual then
     begin
       FNotificationTimes.Remove('update_status');
       FBalloonUrl := '';
+      FBalloonInstall := False;
       if Res.Success then
         ShowNotification('update_status', Format(T(
           'Установлена последняя версия (%s).', 'You have the latest version (%s).'),
@@ -1690,13 +1935,17 @@ end;
 
 procedure TFormMain.mniDownloadUpdateClick(Sender: TObject);
 begin
-  if FUpdateUrl <> '' then
+  if FUpdateInstallable then
+    StartUpdateInstall
+  else if FUpdateUrl <> '' then
     ShellExecute(0, 'open', PChar(FUpdateUrl), nil, nil, SW_SHOWNORMAL);
 end;
 
 procedure TFormMain.TrayIconBalloonClick(Sender: TObject);
 begin
-  if FBalloonUrl <> '' then
+  if FBalloonInstall then
+    StartUpdateInstall
+  else if FBalloonUrl <> '' then
     ShellExecute(0, 'open', PChar(FBalloonUrl), nil, nil, SW_SHOWNORMAL);
 end;
 
@@ -1780,6 +2029,266 @@ begin
         MB_OK or MB_ICONERROR);
   finally
     Dialog.Free;
+  end;
+end;
+
+{ Automatic corrections }
+
+procedure TFormMain.CheckAutoCorrections;
+var
+  WordStart, WordLength: Integer;
+  Word, Template, Replacement, Fixed: string;
+  ToggleCaps: Boolean;
+begin
+  if FPaused or FBufferOverflowed or FFocusIsPassword or FOperationBusy then
+    Exit;
+  if not (FSettings.FixCapsLock or FSettings.FixTwoCapitals or
+          (FSettings.SnippetsEnabled and (Length(FSnippets) > 0))) then
+    Exit;
+  // Exactly one space has just been typed after the word.
+  if not FindLastWord(FBuffer, WordStart, WordLength) or
+     (WordStart + WordLength <> Length(FBuffer)) then
+    Exit;
+  Word := Copy(FBuffer, WordStart, WordLength);
+
+  Replacement := '';
+  Template := '';
+  ToggleCaps := False;
+  if FSettings.SnippetsEnabled and FindSnippet(FSnippets, Word, Template) then
+    Replacement := ExpandSnippet(Template, Now)
+  else if FSettings.FixCapsLock and FCapsOn and IsCapsLockMistake(Word) then
+  begin
+    Replacement := FixCapsLockMistake(Word);
+    ToggleCaps := True;
+  end
+  else if FSettings.FixTwoCapitals and
+     FixTwoCapitals(Word, FSettings.TwoCapitalsExceptions, Fixed) then
+    Replacement := Fixed;
+  if (Replacement = '') or (Replacement = Word) then
+    Exit;
+
+  DiagnosticsLogFmt('autocorrect.queue kind=%s length=%d',
+    [IfThen(ToggleCaps, 'caps_lock', IfThen(Template <> '', 'template', 'two_capitals')),
+     Length(Word)]);
+  QueueRequest(laNone, TConversionChain.PlanReplacement(FBuffer, WordStart,
+    WordLength, Replacement), True, ToggleCaps);
+end;
+
+procedure TFormMain.edCorrectionsExit(Sender: TObject);
+begin
+  ApplyCorrectionsFromEdit;
+end;
+
+procedure TFormMain.ApplyCorrectionsFromEdit;
+var
+  Exceptions: TArray<string>;
+  Snippets: string;
+begin
+  Exceptions := ParseWordList(edTwoCapsExceptions.Text);
+  Snippets := TrimRight(memSnippets.Text);
+  if (string.Join('; ', Exceptions) <> string.Join('; ', FSettings.TwoCapitalsExceptions)) or
+     (Snippets <> FSettings.Snippets) then
+  begin
+    FSettings.TwoCapitalsExceptions := Exceptions;
+    FSettings.Snippets := Snippets;
+    ApplySettings;
+  end;
+end;
+
+procedure TFormMain.cbServiceChange(Sender: TObject);
+begin
+  if FUpdatingControls then
+    Exit;
+  FSettings.Translator := cbTranslator.ItemIndex;
+  FSettings.SearchEngine := cbSearchEngine.ItemIndex;
+  ApplySettings;
+end;
+
+{ Clipboard }
+
+procedure TFormMain.mniClipboardClick(Sender: TObject);
+var
+  Action: TLSAction;
+  Text, Converted: string;
+  Pair: TLayoutPair;
+begin
+  Action := TLSAction((Sender as TMenuItem).Tag);
+  Text := ReadClipboardText(Handle);
+  FBalloonUrl := '';
+  FBalloonInstall := False;
+  FNotificationTimes.Remove('clipboard');
+  if Text = '' then
+  begin
+    ShowNotification('clipboard', T('В буфере обмена нет текста.',
+      'There is no text in the clipboard.'));
+    Exit;
+  end;
+  case Action of
+    laConvert:
+      if FCatalog.ChoosePair(Text, FLastLayout, FPreviousLayout, Pair) then
+        Converted := ConvertTextBetweenLayouts(Text, FCatalog.KeyChars(Pair.Source),
+          FCatalog.KeyChars(Pair.Target))
+      else
+        Converted := Text;
+    laUpperCase: Converted := ChangeTextCase(Text, True);
+    laLowerCase: Converted := ChangeTextCase(Text, False);
+    laTransliterate: Converted := TransliterateText(Text);
+  else
+    Exit;
+  end;
+  if Converted = Text then
+  begin
+    ShowNotification('clipboard', T('Текст в буфере обмена уже в нужном виде.',
+      'The clipboard text needs no change.'));
+    Exit;
+  end;
+  if WriteClipboardText(Handle, Converted) then
+    ShowNotification('clipboard', T('Текст в буфере обмена изменён — его можно вставить.',
+      'The clipboard text has been changed and can be pasted.'))
+  else
+    ShowNotification('clipboard', T('Буфер обмена занят другой программой.',
+      'The clipboard is busy.'));
+  DiagnosticsLogFmt('clipboard.convert action=%s length=%d', [ActionKeys[Action],
+    Length(Text)]);
+end;
+
+{ Export / import }
+
+procedure TFormMain.btnExportClick(Sender: TObject);
+var
+  Dialog: TSaveDialog;
+begin
+  ApplyExcludedFromEdit;
+  ApplyCorrectionsFromEdit;
+  Dialog := TSaveDialog.Create(nil);
+  try
+    Dialog.Title := T('Экспорт настроек LayoutSwitcher', 'Export LayoutSwitcher settings');
+    Dialog.Filter := T('Файл настроек', 'Settings file') + ' (*.ini)|*.ini';
+    Dialog.DefaultExt := 'ini';
+    Dialog.FileName := PORTABLE_INI_NAME;
+    Dialog.Options := Dialog.Options + [ofOverwritePrompt];
+    if not Dialog.Execute then
+      Exit;
+    if ExportSettings(FSettings, Dialog.FileName, DiagnosticsEnabled) then
+      MessageBox(Handle, PChar(T('Настройки сохранены. Чтобы программа работала в ' +
+        'переносном режиме, положите файл LayoutSwitcher.ini рядом с LS.exe.',
+        'Settings saved. To run the program in portable mode, put ' +
+        'LayoutSwitcher.ini next to LS.exe.')), 'LayoutSwitcher',
+        MB_OK or MB_ICONINFORMATION)
+    else
+      MessageBox(Handle, PChar(T('Не удалось сохранить файл.', 'Could not save the file.')),
+        'LayoutSwitcher', MB_OK or MB_ICONERROR);
+  finally
+    Dialog.Free;
+  end;
+end;
+
+procedure TFormMain.btnImportClick(Sender: TObject);
+var
+  Dialog: TOpenDialog;
+  Imported: TLSSettings;
+  Diagnostics: Boolean;
+begin
+  Dialog := TOpenDialog.Create(nil);
+  try
+    Dialog.Title := T('Импорт настроек LayoutSwitcher', 'Import LayoutSwitcher settings');
+    Dialog.Filter := T('Файл настроек', 'Settings file') + ' (*.ini)|*.ini';
+    if not Dialog.Execute then
+      Exit;
+    if not ImportSettings(Dialog.FileName, Imported, Diagnostics) then
+    begin
+      MessageBox(Handle, PChar(T('Файл не похож на настройки LayoutSwitcher.',
+        'The file does not contain LayoutSwitcher settings.')), 'LayoutSwitcher',
+        MB_OK or MB_ICONERROR);
+      Exit;
+    end;
+  finally
+    Dialog.Free;
+  end;
+
+  // Autorun and the elevated task belong to this computer and stay as they are.
+  FSettings := Imported;
+  SetUILanguage(FSettings.Language);
+  ApplySettings;
+  if Diagnostics <> DiagnosticsEnabled then
+  begin
+    SetDiagnosticsEnabled(Diagnostics);
+    if Diagnostics then
+      InitializeDiagnostics
+    else
+      ShutdownDiagnostics;
+    FUpdatingControls := True;
+    try
+      chkDiagnostics.Checked := Diagnostics;
+    finally
+      FUpdatingControls := False;
+    end;
+  end;
+  LoadControlsFromSettings;
+  ApplyLanguage;
+  ApplyStickyKeysSetting;
+  DiagnosticsLog('settings.imported');
+  MessageBox(Handle, PChar(T('Настройки импортированы.', 'Settings imported.')),
+    'LayoutSwitcher', MB_OK or MB_ICONINFORMATION);
+end;
+
+{ Update installation }
+
+procedure TFormMain.UpdateDownloadMenuCaption;
+begin
+  if FUpdateVersion = '' then
+    Exit;
+  if FUpdateInstallable then
+    mniDownloadUpdate.Caption := Format(T('Установить версию %s', 'Install version %s'),
+      [FUpdateVersion])
+  else
+    mniDownloadUpdate.Caption := Format(T('Скачать версию %s', 'Download version %s'),
+      [FUpdateVersion]);
+end;
+
+procedure TFormMain.StartUpdateInstall;
+begin
+  if Assigned(FDownloadThread) then
+  begin
+    if not FDownloadThread.Finished then
+      Exit;
+    FreeAndNil(FDownloadThread);
+  end;
+  FBalloonUrl := '';
+  FBalloonInstall := False;
+  FNotificationTimes.Remove('update_download');
+  ShowNotification('update_download', Format(T('Загружается LayoutSwitcher %s...',
+    'Downloading LayoutSwitcher %s...'), [FUpdateVersion]));
+  DiagnosticsLogFmt('update.download_start version=%s', [FUpdateVersion]);
+  FDownloadThread := TUpdateDownloadThread.Create(Handle, WM_LS_UPDATE_DOWNLOADED,
+    FInstallerUrl, IncludeTrailingPathDelimiter(GetEnvironmentVariable('TEMP')) +
+    FInstallerName, FInstallerSha256, FVersion);
+end;
+
+procedure TFormMain.HandleDownloadResult(Res: TUpdateDownloadResult);
+var
+  PerMachine: Boolean;
+begin
+  try
+    DiagnosticsLogFmt('update.download_done success=%s error="%s"',
+      [BoolToStr(Res.Success, True), Res.ErrorText]);
+    FNotificationTimes.Remove('update_download');
+    if Res.Success and IsInstalledCopy(PerMachine) and
+       StartSilentInstaller(Res.FileName, PerMachine) then
+    begin
+      // The installer waits for this process to exit and then starts the
+      // new version.
+      DiagnosticsLog('update.installer_started');
+      Application.Terminate;
+      Exit;
+    end;
+    FBalloonUrl := FUpdateUrl;
+    ShowNotification('update_download', T(
+      'Не удалось установить обновление автоматически. Щёлкните, чтобы открыть ' +
+      'страницу загрузки.',
+      'Could not install the update automatically. Click to open the download page.'));
+  finally
+    Res.Free;
   end;
 end;
 

@@ -47,6 +47,8 @@ function SendChord(ModifierVK, VK: Word): Boolean;
 function SendBackspaces(Count: Integer): Boolean;
 function TypeUnicodeText(const Value: string): Boolean;
 function AreModifiersPhysicallyDown: Boolean;
+// Press and release one key; marked as our own input.
+function SendKeyTap(VK: Word): Boolean;
 
 implementation
 
@@ -451,6 +453,19 @@ begin
     if Index <= Length(Value) then
       Sleep(CHAR_INTERVAL_MS);
   end;
+end;
+
+function SendKeyTap(VK: Word): Boolean;
+var
+  Inputs: array[0..1] of TInput;
+begin
+  FillChar(Inputs, SizeOf(Inputs), 0);
+  Inputs[0].Itype := INPUT_KEYBOARD;
+  Inputs[0].ki.wVk := VK;
+  Inputs[0].ki.dwExtraInfo := LS_INPUT_TAG;
+  Inputs[1] := Inputs[0];
+  Inputs[1].ki.dwFlags := KEYEVENTF_KEYUP;
+  Result := SendInput(2, Inputs[0], SizeOf(TInput)) = 2;
 end;
 
 function AreModifiersPhysicallyDown: Boolean;

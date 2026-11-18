@@ -56,6 +56,8 @@ const
 function OpenClipboardWithRetry(Owner: HWND; TimeoutMS: DWORD): Boolean;
 function WaitForClipboardChange(OldSequence, TimeoutMS: DWORD): Boolean;
 function ReadClipboardText(Owner: HWND): string;
+// Replaces the clipboard contents with plain text.
+function WriteClipboardText(Owner: HWND; const Text: string): Boolean;
 
 implementation
 
@@ -113,6 +115,40 @@ begin
     finally
       GlobalUnlock(DataHandle);
     end;
+  finally
+    CloseClipboard;
+  end;
+end;
+
+function WriteClipboardText(Owner: HWND; const Text: string): Boolean;
+var
+  DataHandle: HGLOBAL;
+  Data: PChar;
+  Size: NativeUInt;
+begin
+  Result := False;
+  Size := (Length(Text) + 1) * SizeOf(Char);
+  DataHandle := GlobalAlloc(GMEM_MOVEABLE, Size);
+  if DataHandle = 0 then
+    Exit;
+  Data := GlobalLock(DataHandle);
+  if Data = nil then
+  begin
+    GlobalFree(DataHandle);
+    Exit;
+  end;
+  Move(PChar(Text)^, Data^, Size);
+  GlobalUnlock(DataHandle);
+  if not OpenClipboardWithRetry(Owner, CLIPBOARD_OPEN_TIMEOUT) then
+  begin
+    GlobalFree(DataHandle);
+    Exit;
+  end;
+  try
+    if EmptyClipboard and (SetClipboardData(CF_UNICODETEXT, DataHandle) <> 0) then
+      Result := True
+    else
+      GlobalFree(DataHandle);
   finally
     CloseClipboard;
   end;

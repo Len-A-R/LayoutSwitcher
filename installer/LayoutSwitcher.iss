@@ -8,8 +8,8 @@
 #define AppName "LayoutSwitcher"
 #define AppExe "LS.exe"
 #define AppVersion GetVersionNumbersString(AddBackslash(SourcePath) + "..\Win64\Release\LS.exe")
-; "{{" escapes the brace: Inno Setup treats "{...}" as a constant.
-#define AppMutexName "Local\LayoutSwitcher.{{7D419F5E-2D00-46CB-B50E-48D7F8A070C1}"
+; Used in [Code] only, where braces need no escaping.
+#define AppMutexName "Local\LayoutSwitcher.{7D419F5E-2D00-46CB-B50E-48D7F8A070C1}"
 
 [Setup]
 AppId={{6F0D1E3A-5B7C-4C0B-9E55-4A1D9E2B7C11}
@@ -28,8 +28,8 @@ PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 ArchitecturesAllowed=x86compatible x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-; The running instance must be closed before its files are replaced.
-AppMutex={#AppMutexName}
+; The running instance must be closed before its files are replaced; this
+; is checked in InitializeSetup (see [Code]).
 CloseApplications=no
 OutputDir=..\dist
 OutputBaseFilename=LayoutSwitcher-Setup-{#AppVersion}
@@ -44,6 +44,8 @@ Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [CustomMessages]
+russian.CloseApp=LayoutSwitcher запущен. Закройте его (значок в трее → «Выход») и нажмите «Повтор».
+english.CloseApp=LayoutSwitcher is running. Close it (tray icon → Exit) and click Retry.
 russian.AutostartTask=Запускать при входе в Windows
 english.AutostartTask=Start with Windows
 russian.RemoveSettings=Удалить также настройки и журналы диагностики LayoutSwitcher?
@@ -66,11 +68,41 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
+; Update started from the program itself (/WAITAPP=1): start the new version.
+Filename: "{app}\{#AppExe}"; Flags: nowait runasoriginaluser; Check: IsUpdateRun
 
 [UninstallDelete]
 Type: dirifempty; Name: "{app}"
 
 [Code]
+function IsUpdateRun: Boolean;
+begin
+  Result := ExpandConstant('{param:WAITAPP|0}') = '1';
+end;
+
+function InitializeSetup: Boolean;
+var
+  Waited: Integer;
+begin
+  Result := True;
+  if IsUpdateRun then
+  begin
+    // The program started this update and is exiting right now.
+    Waited := 0;
+    while CheckForMutexes('{#AppMutexName}') and (Waited < 30000) do
+    begin
+      Sleep(250);
+      Waited := Waited + 250;
+    end;
+  end;
+  while CheckForMutexes('{#AppMutexName}') do
+    if MsgBox(CustomMessage('CloseApp'), mbError, MB_RETRYCANCEL) <> IDRETRY then
+    begin
+      Result := False;
+      Exit;
+    end;
+end;
+
 function TaskExists: Boolean;
 var
   ResultCode: Integer;

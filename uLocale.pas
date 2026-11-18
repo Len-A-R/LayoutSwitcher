@@ -3,8 +3,8 @@
 // Two-language user interface (Russian / English).
 //
 // Strings are written next to each other at the call site: T('Выход', 'Exit').
-// The language is read from HKCU\Software\LayoutSwitcher\Language when the
-// unit initialises, so it is already known for the very first message box.
+// The language is read from the settings store (registry or portable INI)
+// when the unit initialises, so it is already known for the very first message box.
 
 interface
 
@@ -21,10 +21,9 @@ implementation
 
 uses
   Winapi.Windows,
-  System.Win.Registry;
+  uSettingsStore;
 
 const
-  SETTINGS_KEY = 'Software\LayoutSwitcher';
   LANGUAGE_VALUE = 'Language';
   LANG_RUSSIAN_PRIMARY = $19;
   LANG_UKRAINIAN_PRIMARY = $22;
@@ -75,26 +74,21 @@ end;
 
 function ReadLanguageSetting: TLSLanguage;
 var
-  Registry: TRegistry;
+  Store: TSettingsStore;
   Value: Integer;
 begin
   Result := llAuto;
-  Registry := TRegistry.Create(KEY_READ);
   try
-    Registry.RootKey := HKEY_CURRENT_USER;
+    Store := OpenSettingsStore(False);
     try
-      if Registry.OpenKeyReadOnly(SETTINGS_KEY) and
-         Registry.ValueExists(LANGUAGE_VALUE) then
-      begin
-        Value := Registry.ReadInteger(LANGUAGE_VALUE);
-        if (Value >= Ord(Low(TLSLanguage))) and (Value <= Ord(High(TLSLanguage))) then
-          Result := TLSLanguage(Value);
-      end;
-    except
-      Result := llAuto;
+      Value := Store.ReadInteger(LANGUAGE_VALUE, Ord(llAuto));
+      if (Value >= Ord(Low(TLSLanguage))) and (Value <= Ord(High(TLSLanguage))) then
+        Result := TLSLanguage(Value);
+    finally
+      Store.Free;
     end;
-  finally
-    Registry.Free;
+  except
+    Result := llAuto;
   end;
 end;
 

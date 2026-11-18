@@ -17,7 +17,8 @@ interface
 uses
   Winapi.Windows, Winapi.Messages,
   System.SysUtils, System.Classes, System.SyncObjs,
-  uSettings, uLayoutConverter, uClipboardSnapshot, uConversionChain;
+  uSettings, uLayoutConverter, uClipboardSnapshot, uConversionChain,
+  uUIAutomation;
 
 type
   TBufferAction = (baKeep, baClear, baSet);
@@ -29,6 +30,15 @@ type
     // Part of the tracked phrase to transform; Mode = bmNone when the phrase
     // is unavailable and other text sources must be used.
     Plan: TBufferPlan;
+    // Automatic correction after a space: applied only if nothing has been
+    // typed since (GKeystrokeCount still equals KeystrokeStamp).
+    Automatic: Boolean;
+    KeystrokeStamp: Integer;
+    ToggleCapsLock: Boolean;  // Turn Caps Lock off after the correction,
+    CapsOffKey: Word;         // with this key (Shift if Shift turns it off).
+    // Triggered by a double Alt: wait until the application leaves its menu
+    // mode and take the focused window again.
+    SettleFocus: Boolean;
     FocusWnd: HWND;
     WindowLayout: HKL;
     PreviousLayout: HKL;
@@ -42,6 +52,7 @@ type
     Success: Boolean;
     UsedBuffer: Boolean;   // The request plan was applied.
     OriginalText: string;  // Text before a selection/caret replacement.
+    LookupText: string;    // laTranslate / laWebSearch: text to look up.
     BufferAction: TBufferAction;
     NewBufferText: string;
     FocusIsPassword: Boolean;
@@ -67,7 +78,11 @@ type
     procedure Process(Request: TOperationRequest; Res: TOperationResult);
     function ReadNativeEdit(Target: HWND; out Text: string;
       out SelStart, SelEnd: DWORD): Boolean;
-    function GetNativeSelection(Target: HWND; out Text: string): Boolean;
+    function GetNativeSelection(Target: HWND; out Text: string;
+      AllowCaretWord: Boolean = True): Boolean;
+    function TypingContinued(Request: TOperationRequest): Boolean;
+    procedure ProcessLookup(Request: TOperationRequest; Res: TOperationResult;
+      const Focus: TUIAFocusInfo);
     function ReplaceNativeBeforeCaret(Target: HWND;
       const Expected, Replacement: string): Boolean;
     function GetClipboardSelection(Request: TOperationRequest;
@@ -89,11 +104,15 @@ type
     procedure Shutdown;
   end;
 
+var
+  // Physical key presses seen by the UI thread (incremented there).
+  GKeystrokeCount: Integer;
+
 implementation
 
 uses
   Winapi.ActiveX,
-  uDiagnostics, uWinUtils, uUIAutomation, uLocale;
+  uDiagnostics, uWinUtils, uLocale;
 
 const
   WM_LS_EXECUTE = WM_APP + 100;
@@ -105,6 +124,7 @@ const
   WINDOW_MESSAGE_TIMEOUT = 250;
   MAX_CARET_TEXT_LEN = 300;
   LAYOUT_SWITCH_TIMEOUT = 150;
+  FOCUS_SETTLE_DELAY = 120;
 
 { TOperationWorker }
 
@@ -301,7 +321,7 @@ begin
 end;
 
 function TOperationWorker.GetNativeSelection(Target: HWND;
-  out Text: string): Boolean;
+  out Text: string; AllowCaretWord: Boolean): Boolean;
 var
   Buffer: string;
   SelStart, SelEnd: DWORD;
@@ -315,7 +335,7 @@ begin
   if SelStart = SelEnd then
   begin
     // No selection: take the word immediately before the caret.
-    if SelStart = 0 then
+    if (SelStart = 0) or not AllowCaretWord then
       Exit;
     while (SelStart > 0) and (Ord(Buffer[SelStart]) > 32) do
       Dec(SelStart);
@@ -474,7 +494,7 @@ var
 begin
   Result := False;
   Converted := Text;
-  if Request.Plan.Mode = bmUndo then
+  if Request.Plan.Mode in [bmUndo, bmFix] then
   begin
     Converted := Request.Plan.Replacement;
     Res.TargetLayout := Request.Plan.ForcedTarget;
@@ -594,6 +614,63 @@ begin
   DiagnosticsLog('layout.switch_failed via=win_space');
 end;
 
+function TOperationWorker.TypingContinued(Request: TOperationRequest): Boolean;
+begin
+  Result := Request.Automatic and
+    (AtomicCmpExchange(GKeystrokeCount, 0, 0) <> Request.KeystrokeStamp);
+  if Result then
+    DiagnosticsLog('autocorrect.skipped reason=typing_continued');
+end;
+
+procedure TOperationWorker.ProcessLookup(Request: TOperationRequest;
+  Res: TOperationResult; const Focus: TUIAFocusInfo);
+const
+  MAX_LOOKUP_LEN = 1000;
+var
+  Text, Source: string;
+  CaretText: WideString;
+  CaretRange: IUnknown;
+begin
+  // Nothing is replaced: a real selection first, then what was just typed,
+  // then the word before the caret, the clipboard fallback last.
+  if GetNativeSelection(Request.FocusWnd, Text, False) then
+    Source := 'native'
+  else if Focus.HasSelection then
+  begin
+    Text := Focus.SelectionText;
+    Source := 'uia';
+  end
+  else if Trim(Request.Plan.Text) <> '' then
+  begin
+    Text := Trim(Request.Plan.Text);
+    Source := 'buffer';
+  end
+  else if GetNativeSelection(Request.FocusWnd, Text, True) then
+    Source := 'native_caret'
+  else if UIAGetTextBeforeCaret(Focus, MAX_CARET_TEXT_LEN, CaretText, CaretRange) then
+  begin
+    Text := CaretText;
+    Source := 'uia_caret';
+  end
+  else if GetClipboardSelection(Request, Text) then
+    Source := 'clipboard'
+  else
+  begin
+    DiagnosticsLog('lookup.no_text');
+    Notify(Res, 'lookup_empty', T('Выделите текст, который нужно перевести или найти.',
+      'Select the text to translate or search for.'));
+    Exit;
+  end;
+  Text := Trim(StringReplace(StringReplace(Text, #13, ' ', [rfReplaceAll]), #10, ' ',
+    [rfReplaceAll]));
+  if Length(Text) > MAX_LOOKUP_LEN then
+    SetLength(Text, MAX_LOOKUP_LEN);
+  DiagnosticsLogFmt('lookup.text source=%s length=%d', [Source, Length(Text)]);
+  Res.LookupText := Text;
+  Res.Success := Text <> '';
+  Res.BufferAction := baKeep;
+end;
+
 procedure TOperationWorker.Process(Request: TOperationRequest;
   Res: TOperationResult);
 var
@@ -606,6 +683,18 @@ begin
   FSelectionIsNative := False;
   FSelectionRange := nil;
   FClipboardSkipReason := '';
+
+  if Request.SettleFocus then
+  begin
+    WaitForModifiersReleased(MODIFIER_RELEASE_TIMEOUT);
+    Sleep(FOCUS_SETTLE_DELAY);
+    if (GetFocusedWindow <> 0) and (GetFocusedWindow <> Request.FocusWnd) then
+    begin
+      DiagnosticsLogFmt('operation.focus_settled from=%p to=%p',
+        [Pointer(Request.FocusWnd), Pointer(GetFocusedWindow)]);
+      Request.FocusWnd := GetFocusedWindow;
+    end;
+  end;
 
   if GetFocusedWindow <> Request.FocusWnd then
   begin
@@ -637,6 +726,12 @@ begin
     Exit;
   end;
 
+  if Request.Action in [laTranslate, laWebSearch] then
+  begin
+    ProcessLookup(Request, Res, Focus);
+    Exit;
+  end;
+
   // 1. Text typed since the last caret jump: exact, no clipboard, and it
   //    supports widening from the last word to the whole phrase.
   if Request.Plan.Mode <> bmNone then
@@ -650,6 +745,12 @@ begin
     Typed := Converted + Request.Plan.Tail;
     if Converted = Region then
       Res.Success := True
+    else if TypingContinued(Request) then
+    begin
+      // The text before the caret is no longer what the plan expects.
+      Res.BufferAction := baKeep;
+      Exit;
+    end
     else if ReplaceNativeBeforeCaret(Request.FocusWnd,
          Region + Request.Plan.Tail, Typed) then
     begin
@@ -658,8 +759,13 @@ begin
     end
     else
       Res.Success := WaitForModifiersReleased(MODIFIER_RELEASE_TIMEOUT) and
-        (GetFocusedWindow = Request.FocusWnd) and
+        (GetFocusedWindow = Request.FocusWnd) and not TypingContinued(Request) and
         SendBackspaces(Request.Plan.DeleteCount) and TypeUnicodeText(Typed);
+    if Res.Success and Request.ToggleCapsLock then
+    begin
+      SendKeyTap(Request.CapsOffKey);
+      DiagnosticsLog('autocorrect.caps_lock_turned_off');
+    end;
     if Res.Success then
     begin
       Res.BufferAction := baSet;
