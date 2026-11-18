@@ -12,7 +12,7 @@ uses
   Vcl.Graphics, Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.ExtCtrls, Vcl.Menus,
   System.ImageList, Vcl.ImgList, PngImageList, Vcl.StdCtrls, Vcl.ComCtrls,
   uSettings, uGestureDetector, uOperationWorker, uConversionChain,
-  uLayoutIndicator, uUpdateCheck, uLayoutConverter, uTextTools;
+  uLayoutIndicator, uUpdateCheck, uUpdateProgress, uLayoutConverter, uTextTools;
 
 const
   INSTANCE_WINDOW_PROP = 'LayoutSwitcher.Instance.v2';
@@ -176,6 +176,7 @@ type
     FInstallerName: string;
     FInstallerSha256: string;
     FDownloadThread: TUpdateDownloadThread;
+    FProgress: TUpdateProgressWindow;
     FCatalog: TKeyboardLayoutCatalog;
     FSnippets: TArray<TSnippet>;
     // Caps Lock state tracked from Raw Input: GetKeyState in this thread does
@@ -234,6 +235,9 @@ type
     procedure UpdateDownloadMenuCaption;
     procedure StartUpdateInstall;
     procedure HandleDownloadResult(Res: TUpdateDownloadResult);
+    procedure HandleDownloadProgress(ReceivedKB, TotalKB: Int64);
+    procedure DownloadCancel(Sender: TObject);
+    function DownloadRunning: Boolean;
   protected
     procedure CreateWnd; override;
     procedure DestroyWnd; override;
@@ -262,6 +266,7 @@ const
   WM_LS_OPERATION_DONE = WM_APP + 10;
   WM_LS_UPDATE_RESULT = WM_APP + 11;
   WM_LS_UPDATE_DOWNLOADED = WM_APP + 12;
+  WM_LS_UPDATE_PROGRESS = WM_APP + 13;
   // The phrase typed since the last caret jump (spaces included).
   MAX_PHRASE_LEN = 300;
   TO_UNICODE_NO_STATE_CHANGE = 4;
@@ -486,9 +491,12 @@ begin
     TUpdateCheckResult(Msg.lParam).Free;
   if Assigned(FDownloadThread) then
   begin
+    // Cancels the download at the next received block.
+    FDownloadThread.Terminate;
     FDownloadThread.WaitFor;
     FreeAndNil(FDownloadThread);
   end;
+  FreeAndNil(FProgress);
   while PeekMessage(Msg, Handle, WM_LS_UPDATE_DOWNLOADED, WM_LS_UPDATE_DOWNLOADED,
           PM_REMOVE) do
     TUpdateDownloadResult(Msg.lParam).Free;
@@ -542,6 +550,12 @@ begin
       if (Message.WParam = PBT_APMRESUMEAUTOMATIC) or
          (Message.WParam = PBT_APMRESUMESUSPEND) then
         ResetInputState('power_resume', True);
+  end;
+
+  if Message.Msg = WM_LS_UPDATE_PROGRESS then
+  begin
+    HandleDownloadProgress(Int64(Message.WParam), Int64(Message.LParam));
+    Exit;
   end;
 
   if Message.Msg = WM_LS_UPDATE_DOWNLOADED then
@@ -2246,23 +2260,49 @@ begin
       [FUpdateVersion]);
 end;
 
+function TFormMain.DownloadRunning: Boolean;
+begin
+  Result := Assigned(FDownloadThread) and not FDownloadThread.Finished;
+end;
+
 procedure TFormMain.StartUpdateInstall;
 begin
-  if Assigned(FDownloadThread) then
+  if DownloadRunning then
   begin
-    if not FDownloadThread.Finished then
-      Exit;
-    FreeAndNil(FDownloadThread);
+    // A second click just brings the progress window back.
+    FProgress.ShowWindow;
+    Exit;
   end;
-  FBalloonUrl := '';
-  FBalloonInstall := False;
-  FNotificationTimes.Remove('update_download');
-  ShowNotification('update_download', Format(T('Загружается LayoutSwitcher %s...',
-    'Downloading LayoutSwitcher %s...'), [FUpdateVersion]));
+  FreeAndNil(FDownloadThread);
+  if not Assigned(FProgress) then
+  begin
+    FProgress := TUpdateProgressWindow.Create;
+    FProgress.OnCancel := DownloadCancel;
+  end;
+  FProgress.Start(FUpdateVersion);
+  mniDownloadUpdate.Caption := Format(T('Загрузка версии %s...',
+    'Downloading version %s...'), [FUpdateVersion]);
   DiagnosticsLogFmt('update.download_start version=%s', [FUpdateVersion]);
   FDownloadThread := TUpdateDownloadThread.Create(Handle, WM_LS_UPDATE_DOWNLOADED,
-    FInstallerUrl, IncludeTrailingPathDelimiter(GetEnvironmentVariable('TEMP')) +
+    WM_LS_UPDATE_PROGRESS, FInstallerUrl, IncludeTrailingPathDelimiter(GetEnvironmentVariable('TEMP')) +
     FInstallerName, FInstallerSha256, FVersion);
+end;
+
+procedure TFormMain.HandleDownloadProgress(ReceivedKB, TotalKB: Int64);
+begin
+  if not Assigned(FProgress) or not DownloadRunning then
+    Exit;
+  FProgress.SetProgress(ReceivedKB, TotalKB);
+  if FProgress.Percent >= 0 then
+    mniDownloadUpdate.Caption := Format(T('Загрузка версии %s: %d%%',
+      'Downloading version %s: %d%%'), [FUpdateVersion, FProgress.Percent]);
+end;
+
+procedure TFormMain.DownloadCancel(Sender: TObject);
+begin
+  DiagnosticsLog('update.download_cancel_requested');
+  if DownloadRunning then
+    FDownloadThread.Terminate;
 end;
 
 procedure TFormMain.HandleDownloadResult(Res: TUpdateDownloadResult);
@@ -2270,9 +2310,25 @@ var
   PerMachine: Boolean;
 begin
   try
-    DiagnosticsLogFmt('update.download_done success=%s error="%s"',
-      [BoolToStr(Res.Success, True), Res.ErrorText]);
+    DiagnosticsLogFmt('update.download_done success=%s cancelled=%s error="%s"',
+      [BoolToStr(Res.Success, True), BoolToStr(Res.Cancelled, True), Res.ErrorText]);
     FNotificationTimes.Remove('update_download');
+    UpdateDownloadMenuCaption;
+    if Res.Cancelled then
+    begin
+      if Assigned(FProgress) then
+        FProgress.Close;
+      FBalloonUrl := '';
+      FBalloonInstall := False;
+      ShowNotification('update_download', T('Загрузка обновления отменена.',
+        'The update download was cancelled.'));
+      Exit;
+    end;
+    if Res.Success and IsInstalledCopy(PerMachine) then
+    begin
+      if Assigned(FProgress) then
+        FProgress.ShowInstalling;
+    end;
     if Res.Success and IsInstalledCopy(PerMachine) and
        StartSilentInstaller(Res.FileName, PerMachine) then
     begin
@@ -2282,6 +2338,8 @@ begin
       Application.Terminate;
       Exit;
     end;
+    if Assigned(FProgress) then
+      FProgress.Close;
     FBalloonUrl := FUpdateUrl;
     ShowNotification('update_download', T(
       'Не удалось установить обновление автоматически. Щёлкните, чтобы открыть ' +

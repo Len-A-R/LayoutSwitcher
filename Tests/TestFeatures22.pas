@@ -98,13 +98,15 @@ type
     procedure ImportRejectsForeignFile;
     [Test]
     procedure SetupAssetName;
+    [Test]
+    procedure FormatsDownloadProgress;
   end;
 
 implementation
 
 uses
   Winapi.Windows, System.SysUtils, System.IOUtils, System.DateUtils,
-  uLocale, uUpdateCheck;
+  uLocale, uUpdateCheck, uUpdateProgress;
 
 { TAutoCorrectionTests }
 
@@ -523,6 +525,25 @@ begin
     Assert.IsFalse(ImportSettings(FileName + '.missing', Loaded, Diagnostics));
   finally
     System.SysUtils.DeleteFile(FileName);
+  end;
+end;
+
+procedure TSettingsFileTests.FormatsDownloadProgress;
+var
+  Saved: TLSLanguage;
+begin
+  Saved := CurrentLanguageSetting;
+  try
+    SetUILanguage(llRussian);
+    Assert.AreEqual(FormatFloat('0.0', 1) + ' МБ из ' + FormatFloat('0.0', 4) + ' МБ (25%)',
+      FormatDownloadProgress(1024, 4096));
+    Assert.AreEqual('Загружено ' + FormatFloat('0.0', 0.5) + ' МБ',
+      FormatDownloadProgress(512, 0));
+    SetUILanguage(llEnglish);
+    Assert.AreEqual(FormatFloat('0.0', 4) + ' MB of ' + FormatFloat('0.0', 4) + ' MB (100%)',
+      FormatDownloadProgress(4096, 4096));
+  finally
+    SetUILanguage(Saved);
   end;
 end;
 

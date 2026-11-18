@@ -33,6 +33,7 @@ type
   TUpdateDownloadResult = class
   public
     Success: Boolean;
+    Cancelled: Boolean;
     FileName: string;
     ErrorText: string;
   end;
@@ -46,10 +47,16 @@ type
     FFileName: string;
     FSha256: string;
     FUserAgent: string;
+    FProgressMsg: UINT;
+    FLastReport: DWORD;
+    procedure ReceiveData(const Sender: TObject; ContentLength, ReadCount: Int64;
+      var Abort: Boolean);
   protected
     procedure Execute; override;
   public
-    constructor Create(NotifyWnd: HWND; NotifyMsg: UINT;
+    // ProgressMsg is posted with WParam = KiB received, LParam = KiB total
+    // (0 when the server does not send the size).  Terminate cancels.
+    constructor Create(NotifyWnd: HWND; NotifyMsg, ProgressMsg: UINT;
       const Url, FileName, Sha256, CurrentVersion: string);
   end;
 
@@ -208,17 +215,40 @@ end;
 
 { TUpdateDownloadThread }
 
-constructor TUpdateDownloadThread.Create(NotifyWnd: HWND; NotifyMsg: UINT;
+constructor TUpdateDownloadThread.Create(NotifyWnd: HWND; NotifyMsg, ProgressMsg: UINT;
   const Url, FileName, Sha256, CurrentVersion: string);
 begin
   FNotifyWnd := NotifyWnd;
   FNotifyMsg := NotifyMsg;
+  FProgressMsg := ProgressMsg;
   FUrl := Url;
   FFileName := FileName;
   FSha256 := LowerCase(Sha256);
   FUserAgent := 'LayoutSwitcher/' + CurrentVersion;
   FreeOnTerminate := False;
   inherited Create(False);
+end;
+
+procedure TUpdateDownloadThread.ReceiveData(const Sender: TObject;
+  ContentLength, ReadCount: Int64; var Abort: Boolean);
+const
+  REPORT_INTERVAL_MS = 100;
+var
+  Total: Int64;
+begin
+  Abort := Terminated;
+  if Abort then
+    Exit;
+  // A few updates per second are enough for a progress bar.
+  if (GetTickCount - FLastReport < REPORT_INTERVAL_MS) and
+     (ReadCount <> ContentLength) then
+    Exit;
+  FLastReport := GetTickCount;
+  Total := ContentLength;
+  if Total < 0 then
+    Total := 0;
+  PostMessage(FNotifyWnd, FProgressMsg, WPARAM(ReadCount div 1024),
+    LPARAM(Total div 1024));
 end;
 
 procedure TUpdateDownloadThread.Execute;
@@ -239,13 +269,16 @@ begin
       Client.ResponseTimeout := 60000;
       Client.UserAgent := FUserAgent;
       Client.HandleRedirects := True;
+      Client.OnReceiveData := ReceiveData;
       Stream := TFileStream.Create(FFileName, fmCreate);
       try
         Response := Client.Get(FUrl, Stream);
       finally
         Stream.Free;
       end;
-      if Response.StatusCode <> 200 then
+      if Terminated then
+        Res.Cancelled := True
+      else if Response.StatusCode <> 200 then
         Res.ErrorText := Format('HTTP %d', [Response.StatusCode])
       else
       begin
@@ -260,7 +293,11 @@ begin
     end;
   except
     on E: Exception do
+    begin
+      // Aborting from ReceiveData ends the request with an exception.
+      Res.Cancelled := Terminated;
       Res.ErrorText := E.Message;
+    end;
   end;
   if not Res.Success then
     System.SysUtils.DeleteFile(FFileName);
