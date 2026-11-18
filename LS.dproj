@@ -134,6 +134,9 @@
     </PropertyGroup>
     <PropertyGroup Condition="'$(Cfg_2_Win64)'!=''">
         <AppDPIAwarenessMode>PerMonitorV2</AppDPIAwarenessMode>
+        <VerInfo_Keys>CompanyName=Len-A-R Soft;FileDescription=LayoutSwitcher;FileVersion=2.2.1.0;InternalName=LayoutSwitcher;LegalCopyright=len-a-r;LegalTrademarks=;OriginalFilename=LS.exe;ProgramID=com.embarcadero.$(MSBuildProjectName);ProductName=LayoutSwitcher;ProductVersion=2.2.0.0;Comments=LayoutSwitcher</VerInfo_Keys>
+        <Icon_MainIcon>$(ProjectName).Artwork\Windows\AppIcon.ico</Icon_MainIcon>
+        <VerInfo_Release>1</VerInfo_Release>
     </PropertyGroup>
     <ItemGroup>
         <DelphiCompile Include="$(MainSource)">
@@ -177,10 +180,7 @@
                 <Source>
                     <Source Name="MainSource">LS.dpr</Source>
                 </Source>
-                <Excluded_Packages>
-                    <Excluded_Packages Name="$(BDSBIN)\dcloffice2k290.bpl">Microsoft Office 2000 Sample Automation Server Wrapper Components</Excluded_Packages>
-                    <Excluded_Packages Name="$(BDSBIN)\dclofficexp290.bpl">Microsoft Office XP Sample Automation Server Wrapper Components</Excluded_Packages>
-                </Excluded_Packages>
+                <Excluded_Packages/>
             </Delphi.Personality>
             <Deployment Version="5">
                 <DeployFile LocalName="$(ProjectName).Artwork\Windows\Uwp_150.png" Configuration="Release" Class="UWP_DelphiLogo150">
