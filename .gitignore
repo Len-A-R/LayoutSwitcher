@@ -15,6 +15,9 @@ $RECYCLE.BIN/
 *.rsm
 *.map
 *.drc
+Win32/
+Win64/
 LS.delphilsp.json
 LS.dsv
 __history/uMain.pas.~*~
+Tests/out/

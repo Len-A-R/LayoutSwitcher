@@ -1,0 +1,372 @@
+﻿unit uSettings;
+
+// User preferences stored in HKCU\Software\LayoutSwitcher and autorun helpers.
+// The unit has no VCL dependencies so it can be used from tests.
+
+interface
+
+uses
+  System.SysUtils;
+
+type
+  TLSAction = (laNone, laConvert, laUpperCase, laLowerCase, laInvertCase);
+  TLSGesture = (lgNone, lgDoubleShift, lgDoubleLCtrl, lgDoubleRCtrl, lgBothCtrl);
+  TLSActionGestures = array[laConvert..laInvertCase] of TLSGesture;
+
+  TLSSettings = record
+    ActionGestures: TLSActionGestures;
+    DoubleTapInterval: Cardinal;
+    ExcludedProcesses: TArray<string>;
+    PauseInFullscreen: Boolean;
+    ShowNotifications: Boolean;
+    class function Defaults: TLSSettings; static;
+    function ActionForGesture(Gesture: TLSGesture): TLSAction;
+    function GestureForAction(Action: TLSAction): TLSGesture;
+    // Assigns a gesture and disables any other action that used it.
+    procedure AssignGesture(Action: TLSAction; Gesture: TLSGesture);
+    function IsProcessExcluded(const ProcessName: string): Boolean;
+  end;
+
+const
+  MIN_DOUBLE_TAP_INTERVAL = 200;
+  MAX_DOUBLE_TAP_INTERVAL = 1000;
+  DEFAULT_DOUBLE_TAP_INTERVAL = 500;
+  SETTINGS_REGISTRY_KEY = 'Software\LayoutSwitcher';
+  STARTUP_VALUE_NAME = 'LayoutSwitcher';
+
+  ActionNames: array[TLSAction] of string = (
+    'Нет',
+    'Конвертировать раскладку',
+    'Преобразовать в ВЕРХНИЙ регистр',
+    'Преобразовать в нижний регистр',
+    'Инвертировать регистр');
+
+  ActionKeys: array[TLSAction] of string = (
+    'none', 'convert_layout', 'uppercase', 'lowercase', 'invert_case');
+
+  GestureNames: array[TLSGesture] of string = (
+    'Отключено',
+    'Двойной Shift',
+    'Двойной левый Ctrl',
+    'Двойной правый Ctrl',
+    'Левый Ctrl + правый Ctrl');
+
+  // Screenshot tools own full-screen overlays, use Shift/Ctrl themselves and
+  // monitor the clipboard.  LayoutSwitcher must not inject input into them.
+  DefaultExcludedProcesses: array[0..5] of string = (
+    'ShareX.exe',
+    'Greenshot.exe',
+    'Lightshot.exe',
+    'SnippingTool.exe',
+    'ScreenClippingHost.exe',
+    'PicPick.exe');
+
+function LoadSettings: TLSSettings;
+function SaveSettings(const Settings: TLSSettings): Boolean;
+function ParseProcessList(const Text: string): TArray<string>;
+function ProcessListToText(const List: TArray<string>): string;
+function ClampDoubleTapInterval(Value: Integer): Cardinal;
+
+procedure AddToStartup(const AppName, AppPath: string);
+procedure RemoveFromStartup(const AppName: string);
+function GetStartupCommand(const AppName: string): string;
+function IsInStartup(const AppName: string): Boolean;
+function StartupCommandToPath(const Command: string): string;
+
+implementation
+
+uses
+  Winapi.Windows,
+  System.Win.Registry;
+
+const
+  RUN_KEY = 'Software\Microsoft\Windows\CurrentVersion\Run';
+  VALUE_INTERVAL = 'DoubleTapInterval';
+  VALUE_EXCLUDED = 'ExcludedProcesses';
+  VALUE_PAUSE_FULLSCREEN = 'PauseInFullscreen';
+  VALUE_NOTIFICATIONS = 'ShowNotifications';
+  VALUE_GESTURE_PREFIX = 'Gesture.';
+
+{ TLSSettings }
+
+class function TLSSettings.Defaults: TLSSettings;
+var
+  I: Integer;
+begin
+  Result.ActionGestures[laConvert] := lgDoubleShift;
+  Result.ActionGestures[laUpperCase] := lgDoubleLCtrl;
+  Result.ActionGestures[laLowerCase] := lgDoubleRCtrl;
+  Result.ActionGestures[laInvertCase] := lgBothCtrl;
+  Result.DoubleTapInterval := DEFAULT_DOUBLE_TAP_INTERVAL;
+  SetLength(Result.ExcludedProcesses, Length(DefaultExcludedProcesses));
+  for I := 0 to High(DefaultExcludedProcesses) do
+    Result.ExcludedProcesses[I] := DefaultExcludedProcesses[I];
+  Result.PauseInFullscreen := True;
+  Result.ShowNotifications := True;
+end;
+
+function TLSSettings.ActionForGesture(Gesture: TLSGesture): TLSAction;
+var
+  Action: TLSAction;
+begin
+  Result := laNone;
+  if Gesture = lgNone then
+    Exit;
+  for Action := Low(ActionGestures) to High(ActionGestures) do
+    if ActionGestures[Action] = Gesture then
+      Exit(Action);
+end;
+
+function TLSSettings.GestureForAction(Action: TLSAction): TLSGesture;
+begin
+  if Action = laNone then
+    Result := lgNone
+  else
+    Result := ActionGestures[Action];
+end;
+
+procedure TLSSettings.AssignGesture(Action: TLSAction; Gesture: TLSGesture);
+var
+  Other: TLSAction;
+begin
+  if Action = laNone then
+    Exit;
+  if Gesture <> lgNone then
+    for Other := Low(ActionGestures) to High(ActionGestures) do
+      if (Other <> Action) and (ActionGestures[Other] = Gesture) then
+        ActionGestures[Other] := lgNone;
+  ActionGestures[Action] := Gesture;
+end;
+
+function TLSSettings.IsProcessExcluded(const ProcessName: string): Boolean;
+var
+  Name: string;
+begin
+  Result := False;
+  if ProcessName = '' then
+    Exit;
+  for Name in ExcludedProcesses do
+    if SameText(Name, ProcessName) then
+      Exit(True);
+end;
+
+{ Helpers }
+
+function ClampDoubleTapInterval(Value: Integer): Cardinal;
+begin
+  if Value < MIN_DOUBLE_TAP_INTERVAL then
+    Value := MIN_DOUBLE_TAP_INTERVAL
+  else if Value > MAX_DOUBLE_TAP_INTERVAL then
+    Value := MAX_DOUBLE_TAP_INTERVAL;
+  Result := Cardinal(Value);
+end;
+
+function ParseProcessList(const Text: string): TArray<string>;
+var
+  Parts: TArray<string>;
+  Part, Name: string;
+  Existing: string;
+  Duplicate: Boolean;
+begin
+  Result := nil;
+  Parts := Text.Split([';', ',', #13, #10]);
+  for Part in Parts do
+  begin
+    Name := Trim(Part);
+    if Name = '' then
+      Continue;
+    // Accept a full path as well as a bare file name.
+    Name := ExtractFileName(Name);
+    if not SameText(ExtractFileExt(Name), '.exe') then
+      Name := Name + '.exe';
+    Duplicate := False;
+    for Existing in Result do
+      if SameText(Existing, Name) then
+      begin
+        Duplicate := True;
+        Break;
+      end;
+    if not Duplicate then
+      Result := Result + [Name];
+  end;
+end;
+
+function ProcessListToText(const List: TArray<string>): string;
+begin
+  Result := string.Join('; ', List);
+end;
+
+function GestureFromInteger(Value: Integer; Default: TLSGesture): TLSGesture;
+begin
+  if (Value >= Ord(Low(TLSGesture))) and (Value <= Ord(High(TLSGesture))) then
+    Result := TLSGesture(Value)
+  else
+    Result := Default;
+end;
+
+function LoadSettings: TLSSettings;
+var
+  Registry: TRegistry;
+  Action: TLSAction;
+  Loaded: TLSActionGestures;
+  ValueName: string;
+  Gesture: TLSGesture;
+  Used: set of TLSGesture;
+begin
+  Result := TLSSettings.Defaults;
+  Registry := TRegistry.Create(KEY_READ);
+  try
+    Registry.RootKey := HKEY_CURRENT_USER;
+    try
+      if not Registry.OpenKeyReadOnly(SETTINGS_REGISTRY_KEY) then
+        Exit;
+
+      Loaded := Result.ActionGestures;
+      for Action := Low(Loaded) to High(Loaded) do
+      begin
+        ValueName := VALUE_GESTURE_PREFIX + ActionKeys[Action];
+        if Registry.ValueExists(ValueName) then
+          Loaded[Action] := GestureFromInteger(Registry.ReadInteger(ValueName),
+            Loaded[Action]);
+      end;
+      // Reject a stored configuration that assigns one gesture twice.
+      Used := [];
+      for Action := Low(Loaded) to High(Loaded) do
+      begin
+        Gesture := Loaded[Action];
+        if Gesture = lgNone then
+          Continue;
+        if Gesture in Used then
+        begin
+          Loaded := TLSSettings.Defaults.ActionGestures;
+          Break;
+        end;
+        Include(Used, Gesture);
+      end;
+      Result.ActionGestures := Loaded;
+
+      if Registry.ValueExists(VALUE_INTERVAL) then
+        Result.DoubleTapInterval :=
+          ClampDoubleTapInterval(Registry.ReadInteger(VALUE_INTERVAL));
+      if Registry.ValueExists(VALUE_EXCLUDED) then
+        Result.ExcludedProcesses :=
+          ParseProcessList(Registry.ReadString(VALUE_EXCLUDED));
+      if Registry.ValueExists(VALUE_PAUSE_FULLSCREEN) then
+        Result.PauseInFullscreen := Registry.ReadBool(VALUE_PAUSE_FULLSCREEN);
+      if Registry.ValueExists(VALUE_NOTIFICATIONS) then
+        Result.ShowNotifications := Registry.ReadBool(VALUE_NOTIFICATIONS);
+    except
+      // A damaged value must not prevent the application from starting.
+      Result := TLSSettings.Defaults;
+    end;
+  finally
+    Registry.Free;
+  end;
+end;
+
+function SaveSettings(const Settings: TLSSettings): Boolean;
+var
+  Registry: TRegistry;
+  Action: TLSAction;
+begin
+  Result := False;
+  Registry := TRegistry.Create(KEY_READ or KEY_WRITE);
+  try
+    Registry.RootKey := HKEY_CURRENT_USER;
+    try
+      if not Registry.OpenKey(SETTINGS_REGISTRY_KEY, True) then
+        Exit;
+      for Action := Low(Settings.ActionGestures) to High(Settings.ActionGestures) do
+        Registry.WriteInteger(VALUE_GESTURE_PREFIX + ActionKeys[Action],
+          Ord(Settings.ActionGestures[Action]));
+      Registry.WriteInteger(VALUE_INTERVAL, Integer(Settings.DoubleTapInterval));
+      Registry.WriteString(VALUE_EXCLUDED,
+        ProcessListToText(Settings.ExcludedProcesses));
+      Registry.WriteBool(VALUE_PAUSE_FULLSCREEN, Settings.PauseInFullscreen);
+      Registry.WriteBool(VALUE_NOTIFICATIONS, Settings.ShowNotifications);
+      Result := True;
+    except
+      Result := False;
+    end;
+  finally
+    Registry.Free;
+  end;
+end;
+
+{ Autorun }
+
+procedure AddToStartup(const AppName, AppPath: string);
+var
+  Reg: TRegistry;
+begin
+  Reg := TRegistry.Create;
+  try
+    Reg.RootKey := HKEY_CURRENT_USER;
+    if Reg.OpenKey(RUN_KEY, True) then
+    try
+      Reg.WriteString(AppName, '"' + AppPath + '"');
+    finally
+      Reg.CloseKey;
+    end;
+  finally
+    Reg.Free;
+  end;
+end;
+
+procedure RemoveFromStartup(const AppName: string);
+var
+  Reg: TRegistry;
+begin
+  Reg := TRegistry.Create;
+  try
+    Reg.RootKey := HKEY_CURRENT_USER;
+    if Reg.OpenKey(RUN_KEY, False) then
+    try
+      if Reg.ValueExists(AppName) then
+        Reg.DeleteValue(AppName);
+    finally
+      Reg.CloseKey;
+    end;
+  finally
+    Reg.Free;
+  end;
+end;
+
+function GetStartupCommand(const AppName: string): string;
+var
+  Reg: TRegistry;
+begin
+  Result := '';
+  Reg := TRegistry.Create(KEY_READ);
+  try
+    Reg.RootKey := HKEY_CURRENT_USER;
+    if Reg.OpenKeyReadOnly(RUN_KEY) and Reg.ValueExists(AppName) then
+      Result := Reg.ReadString(AppName);
+  finally
+    Reg.Free;
+  end;
+end;
+
+function IsInStartup(const AppName: string): Boolean;
+begin
+  Result := GetStartupCommand(AppName) <> '';
+end;
+
+function StartupCommandToPath(const Command: string): string;
+var
+  Value: string;
+  ClosingQuote: Integer;
+begin
+  Value := Trim(Command);
+  if (Value <> '') and (Value[1] = '"') then
+  begin
+    ClosingQuote := Pos('"', Value, 2);
+    if ClosingQuote > 0 then
+      Value := Copy(Value, 2, ClosingQuote - 2)
+    else
+      Value := Copy(Value, 2, MaxInt);
+  end;
+  Result := Value;
+end;
+
+end.

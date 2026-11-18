@@ -1,4 +1,8 @@
-unit uDiagnostics;
+﻿unit uDiagnostics;
+
+// Tick counts wrap around every 49.7 days; differences rely on modular
+// arithmetic, so overflow checking must stay off here.
+{$Q-}
 
 interface
 
@@ -26,14 +30,23 @@ implementation
 
 uses
   Winapi.Windows, Winapi.ShellAPI,
-  System.Classes, System.Win.Registry,
-  Vcl.Forms;
+  System.Classes, System.Win.Registry, System.IOUtils, System.Types,
+  System.Generics.Collections, System.Generics.Defaults,
+  Vcl.Forms,
+  uWinUtils;
 
 const
   DIAGNOSTICS_FOLDER_NAME = 'LayoutSwitcher\Diagnostics';
   SETTINGS_REGISTRY_KEY = 'Software\LayoutSwitcher';
   DIAGNOSTICS_ENABLED_VALUE = 'EnableDiagnostics';
   SESSION_MARKER_NAME = 'last-session.running';
+  // Rotation limits: a single log file is split when it grows past
+  // MAX_LOG_FILE_SIZE; the folder keeps at most MAX_LOG_FILES logs and
+  // MAX_LOG_TOTAL_SIZE bytes, plus MAX_DUMP_FILES minidumps.
+  MAX_LOG_FILE_SIZE = 2 * 1024 * 1024;
+  MAX_LOG_FILES = 10;
+  MAX_LOG_TOTAL_SIZE = 5 * 1024 * 1024;
+  MAX_DUMP_FILES = 3;
   MINIDUMP_WITH_DATA_SEGS = $00000001;
   MINIDUMP_WITH_INDIRECTLY_REFERENCED_MEMORY = $00000040;
   MINIDUMP_WITH_THREAD_INFO = $00001000;
@@ -68,12 +81,18 @@ var
   GLogFile: string;
   GDumpFile: string;
   GSessionMarker: string;
-  GCurrentOperation: string;
+  GSessionName: string;
+  GLogPart: Integer;
+  GLogSize: Int64;
+  GLogLock: TRTLCriticalSection;
   GOldExceptProc: Pointer;
   GOldUnhandledFilter: TFNTopLevelExceptionFilter;
   GOldApplicationException: TExceptionEvent;
   GExceptionSink: TDiagnosticsExceptionSink;
   GCrashCaptured: LongInt;
+
+threadvar
+  GCurrentOperation: string;
 
 function SanitizeLogText(const Value: string): string;
 begin
@@ -175,6 +194,19 @@ begin
   end;
 end;
 
+procedure CleanupDiagnosticsDirectory; forward;
+
+procedure StartNextLogPart;
+begin
+  // Called with GLogLock held.
+  Inc(GLogPart);
+  GLogFile := IncludeTrailingPathDelimiter(GDiagnosticsDirectory) +
+    Format('%s-part%d.log', [GSessionName, GLogPart]);
+  GLogSize := 0;
+  WriteTextFile(GSessionMarker, GLogFile);
+  CleanupDiagnosticsDirectory;
+end;
+
 procedure DiagnosticsLog(const MessageText: string);
 var
   Line: string;
@@ -187,11 +219,82 @@ begin
       Format(' pid=%d tid=%d ', [GetCurrentProcessId, GetCurrentThreadId]) +
       SanitizeLogText(MessageText);
     OutputDebugString(PChar(Line));
-    AppendTextToFile(GLogFile, Line + sLineBreak);
+    Line := Line + sLineBreak;
+    EnterCriticalSection(GLogLock);
+    try
+      if not GInitialized or (GLogFile = '') then
+        Exit;
+      if GLogSize > MAX_LOG_FILE_SIZE then
+        StartNextLogPart;
+      AppendTextToFile(GLogFile, Line);
+      Inc(GLogSize, TEncoding.UTF8.GetByteCount(Line));
+    finally
+      LeaveCriticalSection(GLogLock);
+    end;
   except
     // Diagnostics must never become another failure source.
   end;
 end;
+
+function SortedByAge(const Files: TStringDynArray): TArray<string>;
+begin
+  // File names start with a sortable timestamp, oldest first.
+  Result := TArray<string>(Files);
+  TArray.Sort<string>(Result, TStringComparer.Ordinal);
+end;
+
+procedure DeleteQuietly(const FileName: string);
+begin
+  try
+    System.SysUtils.DeleteFile(FileName);
+  except
+  end;
+end;
+
+procedure CleanupDiagnosticsDirectory;
+var
+  Logs, Dumps: TArray<string>;
+  I, Remaining: Integer;
+  TotalSize: Int64;
+  Sizes: TArray<Int64>;
+begin
+  if (GDiagnosticsDirectory = '') or not DirectoryExists(GDiagnosticsDirectory) then
+    Exit;
+  try
+    Logs := SortedByAge(TDirectory.GetFiles(GDiagnosticsDirectory,
+      'LayoutSwitcher-*.log'));
+    SetLength(Sizes, Length(Logs));
+    TotalSize := 0;
+    for I := 0 to High(Logs) do
+    begin
+      try
+        Sizes[I] := TFile.GetSize(Logs[I]);
+      except
+        Sizes[I] := 0;
+      end;
+      Inc(TotalSize, Sizes[I]);
+    end;
+    Remaining := Length(Logs);
+    for I := 0 to High(Logs) do
+    begin
+      if (Remaining <= MAX_LOG_FILES) and (TotalSize <= MAX_LOG_TOTAL_SIZE) then
+        Break;
+      if SameText(Logs[I], GLogFile) then
+        Continue;
+      DeleteQuietly(Logs[I]);
+      Dec(TotalSize, Sizes[I]);
+      Dec(Remaining);
+    end;
+
+    Dumps := SortedByAge(TDirectory.GetFiles(GDiagnosticsDirectory,
+      'LayoutSwitcher-*.dmp'));
+    for I := 0 to High(Dumps) - MAX_DUMP_FILES do
+      DeleteQuietly(Dumps[I]);
+  except
+    // Cleanup is best effort.
+  end;
+end;
+
 
 procedure DiagnosticsLogFmt(const FormatText: string; const Args: array of const);
 begin
@@ -507,6 +610,9 @@ begin
   SessionName := 'LayoutSwitcher-' +
     FormatDateTime('yyyymmdd-hhnnss-zzz', Now) + '-' +
     IntToStr(GetCurrentProcessId);
+  GSessionName := SessionName;
+  GLogPart := 1;
+  GLogSize := 0;
   if GDiagnosticsDirectory <> '' then
   begin
     GLogFile := IncludeTrailingPathDelimiter(GDiagnosticsDirectory) +
@@ -534,14 +640,15 @@ begin
   GCurrentOperation := '';
 
   WriteTextFile(GSessionMarker, GLogFile);
+  CleanupDiagnosticsDirectory;
   {$IFDEF DEBUG}
   BuildKind := 'Debug';
   {$ELSE}
   BuildKind := 'Release';
   {$ENDIF}
-  DiagnosticsLogFmt('session.start build=%s bits=%d os="%s" exe="%s" exe_size=%d module_base=%p',
-    [BuildKind, SizeOf(Pointer) * 8, TOSVersion.ToString, ParamStr(0),
-     ExecutableSize, Pointer(HInstance)]);
+  DiagnosticsLogFmt('session.start version=%s build=%s bits=%d os="%s" exe="%s" exe_size=%d module_base=%p',
+    [uWinUtils.GetExecutableVersion, BuildKind, SizeOf(Pointer) * 8, TOSVersion.ToString,
+     ParamStr(0), ExecutableSize, Pointer(HInstance)]);
   DiagnosticsLogFmt('diagnostics.directory path="%s"', [GDiagnosticsDirectory]);
   if PreviousSessionWasAbnormal then
     DiagnosticsLogFmt('session.previous_abnormal marker_found=true previous_log="%s"',
@@ -583,7 +690,18 @@ begin
 
   if not GAbnormalShutdown then
     System.SysUtils.DeleteFile(GSessionMarker);
-  GInitialized := False;
+  EnterCriticalSection(GLogLock);
+  try
+    GInitialized := False;
+  finally
+    LeaveCriticalSection(GLogLock);
+  end;
 end;
+
+initialization
+  InitializeCriticalSection(GLogLock);
+
+finalization
+  DeleteCriticalSection(GLogLock);
 
 end.
