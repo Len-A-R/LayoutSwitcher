@@ -21,3 +21,8 @@ LS.delphilsp.json
 LS.dsv
 __history/uMain.pas.~*~
 Tests/out/
+__history
+*.~dsk
+*.local
+*.identcache
+*.dsk
