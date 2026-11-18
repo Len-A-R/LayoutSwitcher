@@ -13,7 +13,9 @@ type
   // New values are only ever appended: the ordinal values are stored in the
   // registry.
   TLSAction = (laNone, laConvert, laUpperCase, laLowerCase, laInvertCase,
-    laTransliterate, laUndo, laTranslate, laWebSearch);
+    laTransliterate, laUndo, laTranslate, laWebSearch,
+    // Not bound to a gesture: started automatically after a space.
+    laAutoSwitch);
   TLSGesture = (lgNone, lgDoubleShift, lgDoubleLCtrl, lgDoubleRCtrl, lgBothCtrl,
     lgBothShift, lgDoubleCapsLock, lgDoubleRAlt, lgDoubleLAlt);
   TLSActionGestures = array[laConvert..laWebSearch] of TLSGesture;
@@ -38,6 +40,12 @@ type
     SnippetsEnabled: Boolean;
     Snippets: string;        // "abbreviation=text" lines
     Translator: Integer;     // TRANSLATOR_* in uTextTools
+    // Automatic layout switching (Windows spell checker decides).
+    AutoSwitchEnabled: Boolean;
+    AutoSwitchExceptions: TArray<string>;
+    // Programs where only the manual actions work (code editors, terminals).
+    NoAutoCorrectProcesses: TArray<string>;
+    SoundEnabled: Boolean;
     SearchEngine: Integer;   // SEARCH_* in uTextTools
     class function Defaults: TLSSettings; static;
     function ActionForGesture(Gesture: TLSGesture): TLSAction;
@@ -45,6 +53,8 @@ type
     // Assigns a gesture and disables any other action that used it.
     procedure AssignGesture(Action: TLSAction; Gesture: TLSGesture);
     function IsProcessExcluded(const ProcessName: string): Boolean;
+    function IsAutoCorrectDisabledFor(const ProcessName: string): Boolean;
+    function IsAutoSwitchException(const Word: string): Boolean;
   end;
 
 const
@@ -58,10 +68,20 @@ const
 
   ActionKeys: array[TLSAction] of string = (
     'none', 'convert_layout', 'uppercase', 'lowercase', 'invert_case',
-    'transliterate', 'undo', 'translate', 'web_search');
+    'transliterate', 'undo', 'translate', 'web_search', 'auto_switch');
 
   // Screenshot tools own full-screen overlays, use Shift/Ctrl themselves and
   // monitor the clipboard.  LayoutSwitcher must not inject input into them.
+  // Automatic corrections are off here by default: code, commands,
+  // passwords and remote sessions.
+  DefaultNoAutoCorrectProcesses: array[0..23] of string = (
+    'Code.exe', 'devenv.exe', 'bds.exe', 'idea64.exe', 'pycharm64.exe',
+    'webstorm64.exe', 'rider64.exe', 'clion64.exe', 'goland64.exe',
+    'sublime_text.exe', 'notepad++.exe', 'WindowsTerminal.exe', 'cmd.exe',
+    'powershell.exe', 'pwsh.exe', 'conhost.exe', 'OpenConsole.exe', 'mintty.exe',
+    'putty.exe', 'mstsc.exe', 'KeePass.exe', 'KeePassXC.exe', '1Password.exe',
+    'Bitwarden.exe');
+
   DefaultExcludedProcesses: array[0..5] of string = (
     'ShareX.exe',
     'Greenshot.exe',
@@ -128,6 +148,10 @@ const
   VALUE_TRANSLATOR = 'Translator';
   VALUE_SEARCH_ENGINE = 'SearchEngine';
   VALUE_DIAGNOSTICS = 'EnableDiagnostics';
+  VALUE_AUTO_SWITCH = 'AutoSwitchEnabled';
+  VALUE_AUTO_SWITCH_EXCEPTIONS = 'AutoSwitchExceptions';
+  VALUE_NO_AUTOCORRECT = 'NoAutoCorrectProcesses';
+  VALUE_SOUND = 'SoundEnabled';
 
 { TLSSettings }
 
@@ -161,6 +185,12 @@ begin
   Result.Snippets := DEFAULT_SNIPPETS;
   Result.Translator := TRANSLATOR_YANDEX;
   Result.SearchEngine := SEARCH_YANDEX;
+  Result.AutoSwitchEnabled := False;
+  Result.AutoSwitchExceptions := nil;
+  SetLength(Result.NoAutoCorrectProcesses, Length(DefaultNoAutoCorrectProcesses));
+  for I := 0 to High(DefaultNoAutoCorrectProcesses) do
+    Result.NoAutoCorrectProcesses[I] := DefaultNoAutoCorrectProcesses[I];
+  Result.SoundEnabled := False;
   Result.ActionGestures[laTranslate] := lgDoubleRAlt;
   Result.ActionGestures[laWebSearch] := lgDoubleLAlt;
 end;
@@ -228,6 +258,28 @@ begin
       if (Other <> Action) and (ActionGestures[Other] = Gesture) then
         ActionGestures[Other] := lgNone;
   ActionGestures[Action] := Gesture;
+end;
+
+function TLSSettings.IsAutoCorrectDisabledFor(const ProcessName: string): Boolean;
+var
+  Name: string;
+begin
+  Result := False;
+  if ProcessName = '' then
+    Exit;
+  for Name in NoAutoCorrectProcesses do
+    if SameText(Name, ProcessName) then
+      Exit(True);
+end;
+
+function TLSSettings.IsAutoSwitchException(const Word: string): Boolean;
+var
+  Item: string;
+begin
+  for Item in AutoSwitchExceptions do
+    if AnsiSameText(Item, Word) then
+      Exit(True);
+  Result := False;
 end;
 
 function TLSSettings.IsProcessExcluded(const ProcessName: string): Boolean;
@@ -406,6 +458,14 @@ begin
     Result.Snippets := Store.ReadString(VALUE_SNIPPETS, Result.Snippets);
     Result.Translator := Store.ReadInteger(VALUE_TRANSLATOR, Result.Translator);
     Result.SearchEngine := Store.ReadInteger(VALUE_SEARCH_ENGINE, Result.SearchEngine);
+    Result.AutoSwitchEnabled := Store.ReadBool(VALUE_AUTO_SWITCH, Result.AutoSwitchEnabled);
+    if Store.ValueExists(VALUE_AUTO_SWITCH_EXCEPTIONS) then
+      Result.AutoSwitchExceptions := ParseWordList(
+        Store.ReadString(VALUE_AUTO_SWITCH_EXCEPTIONS, ''));
+    if Store.ValueExists(VALUE_NO_AUTOCORRECT) then
+      Result.NoAutoCorrectProcesses := ParseProcessList(
+        Store.ReadString(VALUE_NO_AUTOCORRECT, ''));
+    Result.SoundEnabled := Store.ReadBool(VALUE_SOUND, Result.SoundEnabled);
   except
     // A damaged value must not prevent the application from starting.
     Result := TLSSettings.Defaults;
@@ -437,6 +497,12 @@ begin
     Store.WriteString(VALUE_SNIPPETS, Settings.Snippets);
     Store.WriteInteger(VALUE_TRANSLATOR, Settings.Translator);
     Store.WriteInteger(VALUE_SEARCH_ENGINE, Settings.SearchEngine);
+    Store.WriteBool(VALUE_AUTO_SWITCH, Settings.AutoSwitchEnabled);
+    Store.WriteString(VALUE_AUTO_SWITCH_EXCEPTIONS,
+      string.Join('; ', Settings.AutoSwitchExceptions));
+    Store.WriteString(VALUE_NO_AUTOCORRECT,
+      ProcessListToText(Settings.NoAutoCorrectProcesses));
+    Store.WriteBool(VALUE_SOUND, Settings.SoundEnabled);
     Store.WriteInteger(VALUE_SETTINGS_VERSION, CURRENT_SETTINGS_VERSION);
     Result := Store.Flush;
   except

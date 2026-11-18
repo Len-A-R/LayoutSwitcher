@@ -43,10 +43,15 @@ type
 // "1,2 МБ из 4,1 МБ (29%)" in the current UI language.
 function FormatDownloadProgress(ReceivedKB, TotalKB: Int64): string;
 
+// "What's new" window shown before an update: release notes and
+// Install / Open page / Later.  Returns True if the user chose to install
+// (or to open the page when Installable is False).
+function ShowReleaseNotes(const Version, Notes: string; Installable: Boolean): Boolean;
+
 implementation
 
 uses
-  uLocale;
+  uLocale, uTextTools;
 
 function FormatMegabytes(KB: Int64): string;
 begin
@@ -185,6 +190,72 @@ procedure TUpdateProgressWindow.FormClose(Sender: TObject; var Action: TCloseAct
 begin
   // Closing only hides the window; the download continues.
   Action := caHide;
+end;
+
+function ShowReleaseNotes(const Version, Notes: string; Installable: Boolean): Boolean;
+var
+  Form: TForm;
+  Title: TLabel;
+  Memo: TMemo;
+  Ok, Later: TButton;
+  Text: string;
+
+  function S(Value: Integer): Integer;
+  begin
+    Result := MulDiv(Value, Screen.PixelsPerInch, 96);
+  end;
+
+begin
+  Form := TForm.CreateNew(nil);
+  try
+    Form.BorderStyle := bsDialog;
+    Form.Position := poScreenCenter;
+    Form.FormStyle := fsStayOnTop;
+    Form.Font.Name := 'Segoe UI';
+    Form.Font.Height := -S(12);
+    Form.Caption := Format(T('LayoutSwitcher %s', 'LayoutSwitcher %s'), [Version]);
+    Form.ClientWidth := S(520);
+    Form.ClientHeight := S(380);
+
+    Title := TLabel.Create(Form);
+    Title.Parent := Form;
+    Title.SetBounds(S(12), S(12), S(496), S(20));
+    Title.Font.Style := [fsBold];
+    Title.Caption := Format(T('Доступна новая версия %s. Что нового:',
+      'Version %s is available. What''s new:'), [Version]);
+
+    Memo := TMemo.Create(Form);
+    Memo.Parent := Form;
+    Memo.SetBounds(S(12), S(38), S(496), S(290));
+    Memo.ReadOnly := True;
+    Memo.ScrollBars := ssVertical;
+    Memo.WordWrap := True;
+    Text := CleanReleaseNotes(Notes);
+    if Text = '' then
+      Text := T('Описание изменений не опубликовано.', 'No release notes were published.');
+    Memo.Text := Text;
+
+    Ok := TButton.Create(Form);
+    Ok.Parent := Form;
+    Ok.SetBounds(S(248), S(340), S(160), S(30));
+    Ok.ModalResult := mrOk;
+    Ok.Default := True;
+    if Installable then
+      Ok.Caption := T('Установить', 'Install')
+    else
+      Ok.Caption := T('Открыть страницу загрузки', 'Open download page');
+
+    Later := TButton.Create(Form);
+    Later.Parent := Form;
+    Later.SetBounds(S(416), S(340), S(92), S(30));
+    Later.ModalResult := mrCancel;
+    Later.Cancel := True;
+    Later.Caption := T('Позже', 'Later');
+
+    Result := Form.ShowModal = mrOk;
+  finally
+    Form.Free;
+  end;
 end;
 
 end.

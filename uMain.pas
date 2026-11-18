@@ -92,6 +92,14 @@ type
     lblSnippetsHint: TLabel;
     memSnippets: TMemo;
     lblCorrectionsNote: TLabel;
+    chkSound: TCheckBox;
+    chkAutoSwitch: TCheckBox;
+    lblAutoSwitchHint: TLabel;
+    lblAutoSwitchExceptions: TLabel;
+    edAutoSwitchExceptions: TEdit;
+    lblNoAutoCorrect: TLabel;
+    memNoAutoCorrect: TMemo;
+    btnDefaultNoAutoCorrect: TButton;
     mniClipboard: TMenuItem;
     mniClipConvert: TMenuItem;
     mniClipUpper: TMenuItem;
@@ -118,6 +126,7 @@ type
     procedure cbServiceChange(Sender: TObject);
     procedure edCorrectionsExit(Sender: TObject);
     procedure mniClipboardClick(Sender: TObject);
+    procedure btnDefaultNoAutoCorrectClick(Sender: TObject);
     procedure chkAutorunClick(Sender: TObject);
     procedure chkAutorunElevatedClick(Sender: TObject);
     procedure chkDiagnosticsClick(Sender: TObject);
@@ -185,6 +194,12 @@ type
     FCapsShiftLock: Boolean;
     FPendingAutomatic: Boolean;
     FSettleFocusNext: Boolean;
+    // Process of the focused window (rules for programs).
+    FLastProcessName: string;
+    // Word changed by the last automatic layout switch; an immediate undo
+    // adds it to the exceptions.
+    FAutoSwitchOriginal: string;
+    FUpdateNotes: string;
     FPendingToggleCaps: Boolean;
 
     function RegisterRawInput: Boolean;
@@ -236,6 +251,8 @@ type
     procedure StartUpdateInstall;
     procedure HandleDownloadResult(Res: TUpdateDownloadResult);
     procedure HandleDownloadProgress(ReceivedKB, TotalKB: Int64);
+    procedure OfferUpdate;
+    procedure LearnAutoSwitchException(const Word: string);
     procedure DownloadCancel(Sender: TObject);
     function DownloadRunning: Boolean;
   protected
@@ -318,6 +335,7 @@ const
     'RAlt×2', 'LAlt×2');
 
 function ShortActionName(Action: TLSAction): string; forward;
+function ContainsDigit(const Text: string): Boolean; forward;
 
 type
   TLSRawInputDevice = record
@@ -834,6 +852,7 @@ begin
   ClearBuffer;
   FDetector.ResetTaps;
   FFocusIsPassword := IsNativePasswordEdit(CurrentWindow);
+  FLastProcessName := GetWindowProcessFileName(GetForegroundWindow);
 end;
 
 procedure TFormMain.ProcessBufferKey(VK, ScanCode: UINT);
@@ -937,6 +956,7 @@ procedure TFormMain.AddChar(Ch: Char);
 begin
   // Any manual edit ends the word -> phrase -> revert chain.
   FChain.Reset;
+  FAutoSwitchOriginal := '';
   if FBufferOverflowed then
     Exit;
   if Length(FBuffer) >= MAX_PHRASE_LEN then
@@ -951,6 +971,7 @@ end;
 procedure TFormMain.BufferBackspace;
 begin
   FChain.Reset;
+  FAutoSwitchOriginal := '';
   if not FBufferOverflowed and (FBuffer <> '') then
     SetLength(FBuffer, Length(FBuffer) - 1);
 end;
@@ -1065,6 +1086,7 @@ begin
   Request.KeystrokeStamp := AtomicCmpExchange(GKeystrokeCount, 0, 0);
   Request.ToggleCapsLock := ToggleCaps;
   Request.SettleFocus := FSettleFocusNext;
+  Request.AutoSwitchExceptions := FSettings.AutoSwitchExceptions;
   if FCapsShiftLock then
     Request.CapsOffKey := VK_SHIFT
   else
@@ -1121,6 +1143,16 @@ begin
 
     if Res.FocusIsPassword and (GetFocusedWindow = FLastWindow) then
       FFocusIsPassword := True;
+
+    // Undoing an automatic layout switch right away teaches an exception.
+    if Res.Success and (FAutoSwitchOriginal <> '') and
+       (FPendingPlan.Mode in [bmUndo, bmRevert]) then
+      LearnAutoSwitchException(FAutoSwitchOriginal);
+    if Res.Action <> laAutoSwitch then
+      FAutoSwitchOriginal := '';
+    if FSettings.SoundEnabled and Res.Success and (Res.BufferAction = baSet) then
+      MessageBeep(MB_OK);
+
     case Res.BufferAction of
       baClear: ClearBuffer;
       baSet: SetBufferText(Res.NewBufferText);
@@ -1128,6 +1160,13 @@ begin
     // Remember the step so that repeating the action widens it.
     if not Res.Success or (FBuffer = '') then
       FChain.Reset
+    else if Res.UsedBuffer and (Res.Action = laAutoSwitch) then
+    begin
+      FChain.CompletedAutoSwitch(FPendingPlan, FBuffer, Res.SourceLayout,
+        Res.TargetLayout);
+      FAutoSwitchOriginal := FPendingPlan.Region;
+      DiagnosticsLog('autoswitch.applied');
+    end
     else if Res.UsedBuffer then
       FChain.Completed(FPendingPlan, Res.Action, FBuffer, Res.SourceLayout,
         Res.TargetLayout)
@@ -1365,6 +1404,10 @@ begin
     chkFixTwoCapitals.Checked := FSettings.FixTwoCapitals;
     edTwoCapsExceptions.Text := string.Join('; ', FSettings.TwoCapitalsExceptions);
     chkSnippets.Checked := FSettings.SnippetsEnabled;
+    chkSound.Checked := FSettings.SoundEnabled;
+    chkAutoSwitch.Checked := FSettings.AutoSwitchEnabled;
+    edAutoSwitchExceptions.Text := string.Join('; ', FSettings.AutoSwitchExceptions);
+    memNoAutoCorrect.Text := string.Join(sLineBreak, FSettings.NoAutoCorrectProcesses);
     memSnippets.Text := FSettings.Snippets;
     udInterval.Position := Integer(FSettings.DoubleTapInterval);
     edInterval.Text := IntToStr(FSettings.DoubleTapInterval);
@@ -1445,6 +1488,8 @@ begin
   FSettings.FixCapsLock := chkFixCapsLock.Checked;
   FSettings.FixTwoCapitals := chkFixTwoCapitals.Checked;
   FSettings.SnippetsEnabled := chkSnippets.Checked;
+  FSettings.SoundEnabled := chkSound.Checked;
+  FSettings.AutoSwitchEnabled := chkAutoSwitch.Checked;
   if not FSettings.ShowLayoutIndicator then
     FIndicator.HideNow;
   ApplySettings;
@@ -1453,15 +1498,26 @@ end;
 
 procedure TFormMain.ApplyExcludedFromEdit;
 var
-  List: TArray<string>;
+  Excluded, NoAutoCorrect: TArray<string>;
 begin
-  List := ParseProcessList(edExcluded.Text);
-  if ProcessListToText(List) <> ProcessListToText(FSettings.ExcludedProcesses) then
+  Excluded := ParseProcessList(edExcluded.Text);
+  NoAutoCorrect := ParseProcessList(memNoAutoCorrect.Text);
+  if (ProcessListToText(Excluded) <> ProcessListToText(FSettings.ExcludedProcesses)) or
+     (ProcessListToText(NoAutoCorrect) <>
+      ProcessListToText(FSettings.NoAutoCorrectProcesses)) then
   begin
-    FSettings.ExcludedProcesses := List;
+    FSettings.ExcludedProcesses := Excluded;
+    FSettings.NoAutoCorrectProcesses := NoAutoCorrect;
     ApplySettings;
   end;
   LoadControlsFromSettings;
+end;
+
+procedure TFormMain.btnDefaultNoAutoCorrectClick(Sender: TObject);
+begin
+  FSettings.NoAutoCorrectProcesses := TLSSettings.Defaults.NoAutoCorrectProcesses;
+  LoadControlsFromSettings;
+  ApplySettings;
 end;
 
 procedure TFormMain.edExcludedExit(Sender: TObject);
@@ -1762,6 +1818,8 @@ begin
       'Turn off the Sticky Keys prompt on pressing Shift five times');
     chkLayoutIndicator.Caption := T('Показывать раскладку рядом с курсором при переключении',
       'Show the layout next to the caret when it changes');
+    chkSound.Caption := T('Звуковой сигнал при исправлении текста',
+      'Play a sound when text is corrected');
     lblLanguage.Caption := T('Язык интерфейса / Language:', 'Language / Язык интерфейса:');
     FillCombo(cbLanguage, [T('Как в Windows', 'As in Windows'), 'Русский', 'English']);
     if IsPortableMode then
@@ -1802,6 +1860,12 @@ begin
     lblSearchEngine.Caption := T('Поиск:', 'Search engine:');
     FillCombo(cbSearchEngine, [T('Яндекс', 'Yandex'), 'Google', 'Bing', 'DuckDuckGo']);
 
+    chkAutoSwitch.Caption := T(
+      'Автоматически переключать раскладку для слов, набранных не в той раскладке',
+      'Automatically fix words typed in the wrong keyboard layout');
+    lblAutoSwitchHint.Caption := T('Решает проверка орфографии Windows.',
+      'The Windows spell checker decides.');
+    lblAutoSwitchExceptions.Caption := T('Не переключать:', 'Never switch:');
     chkFixCapsLock.Caption := T(
       'Исправлять слова, набранные с включённым Caps Lock (пРИВЕТ → Привет)',
       'Fix words typed with Caps Lock on (hELLO → Hello)');
@@ -1818,9 +1882,13 @@ begin
       'Исправления выполняются после пробела. Отменить последнее — двойной Caps Lock.',
       'Corrections are made after a space. Undo the last one with a double Caps Lock.');
 
-    lblExcluded.Caption := T('Не работать в программах (имя exe в строке):',
-      'Do not work in these programs (one exe name per line):');
+    lblExcluded.Caption := T('Полностью отключить в программах (имя exe в строке):',
+      'Turn off completely in these programs (one exe name per line):');
     btnDefaultExcluded.Caption := T('По умолчанию', 'Defaults');
+    lblNoAutoCorrect.Caption := T(
+      'Без автоисправлений и автопереключения (ручные действия работают):',
+      'No automatic corrections here (manual actions still work):');
+    btnDefaultNoAutoCorrect.Caption := T('По умолчанию', 'Defaults');
     btnReport.Caption := T('Собрать отчёт...', 'Create report...');
     btnClose.Caption := T('Закрыть', 'Close');
     lblVersion.Caption := T('Версия ', 'Version ') + FVersion;
@@ -1901,16 +1969,15 @@ begin
       FInstallerUrl := Res.InstallerUrl;
       FInstallerName := Res.InstallerName;
       FInstallerSha256 := Res.InstallerSha256;
+      FUpdateNotes := Res.ReleaseNotes;
       // One-click installation only for a copy put there by the installer;
       // a copy run from elsewhere would be duplicated, not updated.
       FUpdateInstallable := (FInstallerUrl <> '') and IsInstalledCopy(PerMachine);
       UpdateDownloadMenuCaption;
       mniDownloadUpdate.Visible := True;
-      FBalloonInstall := FUpdateInstallable;
-      if FUpdateInstallable then
-        FBalloonUrl := ''
-      else
-        FBalloonUrl := FUpdateUrl;
+      // A click shows what is new and then installs or opens the page.
+      FBalloonInstall := True;
+      FBalloonUrl := '';
       if Res.Manual then
         FNotificationTimes.Remove('update');
       if FUpdateInstallable then
@@ -1947,18 +2014,32 @@ begin
   StartUpdateCheck(True);
 end;
 
-procedure TFormMain.mniDownloadUpdateClick(Sender: TObject);
+procedure TFormMain.OfferUpdate;
 begin
+  if DownloadRunning then
+  begin
+    FProgress.ShowWindow;
+    Exit;
+  end;
+  if FUpdateVersion = '' then
+    Exit;
+  if not ShowReleaseNotes(FUpdateVersion, FUpdateNotes, FUpdateInstallable) then
+    Exit;
   if FUpdateInstallable then
     StartUpdateInstall
   else if FUpdateUrl <> '' then
     ShellExecute(0, 'open', PChar(FUpdateUrl), nil, nil, SW_SHOWNORMAL);
 end;
 
+procedure TFormMain.mniDownloadUpdateClick(Sender: TObject);
+begin
+  OfferUpdate;
+end;
+
 procedure TFormMain.TrayIconBalloonClick(Sender: TObject);
 begin
   if FBalloonInstall then
-    StartUpdateInstall
+    OfferUpdate
   else if FBalloonUrl <> '' then
     ShellExecute(0, 'open', PChar(FBalloonUrl), nil, nil, SW_SHOWNORMAL);
 end;
@@ -2056,8 +2137,11 @@ var
 begin
   if FPaused or FBufferOverflowed or FFocusIsPassword or FOperationBusy then
     Exit;
-  if not (FSettings.FixCapsLock or FSettings.FixTwoCapitals or
+  if not (FSettings.FixCapsLock or FSettings.FixTwoCapitals or FSettings.AutoSwitchEnabled or
           (FSettings.SnippetsEnabled and (Length(FSnippets) > 0))) then
+    Exit;
+  // Code editors, terminals, password managers: manual actions only.
+  if FSettings.IsAutoCorrectDisabledFor(FLastProcessName) then
     Exit;
   // Exactly one space has just been typed after the word.
   if not FindLastWord(FBuffer, WordStart, WordLength) or
@@ -2078,7 +2162,15 @@ begin
   else if FSettings.FixTwoCapitals and
      FixTwoCapitals(Word, FSettings.TwoCapitalsExceptions, Fixed) then
     Replacement := Fixed;
-  if (Replacement = '') or (Replacement = Word) then
+  if Replacement = '' then
+  begin
+    // Nothing else to fix: let the spell checker decide about the layout.
+    if FSettings.AutoSwitchEnabled and not ContainsDigit(Word) then
+      QueueRequest(laAutoSwitch, TConversionChain.PlanWord(FBuffer, WordStart,
+        WordLength), True, False);
+    Exit;
+  end;
+  if Replacement = Word then
     Exit;
 
   DiagnosticsLogFmt('autocorrect.queue kind=%s length=%d',
@@ -2088,6 +2180,32 @@ begin
     WordLength, Replacement), True, ToggleCaps);
 end;
 
+function ContainsDigit(const Text: string): Boolean;
+var
+  Ch: Char;
+begin
+  for Ch in Text do
+    if CharInSet(Ch, ['0'..'9']) then
+      Exit(True);
+  Result := False;
+end;
+
+procedure TFormMain.LearnAutoSwitchException(const Word: string);
+begin
+  if (Word = '') or FSettings.IsAutoSwitchException(Word) then
+    Exit;
+  FSettings.AutoSwitchExceptions := FSettings.AutoSwitchExceptions + [Word];
+  ApplySettings;
+  LoadControlsFromSettings;
+  DiagnosticsLog('autoswitch.exception_learned');
+  FBalloonUrl := '';
+  FBalloonInstall := False;
+  FNotificationTimes.Remove('autoswitch_learned');
+  ShowNotification('autoswitch_learned', Format(T(
+    'Слово «%s» больше не будет переключаться автоматически.',
+    'The word "%s" will no longer be switched automatically.'), [Word]));
+end;
+
 procedure TFormMain.edCorrectionsExit(Sender: TObject);
 begin
   ApplyCorrectionsFromEdit;
@@ -2095,15 +2213,18 @@ end;
 
 procedure TFormMain.ApplyCorrectionsFromEdit;
 var
-  Exceptions: TArray<string>;
+  Exceptions, SwitchExceptions: TArray<string>;
   Snippets: string;
 begin
   Exceptions := ParseWordList(edTwoCapsExceptions.Text);
+  SwitchExceptions := ParseWordList(edAutoSwitchExceptions.Text);
   Snippets := TrimRight(memSnippets.Text);
   if (string.Join('; ', Exceptions) <> string.Join('; ', FSettings.TwoCapitalsExceptions)) or
+     (string.Join('; ', SwitchExceptions) <> string.Join('; ', FSettings.AutoSwitchExceptions)) or
      (Snippets <> FSettings.Snippets) then
   begin
     FSettings.TwoCapitalsExceptions := Exceptions;
+    FSettings.AutoSwitchExceptions := SwitchExceptions;
     FSettings.Snippets := Snippets;
     ApplySettings;
   end;
@@ -2310,8 +2431,9 @@ var
   PerMachine: Boolean;
 begin
   try
-    DiagnosticsLogFmt('update.download_done success=%s cancelled=%s error="%s"',
-      [BoolToStr(Res.Success, True), BoolToStr(Res.Cancelled, True), Res.ErrorText]);
+    DiagnosticsLogFmt('update.download_done success=%s cancelled=%s signature=%s error="%s"',
+      [BoolToStr(Res.Success, True), BoolToStr(Res.Cancelled, True), Res.SignatureNote,
+       Res.ErrorText]);
     FNotificationTimes.Remove('update_download');
     UpdateDownloadMenuCaption;
     if Res.Cancelled then
@@ -2341,6 +2463,14 @@ begin
     if Assigned(FProgress) then
       FProgress.Close;
     FBalloonUrl := FUpdateUrl;
+    FBalloonInstall := False;
+    if Res.ErrorText.StartsWith('signature:') then
+      ShowNotification('update_download', T(
+        'Установщик подписан другим издателем или его подпись повреждена, поэтому ' +
+        'он не запущен. Щёлкните, чтобы открыть страницу загрузки.',
+        'The installer is signed by a different publisher or its signature is ' +
+        'broken, so it was not started. Click to open the download page.'))
+    else
     ShowNotification('update_download', T(
       'Не удалось установить обновление автоматически. Щёлкните, чтобы открыть ' +
       'страницу загрузки.',

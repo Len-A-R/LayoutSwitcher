@@ -54,6 +54,7 @@ type
     FUndoAvailable: Boolean;
     FPrevious: string;      // Text before the last step.
     FUndoLayout: HKL;       // Layout before the last conversion, 0 if none.
+    FAutoWord: Boolean;     // The last step was an automatic layout switch.
     function PlanUndo(const Buffer: string): TBufferPlan;
   public
     procedure Reset;
@@ -67,10 +68,18 @@ type
     // restores the whole text, as with a converted phrase.
     procedure CompletedWhole(Action: TLSAction; const NewBuffer,
       Original: string; Source, Target: HKL);
+    // An automatic layout switch converted the last word: the next layout
+    // conversion puts back just that word.
+    procedure CompletedAutoSwitch(const APlan: TBufferPlan; const NewBuffer: string;
+      Source, Target: HKL);
     property UndoAvailable: Boolean read FUndoAvailable;
+    property LastWasAutoSwitch: Boolean read FAutoWord;
     // Plan that replaces Region with Replacement verbatim.
     class function PlanReplacement(const Buffer: string; RegionStart,
       RegionLength: Integer; const Replacement: string): TBufferPlan; static;
+    // Plan that converts one word (used by the automatic layout switch).
+    class function PlanWord(const Buffer: string; WordStart,
+      WordLength: Integer): TBufferPlan; static;
   end;
 
 // Last run of non-space characters, ignoring trailing spaces.
@@ -148,6 +157,7 @@ begin
   FUndoAvailable := False;
   FPrevious := '';
   FUndoLayout := 0;
+  FAutoWord := False;
 end;
 
 function TConversionChain.PlanUndo(const Buffer: string): TBufferPlan;
@@ -214,7 +224,16 @@ begin
   if FActive and (Action = FAction) and (Buffer = FBuffer) then
     case FMode of
       bmWord:
-        if HasWord and HasNonSpace(Copy(Buffer, 1, WordStart - 1)) then
+        if FAutoWord and (Action = laConvert) and HasWord then
+        begin
+          Result.Mode := bmRevert;
+          Result.RegionStart := WordStart;
+          Result.RegionLength := WordLength;
+          Result.ForcedSource := FTarget;
+          Result.ForcedTarget := FSource;
+          Exit;
+        end
+        else if HasWord and HasNonSpace(Copy(Buffer, 1, WordStart - 1)) then
         begin
           Result.Mode := bmPhrase;
           Result.RegionStart := 1;
@@ -265,6 +284,7 @@ begin
   end;
   FUndoAvailable := True;
   FPrevious := APlan.Text;
+  FAutoWord := False;
   if Action = laConvert then
     FUndoLayout := Source
   else
@@ -278,6 +298,20 @@ begin
     FSource := Source;
     FTarget := Target;
   end;
+end;
+
+procedure TConversionChain.CompletedAutoSwitch(const APlan: TBufferPlan;
+  const NewBuffer: string; Source, Target: HKL);
+begin
+  Completed(APlan, laConvert, NewBuffer, Source, Target);
+  FAutoWord := True;
+end;
+
+class function TConversionChain.PlanWord(const Buffer: string; WordStart,
+  WordLength: Integer): TBufferPlan;
+begin
+  Result := PlanReplacement(Buffer, WordStart, WordLength, '');
+  Result.Mode := bmWord;
 end;
 
 procedure TConversionChain.CompletedWhole(Action: TLSAction; const NewBuffer,

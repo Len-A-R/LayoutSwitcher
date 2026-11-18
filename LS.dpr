@@ -20,6 +20,8 @@ uses
   uLayoutIndicator in 'uLayoutIndicator.pas',
   uUpdateCheck in 'uUpdateCheck.pas',
   uUpdateProgress in 'uUpdateProgress.pas',
+  uSignature in 'uSignature.pas',
+  uSpellCheck in 'uSpellCheck.pas',
   uOperationWorker in 'uOperationWorker.pas',
   uMain in 'uMain.pas' {FormMain};
 
