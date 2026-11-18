@@ -19,6 +19,7 @@ uses
   uTaskAutorun in 'uTaskAutorun.pas',
   uLayoutIndicator in 'uLayoutIndicator.pas',
   uUpdateCheck in 'uUpdateCheck.pas',
+  uUpdateProgress in 'uUpdateProgress.pas',
   uOperationWorker in 'uOperationWorker.pas',
   uMain in 'uMain.pas' {FormMain};
 
