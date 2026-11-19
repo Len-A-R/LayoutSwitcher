@@ -32,6 +32,8 @@ type
     procedure ExceptionsAreCaseInsensitive;
     [Test]
     procedure NewSettingsSurviveExport;
+    [Test]
+    procedure NotepadPlusPlusLeavesListOfVersion3;
   end;
 
   [TestFixture]
@@ -158,6 +160,7 @@ begin
   Assert.IsTrue(S.IsAutoCorrectDisabledFor('windowsterminal.EXE'));
   Assert.IsTrue(S.IsAutoCorrectDisabledFor('KeePass.exe'));
   Assert.IsFalse(S.IsAutoCorrectDisabledFor('notepad.exe'));
+  Assert.IsFalse(S.IsAutoCorrectDisabledFor('notepad++.exe'));
   Assert.IsFalse(S.IsAutoCorrectDisabledFor(''));
   Assert.IsFalse(S.IsProcessExcluded('Code.exe'));
 end;
@@ -192,6 +195,38 @@ begin
     Assert.AreEqual('rfr; Вася', string.Join('; ', Loaded.AutoSwitchExceptions));
     Assert.AreEqual('Code.exe; Far.exe', ProcessListToText(Loaded.NoAutoCorrectProcesses));
     Assert.IsTrue(Loaded.SoundEnabled);
+  finally
+    System.SysUtils.DeleteFile(FileName);
+  end;
+end;
+
+procedure TProgramRulesTests.NotepadPlusPlusLeavesListOfVersion3;
+var
+  FileName: string;
+  Source, Loaded: TLSSettings;
+  Diagnostics: Boolean;
+  Lines: TArray<string>;
+  I: Integer;
+begin
+  FileName := TPath.Combine(TPath.GetTempPath, 'ls-settings-23-v3.ini');
+  try
+    Source := TLSSettings.Defaults;
+    Source.NoAutoCorrectProcesses := ['Code.exe', 'notepad++.exe', 'Far.exe'];
+    Assert.IsTrue(ExportSettings(Source, FileName, False));
+    // Pretend the file was written by 2.3.0.
+    Lines := TFile.ReadAllLines(FileName);
+    for I := 0 to High(Lines) do
+      if Lines[I].StartsWith('SettingsVersion=') then
+        Lines[I] := 'SettingsVersion=3';
+    TFile.WriteAllLines(FileName, Lines);
+    Assert.IsTrue(ImportSettings(FileName, Loaded, Diagnostics));
+    Assert.AreEqual('Code.exe; Far.exe', ProcessListToText(Loaded.NoAutoCorrectProcesses));
+
+    // Added again by the user after the update: kept.
+    Assert.IsTrue(ExportSettings(Source, FileName, False));
+    Assert.IsTrue(ImportSettings(FileName, Loaded, Diagnostics));
+    Assert.AreEqual('Code.exe; notepad++.exe; Far.exe',
+      ProcessListToText(Loaded.NoAutoCorrectProcesses));
   finally
     System.SysUtils.DeleteFile(FileName);
   end;

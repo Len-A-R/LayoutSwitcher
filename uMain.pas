@@ -196,6 +196,7 @@ type
     FSettleFocusNext: Boolean;
     // Process of the focused window (rules for programs).
     FLastProcessName: string;
+    FAutoCorrectSkipLogged: string;
     // Word changed by the last automatic layout switch; an immediate undo
     // adds it to the exceptions.
     FAutoSwitchOriginal: string;
@@ -1879,8 +1880,10 @@ begin
       'Каждая строка: сокращение=текст. Подстановки: {date}, {time}, {datetime}.',
       'One per line: abbreviation=text. Placeholders: {date}, {time}, {datetime}.');
     lblCorrectionsNote.Caption := T(
-      'Исправления выполняются после пробела. Отменить последнее — двойной Caps Lock.',
-      'Corrections are made after a space. Undo the last one with a double Caps Lock.');
+      'Исправления выполняются после пробела. Отменить последнее — двойной Caps Lock.' +
+      sLineBreak + 'Не работают в программах из списка «Без автоисправлений» на вкладке «Исключения».',
+      'Corrections are made after a space. Undo the last one with a double Caps Lock.' +
+      sLineBreak + 'They are off in the programs listed on the Exclusions tab.');
 
     lblExcluded.Caption := T('Полностью отключить в программах (имя exe в строке):',
       'Turn off completely in these programs (one exe name per line):');
@@ -2142,7 +2145,16 @@ begin
     Exit;
   // Code editors, terminals, password managers: manual actions only.
   if FSettings.IsAutoCorrectDisabledFor(FLastProcessName) then
+  begin
+    // Logged once per program, so that "nothing happens" can be explained.
+    if not SameText(FAutoCorrectSkipLogged, FLastProcessName) then
+    begin
+      FAutoCorrectSkipLogged := FLastProcessName;
+      DiagnosticsLogFmt('autocorrect.skipped reason=program_rule process="%s"',
+        [FLastProcessName]);
+    end;
     Exit;
+  end;
   // Exactly one space has just been typed after the word.
   if not FindLastWord(FBuffer, WordStart, WordLength) or
      (WordStart + WordLength <> Length(FBuffer)) then

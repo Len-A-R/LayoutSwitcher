@@ -63,7 +63,8 @@ const
   DEFAULT_DOUBLE_TAP_INTERVAL = 500;
   // 2: transliteration and undo got default gestures.
   // 3: translation and web search got default gestures.
-  CURRENT_SETTINGS_VERSION = 3;
+  // 4: notepad++.exe left the default "no automatic corrections" list.
+  CURRENT_SETTINGS_VERSION = 4;
   STARTUP_VALUE_NAME = 'LayoutSwitcher';
 
   ActionKeys: array[TLSAction] of string = (
@@ -74,10 +75,10 @@ const
   // monitor the clipboard.  LayoutSwitcher must not inject input into them.
   // Automatic corrections are off here by default: code, commands,
   // passwords and remote sessions.
-  DefaultNoAutoCorrectProcesses: array[0..23] of string = (
+  DefaultNoAutoCorrectProcesses: array[0..22] of string = (
     'Code.exe', 'devenv.exe', 'bds.exe', 'idea64.exe', 'pycharm64.exe',
     'webstorm64.exe', 'rider64.exe', 'clion64.exe', 'goland64.exe',
-    'sublime_text.exe', 'notepad++.exe', 'WindowsTerminal.exe', 'cmd.exe',
+    'sublime_text.exe', 'WindowsTerminal.exe', 'cmd.exe',
     'powershell.exe', 'pwsh.exe', 'conhost.exe', 'OpenConsole.exe', 'mintty.exe',
     'putty.exe', 'mstsc.exe', 'KeePass.exe', 'KeePassXC.exe', '1Password.exe',
     'Bitwarden.exe');
@@ -390,6 +391,16 @@ begin
     Result := Default;
 end;
 
+function RemoveProcess(const List: TArray<string>; const Name: string): TArray<string>;
+var
+  Item: string;
+begin
+  Result := nil;
+  for Item in List do
+    if not SameText(Item, Name) then
+      Result := Result + [Item];
+end;
+
 function LoadSettingsFrom(Store: TSettingsStore): TLSSettings;
 var
   Action: TLSAction;
@@ -463,8 +474,14 @@ begin
       Result.AutoSwitchExceptions := ParseWordList(
         Store.ReadString(VALUE_AUTO_SWITCH_EXCEPTIONS, ''));
     if Store.ValueExists(VALUE_NO_AUTOCORRECT) then
+    begin
       Result.NoAutoCorrectProcesses := ParseProcessList(
         Store.ReadString(VALUE_NO_AUTOCORRECT, ''));
+      // 2.3.0 listed Notepad++ by default, but it is a plain text editor too.
+      if Store.ReadInteger(VALUE_SETTINGS_VERSION, 0) < 4 then
+        Result.NoAutoCorrectProcesses := RemoveProcess(
+          Result.NoAutoCorrectProcesses, 'notepad++.exe');
+    end;
     Result.SoundEnabled := Store.ReadBool(VALUE_SOUND, Result.SoundEnabled);
   except
     // A damaged value must not prevent the application from starting.
