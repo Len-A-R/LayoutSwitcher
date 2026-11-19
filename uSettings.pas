@@ -42,6 +42,8 @@ type
     Translator: Integer;     // TRANSLATOR_* in uTextTools
     // Automatic layout switching (Windows spell checker decides).
     AutoSwitchEnabled: Boolean;
+    // Swapped neighbouring letters ("teh" -> "the") after a space.
+    FixTypos: Boolean;
     AutoSwitchExceptions: TArray<string>;
     // Programs where only the manual actions work (code editors, terminals).
     NoAutoCorrectProcesses: TArray<string>;
@@ -150,6 +152,7 @@ const
   VALUE_SEARCH_ENGINE = 'SearchEngine';
   VALUE_DIAGNOSTICS = 'EnableDiagnostics';
   VALUE_AUTO_SWITCH = 'AutoSwitchEnabled';
+  VALUE_FIX_TYPOS = 'FixTypos';
   VALUE_AUTO_SWITCH_EXCEPTIONS = 'AutoSwitchExceptions';
   VALUE_NO_AUTOCORRECT = 'NoAutoCorrectProcesses';
   VALUE_SOUND = 'SoundEnabled';
@@ -187,6 +190,7 @@ begin
   Result.Translator := TRANSLATOR_YANDEX;
   Result.SearchEngine := SEARCH_YANDEX;
   Result.AutoSwitchEnabled := False;
+  Result.FixTypos := False;
   Result.AutoSwitchExceptions := nil;
   SetLength(Result.NoAutoCorrectProcesses, Length(DefaultNoAutoCorrectProcesses));
   for I := 0 to High(DefaultNoAutoCorrectProcesses) do
@@ -470,6 +474,7 @@ begin
     Result.Translator := Store.ReadInteger(VALUE_TRANSLATOR, Result.Translator);
     Result.SearchEngine := Store.ReadInteger(VALUE_SEARCH_ENGINE, Result.SearchEngine);
     Result.AutoSwitchEnabled := Store.ReadBool(VALUE_AUTO_SWITCH, Result.AutoSwitchEnabled);
+    Result.FixTypos := Store.ReadBool(VALUE_FIX_TYPOS, Result.FixTypos);
     if Store.ValueExists(VALUE_AUTO_SWITCH_EXCEPTIONS) then
       Result.AutoSwitchExceptions := ParseWordList(
         Store.ReadString(VALUE_AUTO_SWITCH_EXCEPTIONS, ''));
@@ -515,6 +520,7 @@ begin
     Store.WriteInteger(VALUE_TRANSLATOR, Settings.Translator);
     Store.WriteInteger(VALUE_SEARCH_ENGINE, Settings.SearchEngine);
     Store.WriteBool(VALUE_AUTO_SWITCH, Settings.AutoSwitchEnabled);
+    Store.WriteBool(VALUE_FIX_TYPOS, Settings.FixTypos);
     Store.WriteString(VALUE_AUTO_SWITCH_EXCEPTIONS,
       string.Join('; ', Settings.AutoSwitchExceptions));
     Store.WriteString(VALUE_NO_AUTOCORRECT,

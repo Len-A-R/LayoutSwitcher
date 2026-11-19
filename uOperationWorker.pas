@@ -39,7 +39,11 @@ type
     // Triggered by a double Alt: wait until the application leaves its menu
     // mode and take the focused window again.
     SettleFocus: Boolean;
+    // laAutoSwitch: words never changed automatically, and what may be done
+    // with a misspelled word (switch its layout, fix swapped letters).
     AutoSwitchExceptions: TArray<string>;
+    AllowLayoutSwitch: Boolean;
+    AllowTypoFix: Boolean;
     FocusWnd: HWND;
     WindowLayout: HKL;
     PreviousLayout: HKL;
@@ -52,6 +56,7 @@ type
     Action: TLSAction;
     Success: Boolean;
     UsedBuffer: Boolean;   // The request plan was applied.
+    TypoFixed: Boolean;    // laAutoSwitch fixed swapped letters, no layout change.
     OriginalText: string;  // Text before a selection/caret replacement.
     LookupText: string;    // laTranslate / laWebSearch: text to look up.
     BufferAction: TBufferAction;
@@ -78,6 +83,8 @@ type
     FSpell: TSpellCheck;
     function ApproveAutoSwitch(Request: TOperationRequest;
       const Original, Converted: string; Res: TOperationResult): Boolean;
+    function FindTypoFix(Request: TOperationRequest; const Word: string;
+      Layout: HKL; out Fixed: string): Boolean;
     procedure HandleRequest(Request: TOperationRequest);
     procedure Process(Request: TOperationRequest; Res: TOperationResult);
     function ReadNativeEdit(Target: HWND; out Text: string;
@@ -518,6 +525,9 @@ begin
         else if not FCatalog.ChoosePair(Text, Request.WindowLayout,
              Request.PreviousLayout, Pair) then
         begin
+          // A single layout still allows fixing typos in it.
+          if Request.Action = laAutoSwitch then
+            Exit(True);
           DiagnosticsLog('convert.no_layout_pair');
           Notify(Res, 'single_layout',
             T('В Windows установлена только одна раскладка клавиатуры.',
@@ -656,6 +666,30 @@ begin
      Length(Original), BoolToStr(Result, True)]);
 end;
 
+function TOperationWorker.FindTypoFix(Request: TOperationRequest;
+  const Word: string; Layout: HKL; out Fixed: string): Boolean;
+var
+  Tag, Item: string;
+  Suggestions: TArray<string>;
+begin
+  // Words are not written to the log, only the language and the decision.
+  Result := False;
+  Fixed := '';
+  for Item in Request.AutoSwitchExceptions do
+    if AnsiSameText(Item, Word) then
+    begin
+      DiagnosticsLog('typo.skipped reason=exception');
+      Exit;
+    end;
+  Tag := LayoutLanguageTag(Layout);
+  if FSpell.CheckWord(Tag, Word) <> scMisspelled then
+    Exit;
+  Suggestions := FSpell.Suggest(Tag, Word);
+  Result := ChooseTypoFix(Word, Suggestions, Fixed);
+  DiagnosticsLogFmt('typo.check lang=%s suggestions=%d length=%d fix=%s',
+    [Tag, Length(Suggestions), Length(Word), BoolToStr(Result, True)]);
+end;
+
 function TOperationWorker.TypingContinued(Request: TOperationRequest): Boolean;
 begin
   Result := Request.Automatic and
@@ -717,7 +751,8 @@ procedure TOperationWorker.Process(Request: TOperationRequest;
   Res: TOperationResult);
 var
   Focus: TUIAFocusInfo;
-  Text, Region, Converted, Typed, Source: string;
+  Text, Region, Converted, Typed, Source, Fixed: string;
+  TypedLayout: HKL;
   CaretText: WideString;
   CaretRange: IUnknown;
 begin
@@ -783,11 +818,28 @@ begin
       [Ord(Request.Plan.Mode), Length(Region), Request.Plan.DeleteCount]);
     if not TransformText(Request, Region, Res, Converted) then
       Exit;
-    if (Request.Action = laAutoSwitch) and
-       not ApproveAutoSwitch(Request, Region, Converted, Res) then
+    if Request.Action = laAutoSwitch then
     begin
-      Res.BufferAction := baKeep;
-      Exit;
+      TypedLayout := Res.SourceLayout;
+      if TypedLayout = 0 then
+        TypedLayout := Request.WindowLayout;
+      if Request.AllowLayoutSwitch and (Res.TargetLayout <> 0) and
+         ApproveAutoSwitch(Request, Region, Converted, Res) then
+        // Converted is the word in the other layout.
+      else if Request.AllowTypoFix and
+         FindTypoFix(Request, Region, TypedLayout, Fixed) then
+      begin
+        // Same layout, letters put in order.
+        Converted := Fixed;
+        Res.TypoFixed := True;
+        Res.SourceLayout := 0;
+        Res.TargetLayout := 0;
+      end
+      else
+      begin
+        Res.BufferAction := baKeep;
+        Exit;
+      end;
     end;
     Res.UsedBuffer := True;
     Typed := Converted + Request.Plan.Tail;

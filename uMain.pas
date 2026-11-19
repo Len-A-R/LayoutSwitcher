@@ -95,6 +95,7 @@ type
     chkSound: TCheckBox;
     chkAutoSwitch: TCheckBox;
     lblAutoSwitchHint: TLabel;
+    chkFixTypos: TCheckBox;
     lblAutoSwitchExceptions: TLabel;
     edAutoSwitchExceptions: TEdit;
     lblNoAutoCorrect: TLabel;
@@ -1088,6 +1089,8 @@ begin
   Request.ToggleCapsLock := ToggleCaps;
   Request.SettleFocus := FSettleFocusNext;
   Request.AutoSwitchExceptions := FSettings.AutoSwitchExceptions;
+  Request.AllowLayoutSwitch := FSettings.AutoSwitchEnabled;
+  Request.AllowTypoFix := FSettings.FixTypos;
   if FCapsShiftLock then
     Request.CapsOffKey := VK_SHIFT
   else
@@ -1161,6 +1164,13 @@ begin
     // Remember the step so that repeating the action widens it.
     if not Res.Success or (FBuffer = '') then
       FChain.Reset
+    else if Res.UsedBuffer and Res.TypoFixed then
+    begin
+      // Undo-able like the other corrections; double Shift converts as usual.
+      FChain.Completed(FPendingPlan, laNone, FBuffer, 0, 0);
+      FAutoSwitchOriginal := FPendingPlan.Region;
+      DiagnosticsLog('typo.applied');
+    end
     else if Res.UsedBuffer and (Res.Action = laAutoSwitch) then
     begin
       FChain.CompletedAutoSwitch(FPendingPlan, FBuffer, Res.SourceLayout,
@@ -1407,6 +1417,7 @@ begin
     chkSnippets.Checked := FSettings.SnippetsEnabled;
     chkSound.Checked := FSettings.SoundEnabled;
     chkAutoSwitch.Checked := FSettings.AutoSwitchEnabled;
+    chkFixTypos.Checked := FSettings.FixTypos;
     edAutoSwitchExceptions.Text := string.Join('; ', FSettings.AutoSwitchExceptions);
     memNoAutoCorrect.Text := string.Join(sLineBreak, FSettings.NoAutoCorrectProcesses);
     memSnippets.Text := FSettings.Snippets;
@@ -1491,6 +1502,7 @@ begin
   FSettings.SnippetsEnabled := chkSnippets.Checked;
   FSettings.SoundEnabled := chkSound.Checked;
   FSettings.AutoSwitchEnabled := chkAutoSwitch.Checked;
+  FSettings.FixTypos := chkFixTypos.Checked;
   if not FSettings.ShowLayoutIndicator then
     FIndicator.HideNow;
   ApplySettings;
@@ -1866,7 +1878,10 @@ begin
       'Automatically fix words typed in the wrong keyboard layout');
     lblAutoSwitchHint.Caption := T('Решает проверка орфографии Windows.',
       'The Windows spell checker decides.');
-    lblAutoSwitchExceptions.Caption := T('Не переключать:', 'Never switch:');
+    chkFixTypos.Caption := T(
+      'Исправлять опечатки: переставленные соседние буквы (пирвет → привет)',
+      'Fix typos: swapped neighbouring letters (teh → the)');
+    lblAutoSwitchExceptions.Caption := T('Не исправлять:', 'Never change:');
     chkFixCapsLock.Caption := T(
       'Исправлять слова, набранные с включённым Caps Lock (пРИВЕТ → Привет)',
       'Fix words typed with Caps Lock on (hELLO → Hello)');
@@ -2141,7 +2156,7 @@ begin
   if FPaused or FBufferOverflowed or FFocusIsPassword or FOperationBusy then
     Exit;
   if not (FSettings.FixCapsLock or FSettings.FixTwoCapitals or FSettings.AutoSwitchEnabled or
-          (FSettings.SnippetsEnabled and (Length(FSnippets) > 0))) then
+          FSettings.FixTypos or (FSettings.SnippetsEnabled and (Length(FSnippets) > 0))) then
     Exit;
   // Code editors, terminals, password managers: manual actions only.
   if FSettings.IsAutoCorrectDisabledFor(FLastProcessName) then
@@ -2176,8 +2191,9 @@ begin
     Replacement := Fixed;
   if Replacement = '' then
   begin
-    // Nothing else to fix: let the spell checker decide about the layout.
-    if FSettings.AutoSwitchEnabled and not ContainsDigit(Word) then
+    // Nothing else to fix: the spell checker decides about the layout and
+    // about swapped letters.
+    if (FSettings.AutoSwitchEnabled or FSettings.FixTypos) and not ContainsDigit(Word) then
       QueueRequest(laAutoSwitch, TConversionChain.PlanWord(FBuffer, WordStart,
         WordLength), True, False);
     Exit;
@@ -2214,8 +2230,8 @@ begin
   FBalloonInstall := False;
   FNotificationTimes.Remove('autoswitch_learned');
   ShowNotification('autoswitch_learned', Format(T(
-    'Слово «%s» больше не будет переключаться автоматически.',
-    'The word "%s" will no longer be switched automatically.'), [Word]));
+    'Слово «%s» больше не будет исправляться автоматически.',
+    'The word "%s" will no longer be changed automatically.'), [Word]));
 end;
 
 procedure TFormMain.edCorrectionsExit(Sender: TObject);

@@ -52,6 +52,19 @@ function ExpandSnippet(const Template: string; Moment: TDateTime): string;
 // allowed between letters), no digits.
 function IsAutoSwitchCandidate(const Converted: string): Boolean;
 
+// Typo correction: Candidate is Typed with two neighbouring, different
+// letters swapped (case-insensitive): "teh" / "the".
+function IsAdjacentTransposition(const Typed, Candidate: string): Boolean;
+// Candidate written with the case of Typed: lower case keeps the candidate
+// as is (proper names stay capitalised), "Teh" -> "The", "TEH" -> "THE".
+// False for a mixed case such as "tEh".
+function ApplyWordCase(const Typed, Candidate: string; out Fixed: string): Boolean;
+// The only spelling suggestion that differs from Word by swapped
+// neighbouring letters; False when there is none or more than one, or the
+// word is too short (less than 4 letters) to be corrected safely.
+function ChooseTypoFix(const Word: string; const Suggestions: TArray<string>;
+  out Fixed: string): Boolean;
+
 // Release description (GitHub Markdown) as plain text for a dialog.
 function CleanReleaseNotes(const Markdown: string): string;
 
@@ -219,6 +232,67 @@ begin
       Exit;
   end;
   Result := Letters >= 3;
+end;
+
+function IsAdjacentTransposition(const Typed, Candidate: string): Boolean;
+var
+  A, B: string;
+  I: Integer;
+begin
+  Result := False;
+  A := AnsiLowerCase(Typed);
+  B := AnsiLowerCase(Candidate);
+  if (Length(A) <> Length(B)) or (Length(A) < 2) or (A = B) then
+    Exit;
+  I := 1;
+  while A[I] = B[I] do
+    Inc(I);
+  if (I >= Length(A)) or (A[I] = A[I + 1]) or (A[I] <> B[I + 1]) or
+     (A[I + 1] <> B[I]) then
+    Exit;
+  Result := Copy(A, I + 2, MaxInt) = Copy(B, I + 2, MaxInt);
+end;
+
+function ApplyWordCase(const Typed, Candidate: string; out Fixed: string): Boolean;
+var
+  Upper, Lower: Integer;
+begin
+  Result := True;
+  LetterCount(Typed, Upper, Lower);
+  if Upper = 0 then
+    Fixed := Candidate
+  else if (Lower = 0) and (Upper > 1) then
+    Fixed := AnsiUpperCase(Candidate)
+  else if (Upper = 1) and Typed[1].IsUpper then
+    Fixed := AnsiUpperCase(Copy(Candidate, 1, 1)) + Copy(Candidate, 2, MaxInt)
+  else
+  begin
+    Fixed := '';
+    Result := False;
+  end;
+end;
+
+function ChooseTypoFix(const Word: string; const Suggestions: TArray<string>;
+  out Fixed: string): Boolean;
+var
+  Upper, Lower: Integer;
+  Item, Found: string;
+begin
+  Result := False;
+  Fixed := '';
+  if not IsAutoSwitchCandidate(Word) or (LetterCount(Word, Upper, Lower) < 4) then
+    Exit;
+  Found := '';
+  for Item in Suggestions do
+    if IsAdjacentTransposition(Word, Item) then
+    begin
+      // "Москва" and "москва" are one candidate, two different words are not.
+      if (Found <> '') and not AnsiSameText(Found, Item) then
+        Exit;
+      if Found = '' then
+        Found := Item;
+    end;
+  Result := (Found <> '') and ApplyWordCase(Word, Found, Fixed);
 end;
 
 function CleanReleaseNotes(const Markdown: string): string;
