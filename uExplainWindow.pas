@@ -11,7 +11,8 @@ interface
 uses
   Winapi.Windows, Winapi.Messages,
   System.SysUtils, System.Classes, System.Types, System.UITypes,
-  Vcl.Controls, Vcl.Forms, Vcl.StdCtrls, Vcl.ExtCtrls, Vcl.Graphics, Vcl.ComCtrls;
+  Vcl.Controls, Vcl.Forms, Vcl.StdCtrls, Vcl.ExtCtrls, Vcl.Graphics, Vcl.ComCtrls,
+  uModernUI;
 
 type
   // Markdown subset of AI answers.
@@ -35,37 +36,9 @@ function ParseMarkdown(const Text: string): TArray<TMdLine>;
 function MarkdownToPlainText(const Text: string): string;
 
 type
-  TExplainTheme = record
-    Dark: Boolean;
-    Back, Card, Footer, Text, Muted, Accent, AccentText, Error, Hover, Border: TColor;
-  end;
-
-  // A flat button with rounded corners and a hover state.
-  TFlatButton = class(TCustomControl)
-  private
-    FHover: Boolean;
-    FPrimary: Boolean;
-    FTheme: TExplainTheme;
-    procedure CMMouseEnter(var Message: TMessage); message CM_MOUSEENTER;
-    procedure CMMouseLeave(var Message: TMessage); message CM_MOUSELEAVE;
-    procedure CMTextChanged(var Message: TMessage); message CM_TEXTCHANGED;
-    procedure CMEnabledChanged(var Message: TMessage); message CM_ENABLEDCHANGED;
-  protected
-    procedure Paint; override;
-    procedure KeyDown(var Key: Word; Shift: TShiftState); override;
-    procedure DoEnter; override;
-    procedure DoExit; override;
-  public
-    constructor Create(AOwner: TComponent); override;
-    property Primary: Boolean read FPrimary write FPrimary;
-    property Theme: TExplainTheme read FTheme write FTheme;
-    property Caption;
-    property OnClick;
-  end;
-
   TExplainWindow = class(TForm)
   private
-    FTheme: TExplainTheme;
+    FTheme: TUiTheme;
     FFontName: string;
     FHeader: TPanel;
     FHint: TLabel;
@@ -112,20 +85,12 @@ type
     procedure ShowError(const Text: string);
   end;
 
-function CurrentExplainTheme: TExplainTheme;
-
 implementation
 
 uses
   Winapi.DwmApi, Winapi.RichEdit, Winapi.UxTheme, System.Win.Registry, System.Math, System.StrUtils,
   Vcl.Clipbrd, uLocale;
 
-const
-  DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
-  DWMWA_WINDOW_CORNER_PREFERENCE = 33;
-  DWMWA_CAPTION_COLOR = 35;
-  DWMWA_TEXT_COLOR = 36;
-  DWMWCP_ROUND = 2;
 
 { Markdown }
 
@@ -285,170 +250,6 @@ begin
   end;
 end;
 
-{ Theme }
-
-function CurrentExplainTheme: TExplainTheme;
-var
-  Registry: TRegistry;
-  Color: DWORD;
-  Opaque: BOOL;
-  R, G, B: Byte;
-begin
-  Result.Dark := False;
-  Registry := TRegistry.Create(KEY_READ);
-  try
-    Registry.RootKey := HKEY_CURRENT_USER;
-    if Registry.OpenKeyReadOnly('Software\Microsoft\Windows\CurrentVersion\Themes\Personalize') and
-       Registry.ValueExists('AppsUseLightTheme') then
-      Result.Dark := Registry.ReadInteger('AppsUseLightTheme') = 0;
-  finally
-    Registry.Free;
-  end;
-  // Accent colour of Windows; a grey colourisation falls back to the
-  // default Windows 11 blue.
-  Result.Accent := RGB($00, $67, $C0);
-  if Succeeded(DwmGetColorizationColor(Color, Opaque)) then
-  begin
-    R := (Color shr 16) and $FF;
-    G := (Color shr 8) and $FF;
-    B := Color and $FF;
-    if MaxIntValue([R, G, B]) - MinIntValue([R, G, B]) > 40 then
-      Result.Accent := RGB(R, G, B);
-  end;
-  Result.AccentText := clWhite;
-  if Result.Dark then
-  begin
-    Result.Back := RGB($20, $20, $20);
-    Result.Card := RGB($2C, $2C, $2C);
-    Result.Footer := RGB($1A, $1A, $1A);
-    Result.Text := RGB($F2, $F2, $F2);
-    Result.Muted := RGB($A0, $A0, $A0);
-    Result.Error := RGB($FF, $99, $A4);
-    Result.Hover := RGB($3A, $3A, $3A);
-    Result.Border := RGB($3A, $3A, $3A);
-  end
-  else
-  begin
-    Result.Back := RGB($FF, $FF, $FF);
-    Result.Card := RGB($F3, $F4, $F6);
-    Result.Footer := RGB($F7, $F7, $F8);
-    Result.Text := RGB($1F, $1F, $1F);
-    Result.Muted := RGB($6B, $6B, $6B);
-    Result.Error := RGB($C4, $2B, $1C);
-    Result.Hover := RGB($E6, $E7, $EA);
-    Result.Border := RGB($E1, $E2, $E5);
-  end;
-end;
-
-{ TFlatButton }
-
-constructor TFlatButton.Create(AOwner: TComponent);
-begin
-  inherited Create(AOwner);
-  ControlStyle := ControlStyle + [csOpaque] - [csSetCaption];
-  TabStop := True;
-  Cursor := crHandPoint;
-  DoubleBuffered := True;
-end;
-
-procedure TFlatButton.CMMouseEnter(var Message: TMessage);
-begin
-  inherited;
-  FHover := True;
-  Invalidate;
-end;
-
-procedure TFlatButton.CMMouseLeave(var Message: TMessage);
-begin
-  inherited;
-  FHover := False;
-  Invalidate;
-end;
-
-procedure TFlatButton.CMTextChanged(var Message: TMessage);
-begin
-  inherited;
-  Invalidate;
-end;
-
-procedure TFlatButton.CMEnabledChanged(var Message: TMessage);
-begin
-  inherited;
-  Invalidate;
-end;
-
-procedure TFlatButton.KeyDown(var Key: Word; Shift: TShiftState);
-begin
-  inherited;
-  if (Key = VK_RETURN) or (Key = VK_SPACE) then
-  begin
-    Click;
-    Key := 0;
-  end;
-end;
-
-procedure TFlatButton.DoEnter;
-begin
-  inherited;
-  Invalidate;
-end;
-
-procedure TFlatButton.DoExit;
-begin
-  inherited;
-  Invalidate;
-end;
-
-procedure TFlatButton.Paint;
-var
-  Fill, Ink: TColor;
-  R: TRect;
-  Radius: Integer;
-begin
-  if FPrimary then
-  begin
-    Fill := FTheme.Accent;
-    if FHover then
-      // A little lighter on hover.
-      Fill := RGB(Min(255, GetRValue(ColorToRGB(Fill)) + 20),
-        Min(255, GetGValue(ColorToRGB(Fill)) + 20), Min(255, GetBValue(ColorToRGB(Fill)) + 20));
-    Ink := FTheme.AccentText;
-  end
-  else
-  begin
-    if FHover and Enabled then
-      Fill := FTheme.Hover
-    else
-      Fill := FTheme.Card;
-    Ink := FTheme.Text;
-  end;
-  if not Enabled then
-    Ink := FTheme.Muted;
-  Canvas.Brush.Color := Parent.Brush.Color;
-  Canvas.FillRect(ClientRect);
-  Radius := MulDiv(8, Screen.PixelsPerInch, 96);
-  Canvas.Brush.Color := Fill;
-  if FPrimary then
-    Canvas.Pen.Color := Fill
-  else
-    Canvas.Pen.Color := FTheme.Border;
-  Canvas.RoundRect(0, 0, Width, Height, Radius, Radius);
-  Canvas.Font.Assign(Font);
-  Canvas.Font.Color := Ink;
-  Canvas.Brush.Style := bsClear;
-  R := ClientRect;
-  DrawText(Canvas.Handle, PChar(Caption), -1, R, DT_CENTER or DT_VCENTER or DT_SINGLELINE);
-  // A ring only when the keyboard is used (Windows hides focus cues for
-  // mouse users).
-  if Focused and ((Perform(WM_QUERYUISTATE, 0, 0) and UISF_HIDEFOCUS) = 0) then
-  begin
-    Canvas.Brush.Style := bsClear;
-    Canvas.Pen.Color := FTheme.Text;
-    Canvas.Pen.Width := 1;
-    Canvas.RoundRect(1, 1, Width - 1, Height - 1, Radius, Radius);
-  end;
-end;
-
 { TExplainWindow }
 
 function TExplainWindow.S(Value: Integer): Integer;
@@ -590,27 +391,14 @@ begin
 end;
 
 procedure TExplainWindow.ApplyWindowFrame;
-var
-  Value: BOOL;
-  Corner: DWORD;
-  Caption, TextColor: COLORREF;
 begin
-  if not HandleAllocated or (Win32MajorVersion < 10) then
-    Exit;
-  // Each attribute is ignored by Windows versions that do not know it.
-  Value := FTheme.Dark;
-  DwmSetWindowAttribute(Handle, DWMWA_USE_IMMERSIVE_DARK_MODE, @Value, SizeOf(Value));
-  Corner := DWMWCP_ROUND;
-  DwmSetWindowAttribute(Handle, DWMWA_WINDOW_CORNER_PREFERENCE, @Corner, SizeOf(Corner));
-  Caption := ColorToRGB(FTheme.Back);
-  DwmSetWindowAttribute(Handle, DWMWA_CAPTION_COLOR, @Caption, SizeOf(Caption));
-  TextColor := ColorToRGB(FTheme.Text);
-  DwmSetWindowAttribute(Handle, DWMWA_TEXT_COLOR, @TextColor, SizeOf(TextColor));
+  if HandleAllocated then
+    ApplyWindowChrome(Handle, FTheme, FTheme.Back);
 end;
 
 procedure TExplainWindow.ApplyTheme;
 begin
-  FTheme := CurrentExplainTheme;
+  FTheme := CurrentUiTheme;
   Color := FTheme.Back;
   FHeader.Color := FTheme.Back;
   FBody.Color := FTheme.Back;

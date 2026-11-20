@@ -331,6 +331,9 @@ Clipboard fallback не выполняется, если:
 
 ## Настройки
 
+Окно настроек оформлено в стиле Windows 11: разделы переключаются в боковом меню (Основные, Сочетания, Раскладка, Исправления, Замены, Сервисы, Исключения; стрелки вверх/вниз, когда меню в фокусе), справа — заголовок раздела и карточка с настройками, `Esc` закрывает окно. Окно всегда светлое: стандартные элементы Windows без VCL-стилей тёмными не бывают. Окно объяснения ИИ следует теме Windows.
+
+
 Хранятся в `HKCU\Software\LayoutSwitcher`: `Gesture.<действие>`, `DoubleTapInterval`, `ExcludedProcesses`, `PauseInFullscreen`, `ShowNotifications`, `DisableStickyKeysHotkey`, `ShowLayoutIndicator`, `Language`, `CheckForUpdates`, `LastUpdateCheck`, `FixCapsLock`, `FixTwoCapitals`, `TwoCapitalsExceptions`, `SnippetsEnabled`, `Snippets`, `AutoReplaceEnabled`, `AutoReplace`, `Translator`, `SearchEngine`, `AutoSwitchEnabled`, `InWordSwitch`, `LearnManualConversions`, `AutoSwitchLearned`, `AutoSwitchLearnCounts`, `FixTypos`, `FixTyposExtended`, `CapitalizeSentences`, `FixDoubleSpace`, `DeepLApiKey`, `AiProvider`, `AiClaudeKey`, `AiClaudeModel`, `AiOpenAIKey`, `AiOpenAIUrl`, `AiOpenAIModel`, `AiConsent`, `AutoSwitchExceptions`, `NoAutoCorrectProcesses`, `CustomPrograms`, `SoundEnabled`, `SoundKind`, `SoundFile`, `SettingsVersion`, `EnableDiagnostics`. Повреждённые или противоречивые значения заменяются значениями по умолчанию.
 
 ### Экспорт, импорт и переносной режим
@@ -437,6 +440,7 @@ Export-Certificate -Cert $cert -FilePath LayoutSwitcher-codesign.cer
 | `uWordStarts.pas` | Начала слов русского и английского словарей (генерируется) |
 | `uTrayIconData.pas` | Иконки трея (генерируется из `res\tray-*.png`) |
 | `uProgramList.pas` | Таблица программ на вкладке «Исключения»: поиск установленных программ |
+| `uModernUI.pas` | Общий вид окон в стиле Windows 11: тема, рамка окна, плоская кнопка, боковое меню |
 | `uSounds.pas` | Звуки при исправлении (синтез WAV, свой файл) |
 | `uAiExplain.pas`, `uExplainWindow.pas` | Объяснение выделенного: запросы к сервисам ИИ и окно ответа |
 | `uTranslate.pas` | Замена текста переводом: Google Translate и DeepL API |

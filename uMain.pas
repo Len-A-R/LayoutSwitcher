@@ -10,7 +10,7 @@ uses
   Winapi.Windows, Winapi.Messages,
   System.SysUtils, System.Classes, System.Generics.Collections,
   Vcl.Graphics, Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.ExtCtrls, Vcl.Menus,
-  Vcl.StdCtrls, Vcl.ComCtrls, Vcl.Grids, uProgramList, uAiExplain, uExplainWindow,
+  Vcl.StdCtrls, Vcl.ComCtrls, Vcl.Grids, uProgramList, uAiExplain, uExplainWindow, uModernUI,
   uSettings, uGestureDetector, uOperationWorker, uConversionChain,
   uLayoutIndicator, uUpdateCheck, uUpdateProgress, uLayoutConverter, uTextTools;
 
@@ -284,6 +284,13 @@ type
     // AI explanation window and the answer it waits for.
     FExplainWindow: TExplainWindow;
     FExplainSequence: Cardinal;
+    // Windows 11 look of the settings window: side navigation, page title,
+    // flat buttons (built over the form at start).
+    FUiTheme: TUiTheme;
+    FNav: TNavBar;
+    FPageTitle: TLabel;
+    FFlatReport: TFlatButton;
+    FFlatClose: TFlatButton;
     FPrograms: TArray<TProgramEntry>;
     FVisiblePrograms: TArray<Integer>;
     FUpdateNotes: string;
@@ -326,6 +333,9 @@ type
     procedure UpdateProgramButtons;
     procedure pcMainChange(Sender: TObject);
     procedure ProgramScanDone(Sender: TObject);
+    procedure ModernizeSettingsWindow;
+    procedure NavChange(Sender: TObject);
+    procedure SettingsKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
     function CurrentAiConfig: TAiConfig;
     procedure LoadAiControls;
     procedure ApplyAiFromEdit;
@@ -523,6 +533,8 @@ end;
 procedure TFormMain.CreateWnd;
 begin
   inherited;
+  if Assigned(FNav) then
+    ApplyWindowChrome(Handle, FUiTheme, FUiTheme.Footer);
   // Lets a second launch find this instance and allows the message through
   // UIPI when this instance runs elevated.
   SetProp(Handle, INSTANCE_WINDOW_PROP, 1);
@@ -551,6 +563,8 @@ begin
   FAutoReplace := ParseAutoReplace(FSettings.AutoReplace);
   FCapsShiftLock := IsCapsLockOffByShift;
   FCapsOn := (GetKeyState(VK_CAPITAL) and 1) <> 0;
+  // Before any window of the form exists: the layout is resized once.
+  ModernizeSettingsWindow;
   ApplyLanguage;
 
   // Assigning Checked raises OnClick; the guard keeps FormCreate from
@@ -1774,6 +1788,145 @@ begin
   ApplyStickyKeysSetting;
 end;
 
+{ Windows 11 look }
+
+type
+  TControlAccess = class(TControl);
+
+procedure TFormMain.ModernizeSettingsWindow;
+const
+  NAV_WIDTH = 210;
+  GAP = 20;
+  TITLE_HEIGHT = 64;
+  // The pages were designed for Tahoma 8; Segoe UI 9 needs more room.
+  EXTRA_WIDTH = 80;
+var
+  I, J, PageWidth, PageHeight, OldRight, Delta: Integer;
+  Control: TControl;
+  Page: TTabSheet;
+
+  function S(Value: Integer): Integer;
+  begin
+    Result := MulDiv(Value, CurrentPPI, 96);
+  end;
+
+begin
+  FUiTheme := CurrentUiTheme(True);
+  // The modern font everywhere (Tahoma 8 of the form designer).
+  Font.Name := ModernFontName;
+  Font.Size := 9;
+  for I := 0 to ComponentCount - 1 do
+    if Components[I] is TControl then
+    begin
+      Control := TControl(Components[I]);
+      if SameText(TControlAccess(Control).Font.Name, 'Tahoma') then
+      begin
+        TControlAccess(Control).Font.Name := Font.Name;
+        if TControlAccess(Control).Font.Size = 8 then
+          TControlAccess(Control).Font.Size := 9;
+      end;
+    end;
+  Color := FUiTheme.Footer;
+  lblVersion.Visible := False;
+  lblAuthor.Visible := False;
+  btnReport.Visible := False;
+  btnClose.Visible := False;
+
+  // Pages without tabs: the side navigation switches them.
+  PageWidth := pcMain.Width;
+  PageHeight := pcMain.Height;
+  for I := 0 to pcMain.PageCount - 1 do
+    pcMain.Pages[I].TabVisible := False;
+  pcMain.ActivePageIndex := 0;
+
+  // Wider pages: controls reaching the right edge grow, buttons there move.
+  OldRight := pcMain.Pages[0].ClientWidth;
+  Delta := S(EXTRA_WIDTH);
+  PageWidth := PageWidth + Delta;
+  pcMain.Width := PageWidth;
+  for I := 0 to pcMain.PageCount - 1 do
+  begin
+    Page := pcMain.Pages[I];
+    for J := 0 to Page.ControlCount - 1 do
+    begin
+      Control := Page.Controls[J];
+      if (Control.Left + Control.Width < OldRight - S(30)) or (Control = btnSoundTest) then
+        Continue;
+      if (Control is TButton) and (Control.Left > OldRight div 2) then
+        Control.Left := Control.Left + Delta
+      else if not ((Control is TLabel) and TLabel(Control).AutoSize) then
+        Control.Width := Control.Width + Delta;
+    end;
+  end;
+  // The two-line hint above the program table is taller now.
+  edProgramFilter.Top := edProgramFilter.Top + S(8);
+  chkProgramsCheckedOnly.Top := chkProgramsCheckedOnly.Top + S(8);
+  sgPrograms.Top := sgPrograms.Top + S(8);
+  sgPrograms.Height := sgPrograms.Height - S(8);
+
+  FNav := TNavBar.Create(Self);
+  FNav.Parent := Self;
+  FNav.SetBounds(0, 0, S(NAV_WIDTH), ClientHeight);
+  FNav.Setup(pcMain, [#$E713, #$E765, #$E774, #$E8FB, #$E8AB, #$E753, #$E733], FUiTheme);
+  FNav.Title := 'LayoutSwitcher';
+  FNav.OnChange := NavChange;
+
+  pcMain.SetBounds(S(NAV_WIDTH) + S(GAP), S(TITLE_HEIGHT), PageWidth, PageHeight);
+
+  FPageTitle := TLabel.Create(Self);
+  FPageTitle.Parent := Self;
+  FPageTitle.ParentFont := False;
+  FPageTitle.Font.Name := ModernFontName(True);
+  FPageTitle.Font.Size := 18;
+  FPageTitle.Font.Style := [fsBold];
+  FPageTitle.Font.Color := FUiTheme.Text;
+  FPageTitle.Transparent := True;
+  FPageTitle.SetBounds(pcMain.Left + S(2), S(18), PageWidth, S(32));
+
+  FFlatClose := TFlatButton.Create(Self);
+  FFlatClose.Parent := Self;
+  FFlatClose.Primary := True;
+  FFlatClose.Theme := FUiTheme;
+  FFlatClose.Font.Assign(Font);
+  FFlatClose.SetBounds(pcMain.Left + PageWidth - S(112), pcMain.Top + PageHeight + S(14),
+    S(112), S(32));
+  FFlatClose.OnClick := btnCloseClick;
+
+  FFlatReport := TFlatButton.Create(Self);
+  FFlatReport.Parent := Self;
+  FFlatReport.Theme := FUiTheme;
+  FFlatReport.Font.Assign(Font);
+  FFlatReport.SetBounds(FFlatClose.Left - S(8) - S(150), FFlatClose.Top, S(150), S(32));
+  FFlatReport.OnClick := mniReportClick;
+
+  ClientWidth := pcMain.Left + PageWidth + S(GAP);
+  ClientHeight := FFlatClose.Top + FFlatClose.Height + S(16);
+  FNav.Height := ClientHeight;
+
+  KeyPreview := True;
+  OnKeyDown := SettingsKeyDown;
+  if HandleAllocated then
+    ApplyWindowChrome(Handle, FUiTheme, FUiTheme.Footer);
+end;
+
+procedure TFormMain.NavChange(Sender: TObject);
+begin
+  FPageTitle.Caption := pcMain.ActivePage.Caption;
+  // Setting ActivePageIndex in code does not raise OnChange.
+  pcMainChange(pcMain);
+end;
+
+procedure TFormMain.SettingsKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
+begin
+  // Esc closes the window, like the old "Close" button (Cancel).
+  if (Key = VK_ESCAPE) and not ((ActiveControl is TComboBox) and
+     TComboBox(ActiveControl).DroppedDown) then
+  begin
+    Close;
+    Key := 0;
+  end;
+end;
+
 { Exclusions table }
 
 const
@@ -2551,6 +2704,14 @@ begin
     btnReport.Caption := T('Собрать отчёт...', 'Create report...');
     btnClose.Caption := T('Закрыть', 'Close');
     lblVersion.Caption := T('Версия ', 'Version ') + FVersion;
+    if Assigned(FNav) then
+    begin
+      FNav.Subtitle := T('Версия ', 'Version ') + FVersion + ' · len-a-r';
+      FNav.Invalidate;
+      FFlatReport.Caption := btnReport.Caption;
+      FFlatClose.Caption := btnClose.Caption;
+      FPageTitle.Caption := pcMain.ActivePage.Caption;
+    end;
     lblAuthor.Left := lblVersion.Left + lblVersion.Width + 12;
 
     mniSettings.Caption := T('Настройки...', 'Settings...');
