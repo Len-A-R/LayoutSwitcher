@@ -7,7 +7,7 @@ interface
 
 uses
   DUnitX.TestFramework,
-  uAiExplain, uSettings, uExplainWindow;
+  uAiExplain, uSettings, uModernUI;
 
 type
   [TestFixture]

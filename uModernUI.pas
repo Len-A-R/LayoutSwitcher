@@ -13,6 +13,21 @@ uses
   Vcl.Controls, Vcl.Forms, Vcl.Graphics, Vcl.ComCtrls;
 
 type
+  // Markdown subset of AI answers.
+  TMdRun = record
+    Text: string;
+    Bold: Boolean;
+    Code: Boolean;
+  end;
+
+  TMdLineKind = (mlText, mlHeading, mlBullet, mlNumbered, mlCode, mlBlank);
+
+  TMdLine = record
+    Kind: TMdLineKind;
+    Marker: string;          // "•" or "3." for list items
+    Runs: TArray<TMdRun>;
+  end;
+
   TUiTheme = record
     Dark: Boolean;
     Back, Card, Footer, Text, Muted, Accent, AccentText, Error, Hover, Border: TColor;
@@ -76,6 +91,16 @@ type
     property OnChange: TNotifyEvent read FOnChange write FOnChange;
   end;
 
+// Lines of a Markdown text: "# heading", "- item", "1. item", ``` code
+// blocks ```, inline **bold** and `code`.  Covered by tests.
+function ParseMarkdown(const Text: string): TArray<TMdLine>;
+function MarkdownToPlainText(const Text: string): string;
+// Markdown into a rich edit: headings, lists with hanging indents, bold,
+// code; line spacing 1.2 and space between paragraphs.
+procedure RenderMarkdown(Edit: TRichEdit; const Markdown: string; const Theme: TUiTheme;
+  const FontName: string);
+procedure SetRichEditSpacing(Edit: TRichEdit);
+
 function CurrentUiTheme(ForceLight: Boolean = False): TUiTheme;
 // Dark title bar (or not), its colour, rounded corners; ignored by Windows
 // versions that do not know an attribute.
@@ -87,7 +112,7 @@ function IconFontName: string;
 implementation
 
 uses
-  Winapi.DwmApi, System.Win.Registry, System.Math;
+  Winapi.DwmApi, Winapi.RichEdit, System.Win.Registry, System.Math, System.StrUtils;
 
 const
   DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
@@ -293,6 +318,263 @@ begin
     Canvas.Pen.Color := FTheme.Text;
     Canvas.Pen.Width := 1;
     Canvas.RoundRect(1, 1, Width - 1, Height - 1, Radius, Radius);
+  end;
+end;
+
+{ Markdown }
+
+function ParseInline(const Text: string): TArray<TMdRun>;
+var
+  I, Close: Integer;
+  Buffer: string;
+
+  procedure Flush(Bold, Code: Boolean);
+  var
+    Run: TMdRun;
+  begin
+    if Buffer = '' then
+      Exit;
+    Run.Text := Buffer;
+    Run.Bold := Bold;
+    Run.Code := Code;
+    Result := Result + [Run];
+    Buffer := '';
+  end;
+
+begin
+  Result := nil;
+  Buffer := '';
+  I := 1;
+  while I <= Length(Text) do
+  begin
+    if (Text[I] = '`') then
+    begin
+      Close := PosEx('`', Text, I + 1);
+      if Close > I + 1 then
+      begin
+        Flush(False, False);
+        Buffer := Copy(Text, I + 1, Close - I - 1);
+        Flush(False, True);
+        I := Close + 1;
+        Continue;
+      end;
+    end
+    else if (Text[I] = '*') and (I < Length(Text)) and (Text[I + 1] = '*') then
+    begin
+      Close := PosEx('**', Text, I + 2);
+      if Close > I + 2 then
+      begin
+        Flush(False, False);
+        Buffer := Copy(Text, I + 2, Close - I - 2);
+        Flush(True, False);
+        I := Close + 2;
+        Continue;
+      end;
+    end;
+    Buffer := Buffer + Text[I];
+    Inc(I);
+  end;
+  Flush(False, False);
+end;
+
+function ParseMarkdown(const Text: string): TArray<TMdLine>;
+var
+  Raw, Line, Trimmed: string;
+  Item: TMdLine;
+  InCode: Boolean;
+  Digits: Integer;
+  Run: TMdRun;
+begin
+  Result := nil;
+  InCode := False;
+  for Raw in Text.Replace(#13#10, #10).Replace(#13, #10).Split([#10]) do
+  begin
+    Line := Raw.TrimRight;
+    Trimmed := Line.TrimLeft;
+    Item.Marker := '';
+    Item.Runs := nil;
+    if Trimmed.StartsWith('```') then
+    begin
+      InCode := not InCode;
+      Continue;
+    end;
+    if InCode then
+    begin
+      Item.Kind := mlCode;
+      Run.Text := Line;
+      Run.Bold := False;
+      Run.Code := True;
+      Item.Runs := [Run];
+      Result := Result + [Item];
+      Continue;
+    end;
+    if Trimmed = '' then
+    begin
+      // One blank line between paragraphs is enough.
+      if (Length(Result) > 0) and (Result[High(Result)].Kind <> mlBlank) then
+      begin
+        Item.Kind := mlBlank;
+        Result := Result + [Item];
+      end;
+      Continue;
+    end;
+    if Trimmed.StartsWith('#') then
+    begin
+      Item.Kind := mlHeading;
+      Item.Runs := ParseInline(Trimmed.TrimLeft(['#']).Trim);
+    end
+    else if (Trimmed.StartsWith('- ') or Trimmed.StartsWith('* ') or
+             Trimmed.StartsWith('• ')) then
+    begin
+      Item.Kind := mlBullet;
+      Item.Marker := '•';
+      Item.Runs := ParseInline(Copy(Trimmed, 3, MaxInt).Trim);
+    end
+    else
+    begin
+      Digits := 0;
+      while (Digits < Length(Trimmed)) and CharInSet(Trimmed[Digits + 1], ['0'..'9']) do
+        Inc(Digits);
+      if (Digits > 0) and (Digits < 4) and (Length(Trimmed) > Digits + 1) and
+         CharInSet(Trimmed[Digits + 1], ['.', ')']) and (Trimmed[Digits + 2] = ' ') then
+      begin
+        Item.Kind := mlNumbered;
+        Item.Marker := Copy(Trimmed, 1, Digits) + '.';
+        Item.Runs := ParseInline(Copy(Trimmed, Digits + 3, MaxInt).Trim);
+      end
+      else
+      begin
+        Item.Kind := mlText;
+        Item.Runs := ParseInline(Trimmed);
+      end;
+    end;
+    Result := Result + [Item];
+  end;
+  // No blank line at the end.
+  while (Length(Result) > 0) and (Result[High(Result)].Kind = mlBlank) do
+    SetLength(Result, Length(Result) - 1);
+end;
+
+function MarkdownToPlainText(const Text: string): string;
+var
+  Line: TMdLine;
+  Run: TMdRun;
+  Parts: TStringList;
+  S: string;
+begin
+  Parts := TStringList.Create;
+  try
+    for Line in ParseMarkdown(Text) do
+    begin
+      S := '';
+      if Line.Marker <> '' then
+        S := Line.Marker + ' ';
+      for Run in Line.Runs do
+        S := S + Run.Text;
+      Parts.Add(S);
+    end;
+    Result := Parts.Text.TrimRight;
+  finally
+    Parts.Free;
+  end;
+end;
+
+procedure SetRichEditSpacing(Edit: TRichEdit);
+var
+  Format: TParaFormat2;
+begin
+  // Line spacing 1.2 and some space after each paragraph, for the whole text.
+  Edit.SelectAll;
+  FillChar(Format, SizeOf(Format), 0);
+  Format.cbSize := SizeOf(Format);
+  Format.dwMask := PFM_LINESPACING or PFM_SPACEAFTER;
+  Format.bLineSpacingRule := 5;     // dyLineSpacing in 1/20 of a line
+  Format.dyLineSpacing := 24;
+  Format.dySpaceAfter := 80;        // twips
+  SendMessage(Edit.Handle, EM_SETPARAFORMAT, 0, LPARAM(@Format));
+  Edit.SelStart := 0;
+  Edit.SelLength := 0;
+  // Moving the selection shows the caret again (read-only text).
+  HideCaret(Edit.Handle);
+end;
+
+procedure RenderMarkdown(Edit: TRichEdit; const Markdown: string; const Theme: TUiTheme;
+  const FontName: string);
+var
+  Lines: TArray<TMdLine>;
+  Line: TMdLine;
+  Run: TMdRun;
+  I, LineStart: Integer;
+  Para: TParaFormat2;
+
+  procedure Put(const Text: string; Bold, Code: Boolean; Size: Integer; Color: TColor);
+  begin
+    Edit.SelStart := Edit.GetTextLen;
+    Edit.SelLength := 0;
+    if Code then
+      Edit.SelAttributes.Name := 'Consolas'
+    else
+      Edit.SelAttributes.Name := FontName;
+    Edit.SelAttributes.Size := Size;
+    Edit.SelAttributes.Color := Color;
+    if Bold then
+      Edit.SelAttributes.Style := [fsBold]
+    else
+      Edit.SelAttributes.Style := [];
+    Edit.SelText := Text;
+  end;
+
+begin
+  Lines := ParseMarkdown(Markdown);
+  Edit.Lines.BeginUpdate;
+  try
+    Edit.Clear;
+    for I := 0 to High(Lines) do
+    begin
+      Line := Lines[I];
+      LineStart := Edit.GetTextLen;
+      case Line.Kind of
+        mlBlank:
+          ; // the paragraph spacing separates paragraphs
+        mlHeading:
+          for Run in Line.Runs do
+            Put(Run.Text, True, Run.Code, 12, Theme.Text);
+        mlBullet, mlNumbered:
+          begin
+            Put(Line.Marker + #9, Line.Kind = mlNumbered, False, 10, Theme.Accent);
+            for Run in Line.Runs do
+              Put(Run.Text, Run.Bold, Run.Code, 10, Theme.Text);
+          end;
+        mlCode:
+          Put(Line.Runs[0].Text, False, True, 9, Theme.Text);
+      else
+        for Run in Line.Runs do
+          Put(Run.Text, Run.Bold, Run.Code, 10, Theme.Text);
+      end;
+      if Line.Kind = mlBlank then
+        Continue;
+      // List items: a hanging indent, the text aligned after the marker.
+      // Other paragraphs explicitly without it: a new paragraph inherits
+      // the format of the previous one.
+      Edit.SelStart := LineStart;
+      Edit.SelLength := Edit.GetTextLen - LineStart;
+      FillChar(Para, SizeOf(Para), 0);
+      Para.cbSize := SizeOf(Para);
+      Para.dwMask := PFM_STARTINDENT or PFM_OFFSET or PFM_TABSTOPS;
+      if Line.Kind in [mlBullet, mlNumbered] then
+      begin
+        Para.dxStartIndent := 120;
+        Para.dxOffset := 280;
+        Para.cTabCount := 1;
+        Para.rgxTabs[0] := 400;
+      end;
+      SendMessage(Edit.Handle, EM_SETPARAFORMAT, 0, LPARAM(@Para));
+      if I < High(Lines) then
+        Put(#13, False, False, 10, Theme.Text);
+    end;
+    SetRichEditSpacing(Edit);
+  finally
+    Edit.Lines.EndUpdate;
   end;
 end;
 
