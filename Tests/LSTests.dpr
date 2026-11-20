@@ -21,7 +21,8 @@ uses
   TestFeatures22 in 'TestFeatures22.pas',
   TestFeatures23 in 'TestFeatures23.pas',
   TestTypos in 'TestTypos.pas',
-  TestFeatures24 in 'TestFeatures24.pas';
+  TestFeatures24 in 'TestFeatures24.pas',
+  TestTranslate in 'TestTranslate.pas';
 
 var
   Runner: ITestRunner;

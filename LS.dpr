@@ -25,6 +25,8 @@ uses
   uWordStarts in 'uWordStarts.pas',
   uInWordSwitch in 'uInWordSwitch.pas',
   uTrayIconData in 'uTrayIconData.pas',
+  uTranslate in 'uTranslate.pas',
+  uProgramList in 'uProgramList.pas',
   uOperationWorker in 'uOperationWorker.pas',
   uMain in 'uMain.pas' {FormMain};
 

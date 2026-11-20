@@ -313,27 +313,44 @@ object FormMain: TFormMain
         TabOrder = 7
         OnChange = cbGestureChange
       end
-      object lblInterval: TLabel
+      object lblTranslateReplace: TLabel
         Left = 12
         Top = 239
+        Width = 8
+        Height = 13
+        Caption = #1053#1072#1081#1090#1080' '#1074#1099#1076#1077#1083#1077#1085#1085#1086#1077' '#1074' '#1080#1085#1090#1077#1088#1085#1077#1090#1077
+      end
+      object cbTranslateReplace: TComboBox
+        Left = 240
+        Top = 236
+        Width = 252
+        Height = 21
+        Style = csDropDownList
+        Tag = 9
+        TabOrder = 8
+        OnChange = cbGestureChange
+      end
+      object lblInterval: TLabel
+        Left = 12
+        Top = 267
         Width = 8
         Height = 13
         Caption = #1048#1085#1090#1077#1088#1074#1072#1083' '#1076#1074#1086#1081#1085#1086#1075#1086' '#1085#1072#1078#1072#1090#1080#1103':'
       end
       object edInterval: TEdit
         Left = 240
-        Top = 236
+        Top = 264
         Width = 57
         Height = 21
         NumbersOnly = True
-        TabOrder = 8
+        TabOrder = 9
         Text = '500'
         OnChange = edIntervalChange
         OnExit = edIntervalExit
       end
       object udInterval: TUpDown
         Left = 297
-        Top = 236
+        Top = 264
         Width = 16
         Height = 21
         Associate = edInterval
@@ -341,47 +358,63 @@ object FormMain: TFormMain
         Max = 1000
         Increment = 50
         Position = 500
-        TabOrder = 9
+        TabOrder = 10
         Thousands = False
       end
       object lblIntervalUnit: TLabel
         Left = 320
-        Top = 239
+        Top = 267
         Width = 8
         Height = 13
         Caption = #1084#1089
       end
       object lblTranslator: TLabel
         Left = 12
-        Top = 275
+        Top = 299
         Width = 8
         Height = 13
         Caption = #1055#1077#1088#1077#1074#1086#1076#1095#1080#1082':'
       end
       object cbTranslator: TComboBox
         Left = 240
-        Top = 272
+        Top = 296
         Width = 252
         Height = 21
         Style = csDropDownList
-        TabOrder = 10
+        TabOrder = 11
         OnChange = cbServiceChange
       end
       object lblSearchEngine: TLabel
         Left = 12
-        Top = 303
+        Top = 327
         Width = 8
         Height = 13
         Caption = #1055#1086#1080#1089#1082':'
       end
       object cbSearchEngine: TComboBox
         Left = 240
-        Top = 300
+        Top = 324
         Width = 252
         Height = 21
         Style = csDropDownList
-        TabOrder = 11
+        TabOrder = 12
         OnChange = cbServiceChange
+      end
+      object lblDeepLKey: TLabel
+        Left = 12
+        Top = 355
+        Width = 8
+        Height = 13
+        Caption = #1050#1083#1102#1095' DeepL API '#1076#1083#1103' '#1079#1072#1084#1077#1085#1099' '#1087#1077#1088#1077#1074#1086#1076#1086#1084':'
+      end
+      object edDeepLKey: TEdit
+        Left = 240
+        Top = 352
+        Width = 252
+        Height = 21
+        PasswordChar = '*'
+        TabOrder = 13
+        OnExit = edCorrectionsExit
       end
     end
     object tsLayout: TTabSheet
@@ -574,57 +607,73 @@ object FormMain: TFormMain
     end
     object tsExclusions: TTabSheet
       Caption = #1048#1089#1082#1083#1102#1095#1077#1085#1080#1103
-      object lblExcluded: TLabel
+      object lblPrograms: TLabel
         Left = 12
-        Top = 12
+        Top = 10
         Width = 8
         Height = 13
-        Caption = #1055#1086#1083#1085#1086#1089#1090#1100#1102' '#1086#1090#1082#1083#1102#1095#1080#1090#1100' '#1074' '#1087#1088#1086#1075#1088#1072#1084#1084#1072#1093' ('#1080#1084#1103' exe '#1074' '#1089#1090#1088#1086#1082#1077'):'
+        Caption = #1055#1088#1086#1075#1088#1072#1084#1084#1099
       end
-      object edExcluded: TMemo
+      object edProgramFilter: TEdit
         Left = 12
-        Top = 30
-        Width = 480
-        Height = 110
-        ScrollBars = ssVertical
+        Top = 44
+        Width = 200
+        Height = 21
         TabOrder = 0
-        WordWrap = False
-        OnExit = edExcludedExit
+        OnChange = edProgramFilterChange
       end
-      object btnDefaultExcluded: TButton
-        Left = 12
-        Top = 146
-        Width = 120
-        Height = 25
-        Caption = #1055#1086' '#1091#1084#1086#1083#1095#1072#1085#1080#1102
+      object chkProgramsCheckedOnly: TCheckBox
+        Left = 226
+        Top = 46
+        Width = 200
+        Height = 17
+        Caption = #1058#1086#1083#1100#1082#1086' '#1086#1090#1084#1077#1095#1077#1085#1085#1099#1077
         TabOrder = 1
-        OnClick = btnDefaultExcludedClick
+        OnClick = chkProgramsCheckedOnlyClick
       end
-      object lblNoAutoCorrect: TLabel
+      object sgPrograms: TStringGrid
         Left = 12
-        Top = 184
-        Width = 8
-        Height = 13
-        Caption = #1041#1077#1079' '#1072#1074#1090#1086#1080#1089#1087#1088#1072#1074#1083#1077#1085#1080#1081' '#1080' '#1072#1074#1090#1086#1087#1077#1088#1077#1082#1083#1102#1095#1077#1085#1080#1103' ('#1088#1091#1095#1085#1099#1077' '#1076#1077#1081#1089#1090#1074#1080#1103' '#1088#1072#1073#1086#1090#1072#1102#1090'):'
-      end
-      object memNoAutoCorrect: TMemo
-        Left = 12
-        Top = 202
-        Width = 480
-        Height = 110
-        ScrollBars = ssVertical
+        Top = 72
+        Width = 492
+        Height = 262
+        ColCount = 4
+        DefaultRowHeight = 20
+        FixedCols = 0
+        RowCount = 2
+        Options = [goFixedVertLine, goFixedHorzLine, goVertLine, goHorzLine, goColSizing, goThumbTracking]
         TabOrder = 2
-        WordWrap = False
-        OnExit = edExcludedExit
+        OnDrawCell = sgProgramsDrawCell
+        OnKeyDown = sgProgramsKeyDown
+        OnMouseUp = sgProgramsMouseUp
+        OnSelectCell = sgProgramsSelectCell
       end
-      object btnDefaultNoAutoCorrect: TButton
+      object btnAddProgram: TButton
         Left = 12
-        Top = 318
+        Top = 342
+        Width = 150
+        Height = 25
+        Caption = #1044#1086#1073#1072#1074#1080#1090#1100' '#1087#1088#1086#1075#1088#1072#1084#1084#1091'...'
+        TabOrder = 3
+        OnClick = btnAddProgramClick
+      end
+      object btnRemoveProgram: TButton
+        Left = 170
+        Top = 342
+        Width = 130
+        Height = 25
+        Caption = #1059#1073#1088#1072#1090#1100' '#1080#1079' '#1089#1087#1080#1089#1082#1072
+        Enabled = False
+        TabOrder = 4
+        OnClick = btnRemoveProgramClick
+      end
+      object btnDefaultPrograms: TButton
+        Left = 384
+        Top = 342
         Width = 120
         Height = 25
         Caption = #1055#1086' '#1091#1084#1086#1083#1095#1072#1085#1080#1102
-        TabOrder = 3
-        OnClick = btnDefaultNoAutoCorrectClick
+        TabOrder = 5
+        OnClick = btnDefaultProgramsClick
       end
     end
   end

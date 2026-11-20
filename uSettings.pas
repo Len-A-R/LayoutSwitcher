@@ -10,15 +10,16 @@ uses
   uLocale, uSettingsStore;
 
 type
-  // New values are only ever appended: the ordinal values are stored in the
-  // registry.
+  // Actions are stored by their ActionKeys name; the gestures by ordinal,
+  // so new gestures are only ever appended.  Actions bound to gestures stay
+  // in front of laAutoSwitch (the TLSActionGestures range).
   TLSAction = (laNone, laConvert, laUpperCase, laLowerCase, laInvertCase,
-    laTransliterate, laUndo, laTranslate, laWebSearch,
+    laTransliterate, laUndo, laTranslate, laWebSearch, laTranslateReplace,
     // Not bound to a gesture: started automatically after a space.
     laAutoSwitch);
   TLSGesture = (lgNone, lgDoubleShift, lgDoubleLCtrl, lgDoubleRCtrl, lgBothCtrl,
-    lgBothShift, lgDoubleCapsLock, lgDoubleRAlt, lgDoubleLAlt);
-  TLSActionGestures = array[laConvert..laWebSearch] of TLSGesture;
+    lgBothShift, lgDoubleCapsLock, lgDoubleRAlt, lgDoubleLAlt, lgRCtrlRAlt, lgPause);
+  TLSActionGestures = array[laConvert..laTranslateReplace] of TLSGesture;
 
   TLSSettings = record
     ActionGestures: TLSActionGestures;
@@ -56,9 +57,15 @@ type
     AutoSwitchLearnCounts: TArray<string>;
     CapitalizeSentences: Boolean;
     FixDoubleSpace: Boolean;
+    // DeepL API key for "replace with translation"; empty = Google Translate.
+    // Not written to exported settings files.
+    DeepLApiKey: string;
     AutoSwitchExceptions: TArray<string>;
     // Programs where only the manual actions work (code editors, terminals).
     NoAutoCorrectProcesses: TArray<string>;
+    // Programs added to the Exclusions table by hand (not found on the
+    // computer); kept even when neither box is checked.
+    CustomPrograms: TArray<string>;
     SoundEnabled: Boolean;
     SearchEngine: Integer;   // SEARCH_* in uTextTools
     class function Defaults: TLSSettings; static;
@@ -79,12 +86,14 @@ const
   // 2: transliteration and undo got default gestures.
   // 3: translation and web search got default gestures.
   // 4: notepad++.exe left the default "no automatic corrections" list.
-  CURRENT_SETTINGS_VERSION = 4;
+  // 5: "replace with translation" got the Right Ctrl + Right Alt gesture.
+  CURRENT_SETTINGS_VERSION = 5;
   STARTUP_VALUE_NAME = 'LayoutSwitcher';
 
   ActionKeys: array[TLSAction] of string = (
     'none', 'convert_layout', 'uppercase', 'lowercase', 'invert_case',
-    'transliterate', 'undo', 'translate', 'web_search', 'auto_switch');
+    'transliterate', 'undo', 'translate', 'web_search', 'translate_replace',
+    'auto_switch');
 
   // Screenshot tools own full-screen overlays, use Shift/Ctrl themselves and
   // monitor the clipboard.  LayoutSwitcher must not inject input into them.
@@ -173,6 +182,8 @@ const
   VALUE_AUTO_SWITCH_LEARN_COUNTS = 'AutoSwitchLearnCounts';
   VALUE_CAPITALIZE = 'CapitalizeSentences';
   VALUE_DOUBLE_SPACE = 'FixDoubleSpace';
+  VALUE_DEEPL_KEY = 'DeepLApiKey';
+  VALUE_CUSTOM_PROGRAMS = 'CustomPrograms';
   VALUE_AUTO_SWITCH_EXCEPTIONS = 'AutoSwitchExceptions';
   VALUE_NO_AUTOCORRECT = 'NoAutoCorrectProcesses';
   VALUE_SOUND = 'SoundEnabled';
@@ -218,6 +229,8 @@ begin
   Result.AutoSwitchLearnCounts := nil;
   Result.CapitalizeSentences := False;
   Result.FixDoubleSpace := False;
+  Result.DeepLApiKey := '';
+  Result.CustomPrograms := nil;
   Result.AutoSwitchExceptions := nil;
   SetLength(Result.NoAutoCorrectProcesses, Length(DefaultNoAutoCorrectProcesses));
   for I := 0 to High(DefaultNoAutoCorrectProcesses) do
@@ -225,6 +238,7 @@ begin
   Result.SoundEnabled := False;
   Result.ActionGestures[laTranslate] := lgDoubleRAlt;
   Result.ActionGestures[laWebSearch] := lgDoubleLAlt;
+  Result.ActionGestures[laTranslateReplace] := lgRCtrlRAlt;
 end;
 
 function ActionName(Action: TLSAction): string;
@@ -238,6 +252,7 @@ begin
     laUndo: Result := T('Отменить последнее исправление', 'Undo last correction');
     laTranslate: Result := T('Перевести выделенное', 'Translate selection');
     laWebSearch: Result := T('Найти выделенное в интернете', 'Search the web for selection');
+    laTranslateReplace: Result := T('Заменить текст переводом', 'Replace text with translation');
   else
     Result := T('Нет', 'None');
   end;
@@ -254,6 +269,8 @@ begin
     lgDoubleCapsLock: Result := T('Двойной Caps Lock', 'Double Caps Lock');
     lgDoubleRAlt: Result := T('Двойной правый Alt', 'Double right Alt');
     lgDoubleLAlt: Result := T('Двойной левый Alt', 'Double left Alt');
+    lgRCtrlRAlt: Result := T('Правый Ctrl + правый Alt', 'Right Ctrl + right Alt');
+    lgPause: Result := 'Pause/Break';
   else
     Result := T('Отключено', 'Disabled');
   end;
@@ -386,9 +403,9 @@ procedure MigrateActionGestures(var Gestures: TLSActionGestures;
   FromVersion: Integer);
 const
   // Actions that received a default gesture in the given settings version.
-  NewActions: array[0..3] of TLSAction = (laTransliterate, laUndo, laTranslate,
-    laWebSearch);
-  IntroducedIn: array[0..3] of Integer = (2, 2, 3, 3);
+  NewActions: array[0..4] of TLSAction = (laTransliterate, laUndo, laTranslate,
+    laWebSearch, laTranslateReplace);
+  IntroducedIn: array[0..4] of Integer = (2, 2, 3, 3, 5);
 var
   Defaults: TLSActionGestures;
   NewAction, Other: TLSAction;
@@ -524,6 +541,8 @@ begin
     Result.CapitalizeSentences := Store.ReadBool(VALUE_CAPITALIZE,
       Result.CapitalizeSentences);
     Result.FixDoubleSpace := Store.ReadBool(VALUE_DOUBLE_SPACE, Result.FixDoubleSpace);
+    Result.DeepLApiKey := Trim(Store.ReadString(VALUE_DEEPL_KEY, ''));
+    Result.CustomPrograms := ParseProcessList(Store.ReadString(VALUE_CUSTOM_PROGRAMS, ''));
     if Store.ValueExists(VALUE_AUTO_SWITCH_EXCEPTIONS) then
       Result.AutoSwitchExceptions := ParseWordList(
         Store.ReadString(VALUE_AUTO_SWITCH_EXCEPTIONS, ''));
@@ -579,6 +598,8 @@ begin
       string.Join('; ', Settings.AutoSwitchLearnCounts));
     Store.WriteBool(VALUE_CAPITALIZE, Settings.CapitalizeSentences);
     Store.WriteBool(VALUE_DOUBLE_SPACE, Settings.FixDoubleSpace);
+    Store.WriteString(VALUE_DEEPL_KEY, Settings.DeepLApiKey);
+    Store.WriteString(VALUE_CUSTOM_PROGRAMS, ProcessListToText(Settings.CustomPrograms));
     Store.WriteString(VALUE_AUTO_SWITCH_EXCEPTIONS,
       string.Join('; ', Settings.AutoSwitchExceptions));
     Store.WriteString(VALUE_NO_AUTOCORRECT,
@@ -619,13 +640,17 @@ function ExportSettings(const Settings: TLSSettings; const FileName: string;
   DiagnosticsEnabled: Boolean): Boolean;
 var
   Store: TIniSettingsStore;
+  Exported: TLSSettings;
 begin
+  // An exported file is shared or copied around: no API keys in it.
+  Exported := Settings;
+  Exported.DeepLApiKey := '';
   if FileExists(FileName) then
     System.SysUtils.DeleteFile(FileName);
   Store := TIniSettingsStore.Create(FileName);
   try
     Store.WriteBool(VALUE_DIAGNOSTICS, DiagnosticsEnabled);
-    Result := SaveSettingsTo(Settings, Store);
+    Result := SaveSettingsTo(Exported, Store);
   finally
     Store.Free;
   end;

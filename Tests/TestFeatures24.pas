@@ -7,7 +7,7 @@ interface
 
 uses
   DUnitX.TestFramework,
-  uTextTools, uInWordSwitch, uSettings;
+  uTextTools, uInWordSwitch, uSettings, uProgramList;
 
 type
   [TestFixture]
@@ -63,6 +63,17 @@ type
     procedure CursorPosition;
     [Test]
     procedure OldExpansionUnchanged;
+  end;
+
+  [TestFixture]
+  TProgramListTests = class
+  public
+    [Test]
+    procedure MergesInstalledAndListed;
+    [Test]
+    procedure FiltersAndUninstallers;
+    [Test]
+    procedure CustomProgramsAreSaved;
   end;
 
   [TestFixture]
@@ -330,6 +341,72 @@ begin
   Assert.AreEqual('18.11.2026', ExpandSnippet('{date}', Moment));
 end;
 
+{ TProgramListTests }
+
+procedure TProgramListTests.MergesInstalledAndListed;
+var
+  Installed: TArray<TProgramEntry>;
+  Excluded, NoAuto: TArray<string>;
+  Merged: TArray<TProgramEntry>;
+begin
+  SetLength(Installed, 2);
+  Installed[0].ExeName := 'notepad++.exe';
+  Installed[0].DisplayName := 'Notepad++';
+  Installed[0].Installed := True;
+  Installed[1].ExeName := 'Code.exe';
+  Installed[1].DisplayName := 'Visual Studio Code';
+  Installed[1].Installed := True;
+  Excluded := ['ShareX.exe'];
+  NoAuto := ['code.EXE', 'Far.exe', ''];
+  Merged := MergePrograms(Installed, [Excluded, NoAuto]);
+  // One row per exe (case-insensitive), sorted by name.
+  Assert.AreEqual<Integer>(4, Length(Merged));
+  Assert.AreEqual('Far', Merged[0].DisplayName);
+  Assert.IsFalse(Merged[0].Installed);
+  Assert.AreEqual('Notepad++', Merged[1].DisplayName);
+  Assert.AreEqual('ShareX', Merged[2].DisplayName);
+  Assert.AreEqual('ShareX.exe', Merged[2].ExeName);
+  Assert.AreEqual('Visual Studio Code', Merged[3].DisplayName);
+  Assert.IsTrue(Merged[3].Installed);
+end;
+
+procedure TProgramListTests.FiltersAndUninstallers;
+var
+  Entry: TProgramEntry;
+begin
+  Entry.ExeName := 'WINWORD.EXE';
+  Entry.DisplayName := 'Word';
+  Assert.IsTrue(ProgramMatches(Entry, ''));
+  Assert.IsTrue(ProgramMatches(Entry, 'wor'));
+  Assert.IsTrue(ProgramMatches(Entry, 'winword'));
+  Assert.IsFalse(ProgramMatches(Entry, 'excel'));
+  Entry.DisplayName := 'Блокнот';
+  Assert.IsTrue(ProgramMatches(Entry, 'БЛОК'));
+  Assert.IsTrue(IsUninstallerName('unins000.exe'));
+  Assert.IsTrue(IsUninstallerName('Uninstall.exe'));
+  Assert.IsTrue(IsUninstallerName('C:\App\uninst.exe'));
+  Assert.IsFalse(IsUninstallerName('notepad.exe'));
+  Assert.IsFalse(IsUninstallerName('installer-helper.exe'));
+end;
+
+procedure TProgramListTests.CustomProgramsAreSaved;
+var
+  FileName: string;
+  Source, Loaded: TLSSettings;
+  Diagnostics: Boolean;
+begin
+  FileName := TPath.Combine(TPath.GetTempPath, 'ls-settings-programs.ini');
+  try
+    Source := TLSSettings.Defaults;
+    Source.CustomPrograms := ['game.exe', 'Tool.exe'];
+    Assert.IsTrue(ExportSettings(Source, FileName, False));
+    Assert.IsTrue(ImportSettings(FileName, Loaded, Diagnostics));
+    Assert.AreEqual('game.exe; Tool.exe', ProcessListToText(Loaded.CustomPrograms));
+  finally
+    System.SysUtils.DeleteFile(FileName);
+  end;
+end;
+
 { TSettings24Tests }
 
 procedure TSettings24Tests.DefaultsAndExport;
@@ -373,6 +450,7 @@ initialization
   TDUnitX.RegisterTestFixture(TExtendedTypoTests);
   TDUnitX.RegisterTestFixture(TSentenceTests);
   TDUnitX.RegisterTestFixture(TTemplateTests);
+  TDUnitX.RegisterTestFixture(TProgramListTests);
   TDUnitX.RegisterTestFixture(TSettings24Tests);
 
 end.

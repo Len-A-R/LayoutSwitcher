@@ -10,7 +10,7 @@ uses
   Winapi.Windows, Winapi.Messages,
   System.SysUtils, System.Classes, System.Generics.Collections,
   Vcl.Graphics, Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.ExtCtrls, Vcl.Menus,
-  Vcl.StdCtrls, Vcl.ComCtrls,
+  Vcl.StdCtrls, Vcl.ComCtrls, Vcl.Grids, uProgramList,
   uSettings, uGestureDetector, uOperationWorker, uConversionChain,
   uLayoutIndicator, uUpdateCheck, uUpdateProgress, uLayoutConverter, uTextTools;
 
@@ -72,8 +72,13 @@ type
     chkCheckUpdates: TCheckBox;
     lblLanguage: TLabel;
     cbLanguage: TComboBox;
-    lblExcluded: TLabel;
-    edExcluded: TMemo;
+    lblPrograms: TLabel;
+    edProgramFilter: TEdit;
+    chkProgramsCheckedOnly: TCheckBox;
+    sgPrograms: TStringGrid;
+    btnAddProgram: TButton;
+    btnRemoveProgram: TButton;
+    btnDefaultPrograms: TButton;
     lblStorage: TLabel;
     btnExport: TButton;
     btnImport: TButton;
@@ -81,6 +86,10 @@ type
     cbTranslate: TComboBox;
     lblWebSearch: TLabel;
     cbWebSearch: TComboBox;
+    lblTranslateReplace: TLabel;
+    cbTranslateReplace: TComboBox;
+    lblDeepLKey: TLabel;
+    edDeepLKey: TEdit;
     lblTranslator: TLabel;
     cbTranslator: TComboBox;
     lblSearchEngine: TLabel;
@@ -107,16 +116,12 @@ type
     chkFixTyposExtended: TCheckBox;
     chkCapitalize: TCheckBox;
     chkDoubleSpace: TCheckBox;
-    lblNoAutoCorrect: TLabel;
-    memNoAutoCorrect: TMemo;
-    btnDefaultNoAutoCorrect: TButton;
     mniClipboard: TMenuItem;
     mniClipConvert: TMenuItem;
     mniClipUpper: TMenuItem;
     mniClipLower: TMenuItem;
     mniClipTranslit: TMenuItem;
     mniSeparator3: TMenuItem;
-    btnDefaultExcluded: TButton;
     btnReport: TButton;
     btnClose: TButton;
     procedure FormCreate(Sender: TObject);
@@ -136,7 +141,18 @@ type
     procedure cbServiceChange(Sender: TObject);
     procedure edCorrectionsExit(Sender: TObject);
     procedure mniClipboardClick(Sender: TObject);
-    procedure btnDefaultNoAutoCorrectClick(Sender: TObject);
+    procedure edProgramFilterChange(Sender: TObject);
+    procedure chkProgramsCheckedOnlyClick(Sender: TObject);
+    procedure sgProgramsDrawCell(Sender: TObject; ACol, ARow: Integer; Rect: TRect;
+      State: TGridDrawState);
+    procedure sgProgramsMouseUp(Sender: TObject; Button: TMouseButton;
+      Shift: TShiftState; X, Y: Integer);
+    procedure sgProgramsKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
+    procedure sgProgramsSelectCell(Sender: TObject; ACol, ARow: Integer;
+      var CanSelect: Boolean);
+    procedure btnAddProgramClick(Sender: TObject);
+    procedure btnRemoveProgramClick(Sender: TObject);
+    procedure btnDefaultProgramsClick(Sender: TObject);
     procedure chkAutorunClick(Sender: TObject);
     procedure chkAutorunElevatedClick(Sender: TObject);
     procedure chkDiagnosticsClick(Sender: TObject);
@@ -144,8 +160,6 @@ type
     procedure edIntervalChange(Sender: TObject);
     procedure edIntervalExit(Sender: TObject);
     procedure chkBehaviorClick(Sender: TObject);
-    procedure edExcludedExit(Sender: TObject);
-    procedure btnDefaultExcludedClick(Sender: TObject);
     procedure btnCloseClick(Sender: TObject);
     procedure mniSettingsClick(Sender: TObject);
     procedure mniPauseClick(Sender: TObject);
@@ -238,6 +252,13 @@ type
     FMenuAutoCorrectOff: TMenuItem;
     FMenuNeverFixLast: TMenuItem;
     FMenuProgramRule: TMenuItem;
+    // Exclusions table: programs found on the computer (read when the tab
+    // is opened for the first time), all rows and the rows shown.
+    FInstalledPrograms: TArray<TProgramEntry>;
+    FProgramsLoaded: Boolean;
+    FProgramScan: TProgramScanThread;
+    FPrograms: TArray<TProgramEntry>;
+    FVisiblePrograms: TArray<Integer>;
     FUpdateNotes: string;
     FPendingToggleCaps: Boolean;
 
@@ -270,7 +291,14 @@ type
 
     procedure LoadControlsFromSettings;
     procedure ApplySettings;
-    procedure ApplyExcludedFromEdit;
+    procedure EnsureProgramsLoaded;
+    procedure RefreshProgramGrid;
+    procedure SetupProgramGrid;
+    procedure ToggleProgram(Row, Col: Integer);
+    function ProgramAtRow(Row: Integer; out Entry: TProgramEntry): Boolean;
+    procedure UpdateProgramButtons;
+    procedure pcMainChange(Sender: TObject);
+    procedure ProgramScanDone(Sender: TObject);
     procedure SyncAutorunPath;
     procedure UpdateAutorunControls;
     procedure ShowSettingsWindow;
@@ -326,7 +354,7 @@ uses
   Vcl.Imaging.pngimage, uTrayIconData,
   System.StrUtils,
   uDiagnostics, uWinUtils, uTaskAutorun, uLocale, uSettingsStore, uClipboardSnapshot,
-  uSpellCheck, uInWordSwitch;
+  uSpellCheck, uInWordSwitch, Vcl.Themes;
 
 const
   WM_LS_OPERATION_DONE = WM_APP + 10;
@@ -385,7 +413,7 @@ const
 
   ShortGestureNames: array[TLSGesture] of string = (
     '', 'Shift×2', 'LCtrl×2', 'RCtrl×2', 'Ctrl+Ctrl', 'Shift+Shift', 'Caps×2',
-    'RAlt×2', 'LAlt×2');
+    'RAlt×2', 'LAlt×2', 'RCtrl+RAlt', 'Pause');
 
 function ShortActionName(Action: TLSAction): string; forward;
 function ContainsDigit(const Text: string): Boolean; forward;
@@ -510,6 +538,8 @@ begin
 
   CreateTrayIcons;
   CreateQuickMenu;
+  SetupProgramGrid;
+  pcMain.OnChange := pcMainChange;
 
   FWorker := TOperationWorker.Create(Handle, WM_LS_OPERATION_DONE);
   if not FWorker.WaitUntilReady(5000) then
@@ -576,6 +606,12 @@ begin
     TUpdateDownloadResult(Msg.lParam).Free;
   for I := Low(FTrayIcons) to High(FTrayIcons) do
     FreeAndNil(FTrayIcons[I]);
+  if Assigned(FProgramScan) then
+  begin
+    FProgramScan.OnTerminate := nil;
+    FProgramScan.WaitFor;
+    FreeAndNil(FProgramScan);
+  end;
   FreeAndNil(FIndicator);
   FreeAndNil(FCatalog);
   FreeAndNil(FDetector);
@@ -586,7 +622,6 @@ end;
 
 procedure TFormMain.FormCloseQuery(Sender: TObject; var CanClose: Boolean);
 begin
-  ApplyExcludedFromEdit;
   ApplyCorrectionsFromEdit;
   CanClose := False;
   Hide;
@@ -883,7 +918,7 @@ begin
         'after a double Caps Lock. Press Shift or assign another gesture.'));
     end;
     // After a double Alt the application still has to leave its menu mode.
-    FSettleFocusNext := Gesture in [lgDoubleRAlt, lgDoubleLAlt];
+    FSettleFocusNext := Gesture in [lgDoubleRAlt, lgDoubleLAlt, lgRCtrlRAlt];
     QueueAction(FSettings.ActionForGesture(Gesture));
     FSettleFocusNext := False;
   end;
@@ -939,7 +974,8 @@ begin
           BufferBackspace;
         Exit;
       end;
-    VK_CAPITAL, VK_NUMLOCK, VK_SCROLL:
+    // Lock keys and Pause/Break (a gesture key) do not change the text.
+    VK_CAPITAL, VK_NUMLOCK, VK_SCROLL, VK_PAUSE:
       Exit;
   end;
 
@@ -1068,10 +1104,13 @@ var
 begin
   if (Action = laNone) or FPaused then
     Exit;
-  if not FBufferOverflowed and not FFocusIsPassword then
-    Plan := FChain.Plan(Action, FBuffer)
+  if FBufferOverflowed or FFocusIsPassword then
+    Plan := FChain.Plan(laNone, '')
+  else if Action = laTranslateReplace then
+    // A translation needs the whole phrase, not only the last word.
+    Plan := TConversionChain.PlanPhrase(FBuffer)
   else
-    Plan := FChain.Plan(laNone, '');
+    Plan := FChain.Plan(Action, FBuffer);
   if (Action = laUndo) and (Plan.Mode <> bmUndo) then
   begin
     DiagnosticsLog('operation.skipped action=undo reason=nothing_to_undo');
@@ -1158,6 +1197,7 @@ begin
   Request.InWord := FInWordNext;
   Request.Capitalize := FCapitalizeNext and not FInWordNext;
   Request.CaretBack := FCaretBackNext;
+  Request.DeepLApiKey := FSettings.DeepLApiKey;
   FPendingStamp := Request.KeystrokeStamp;
   FPendingDoubleSpace := FDoubleSpaceNext;
   if FCapsShiftLock then
@@ -1561,6 +1601,7 @@ end;
 
 procedure TFormMain.LoadControlsFromSettings;
 begin
+  RefreshProgramGrid;
   FUpdatingControls := True;
   try
     cbConvert.ItemIndex := Ord(FSettings.GestureForAction(laConvert));
@@ -1571,6 +1612,8 @@ begin
     cbUndo.ItemIndex := Ord(FSettings.GestureForAction(laUndo));
     cbTranslate.ItemIndex := Ord(FSettings.GestureForAction(laTranslate));
     cbWebSearch.ItemIndex := Ord(FSettings.GestureForAction(laWebSearch));
+    cbTranslateReplace.ItemIndex := Ord(FSettings.GestureForAction(laTranslateReplace));
+    edDeepLKey.Text := FSettings.DeepLApiKey;
     cbTranslator.ItemIndex := FSettings.Translator;
     cbSearchEngine.ItemIndex := FSettings.SearchEngine;
     chkFixCapsLock.Checked := FSettings.FixCapsLock;
@@ -1587,7 +1630,6 @@ begin
     chkCapitalize.Checked := FSettings.CapitalizeSentences;
     chkDoubleSpace.Checked := FSettings.FixDoubleSpace;
     memAutoSwitchExceptions.Text := string.Join(sLineBreak, FSettings.AutoSwitchExceptions);
-    memNoAutoCorrect.Text := string.Join(sLineBreak, FSettings.NoAutoCorrectProcesses);
     memSnippets.Text := FSettings.Snippets;
     udInterval.Position := Integer(FSettings.DoubleTapInterval);
     edInterval.Text := IntToStr(FSettings.DoubleTapInterval);
@@ -1597,7 +1639,6 @@ begin
     chkLayoutIndicator.Checked := FSettings.ShowLayoutIndicator;
     chkCheckUpdates.Checked := FSettings.CheckForUpdates;
     cbLanguage.ItemIndex := Ord(FSettings.Language);
-    edExcluded.Text := string.Join(sLineBreak, FSettings.ExcludedProcesses);
   finally
     FUpdatingControls := False;
   end;
@@ -1682,40 +1723,301 @@ begin
   ApplyStickyKeysSetting;
 end;
 
-procedure TFormMain.ApplyExcludedFromEdit;
+{ Exclusions table }
+
+const
+  PROGRAM_COL_NAME = 0;
+  PROGRAM_COL_EXE = 1;
+  PROGRAM_COL_OFF = 2;
+  PROGRAM_COL_NO_AUTO = 3;
+
+procedure TFormMain.SetupProgramGrid;
 var
-  Excluded, NoAutoCorrect: TArray<string>;
+  Fixed: Integer;
 begin
-  Excluded := ParseProcessList(edExcluded.Text);
-  NoAutoCorrect := ParseProcessList(memNoAutoCorrect.Text);
-  if (ProcessListToText(Excluded) <> ProcessListToText(FSettings.ExcludedProcesses)) or
-     (ProcessListToText(NoAutoCorrect) <>
-      ProcessListToText(FSettings.NoAutoCorrectProcesses)) then
+  sgPrograms.ColCount := 4;
+  sgPrograms.FixedCols := 0;
+  sgPrograms.FixedRows := 1;
+  sgPrograms.ColWidths[PROGRAM_COL_NAME] := MulDiv(196, CurrentPPI, 96);
+  sgPrograms.ColWidths[PROGRAM_COL_EXE] := MulDiv(130, CurrentPPI, 96);
+  sgPrograms.ColWidths[PROGRAM_COL_OFF] := MulDiv(70, CurrentPPI, 96);
+  Fixed := sgPrograms.ColWidths[PROGRAM_COL_NAME] + sgPrograms.ColWidths[PROGRAM_COL_EXE] +
+    sgPrograms.ColWidths[PROGRAM_COL_OFF] + 4 * sgPrograms.GridLineWidth +
+    GetSystemMetrics(SM_CXVSCROLL);
+  sgPrograms.ColWidths[PROGRAM_COL_NO_AUTO] := sgPrograms.ClientWidth - Fixed;
+end;
+
+procedure TFormMain.pcMainChange(Sender: TObject);
+begin
+  if pcMain.ActivePage = tsExclusions then
+    EnsureProgramsLoaded;
+end;
+
+procedure TFormMain.EnsureProgramsLoaded;
+begin
+  if FProgramsLoaded then
+    Exit;
+  // The table shows the programs of the settings right away; the ones found
+  // on the computer are added when the search (a few seconds) is done.
+  FProgramsLoaded := True;
+  edProgramFilter.TextHint := T('Идёт поиск программ на компьютере...',
+    'Looking for programs on this computer...');
+  FProgramScan := TProgramScanThread.Create(True);
+  FProgramScan.OnTerminate := ProgramScanDone;
+  FProgramScan.Start;
+  RefreshProgramGrid;
+end;
+
+procedure TFormMain.ProgramScanDone(Sender: TObject);
+begin
+  // OnTerminate runs in the main thread.
+  FInstalledPrograms := TProgramScanThread(Sender).Programs;
+  DiagnosticsLogFmt('programs.loaded count=%d', [Length(FInstalledPrograms)]);
+  edProgramFilter.TextHint := T('Поиск программы', 'Find a program');
+  RefreshProgramGrid;
+end;
+
+function TFormMain.ProgramAtRow(Row: Integer; out Entry: TProgramEntry): Boolean;
+begin
+  Result := (Row >= 1) and (Row - 1 < Length(FVisiblePrograms));
+  if Result then
+    Entry := FPrograms[FVisiblePrograms[Row - 1]];
+end;
+
+procedure TFormMain.RefreshProgramGrid;
+var
+  Selected: string;
+  Entry: TProgramEntry;
+  I, Row: Integer;
+begin
+  if not FProgramsLoaded then
+    Exit;
+  Selected := '';
+  if ProgramAtRow(sgPrograms.Row, Entry) then
+    Selected := Entry.ExeName;
+  FPrograms := MergePrograms(FInstalledPrograms, [FSettings.ExcludedProcesses,
+    FSettings.NoAutoCorrectProcesses, FSettings.CustomPrograms]);
+  FVisiblePrograms := nil;
+  for I := 0 to High(FPrograms) do
+    if ProgramMatches(FPrograms[I], edProgramFilter.Text) and
+       (not chkProgramsCheckedOnly.Checked or
+        FSettings.IsProcessExcluded(FPrograms[I].ExeName) or
+        FSettings.IsAutoCorrectDisabledFor(FPrograms[I].ExeName)) then
+      FVisiblePrograms := FVisiblePrograms + [I];
+  // A grid with a fixed row needs at least one more row.
+  if Length(FVisiblePrograms) = 0 then
+    sgPrograms.RowCount := 2
+  else
+    sgPrograms.RowCount := Length(FVisiblePrograms) + 1;
+  for Row := 1 to sgPrograms.RowCount - 1 do
+    if ProgramAtRow(Row, Entry) then
+    begin
+      sgPrograms.Cells[PROGRAM_COL_NAME, Row] := Entry.DisplayName;
+      sgPrograms.Cells[PROGRAM_COL_EXE, Row] := Entry.ExeName;
+      if SameText(Entry.ExeName, Selected) then
+        sgPrograms.Row := Row;
+    end
+    else
+    begin
+      sgPrograms.Cells[PROGRAM_COL_NAME, Row] := '';
+      sgPrograms.Cells[PROGRAM_COL_EXE, Row] := '';
+    end;
+  sgPrograms.Invalidate;
+  UpdateProgramButtons;
+end;
+
+procedure TFormMain.UpdateProgramButtons;
+var
+  Entry: TProgramEntry;
+begin
+  // Programs found on the computer stay in the table; only names added by
+  // hand or coming from the settings can be removed.
+  btnRemoveProgram.Enabled := ProgramAtRow(sgPrograms.Row, Entry) and not Entry.Installed;
+end;
+
+procedure TFormMain.sgProgramsDrawCell(Sender: TObject; ACol, ARow: Integer; Rect: TRect;
+  State: TGridDrawState);
+var
+  Entry: TProgramEntry;
+  Checked, Enabled: Boolean;
+  Element: TThemedButton;
+  Size: Integer;
+  Box: TRect;
+begin
+  if (ARow = 0) or (ACol < PROGRAM_COL_OFF) or not ProgramAtRow(ARow, Entry) then
+    Exit;
+  if ACol = PROGRAM_COL_OFF then
   begin
-    FSettings.ExcludedProcesses := Excluded;
-    FSettings.NoAutoCorrectProcesses := NoAutoCorrect;
+    Checked := FSettings.IsProcessExcluded(Entry.ExeName);
+    Enabled := True;
+  end
+  else
+  begin
+    Checked := FSettings.IsAutoCorrectDisabledFor(Entry.ExeName);
+    // Nothing works in a program that is turned off completely.
+    Enabled := not FSettings.IsProcessExcluded(Entry.ExeName);
+  end;
+  if Checked and Enabled then
+    Element := tbCheckBoxCheckedNormal
+  else if Checked then
+    Element := tbCheckBoxCheckedDisabled
+  else if Enabled then
+    Element := tbCheckBoxUncheckedNormal
+  else
+    Element := tbCheckBoxUncheckedDisabled;
+  Size := MulDiv(13, CurrentPPI, 96);
+  Box := Bounds(Rect.Left + (Rect.Width - Size) div 2, Rect.Top + (Rect.Height - Size) div 2,
+    Size, Size);
+  StyleServices.DrawElement(sgPrograms.Canvas.Handle,
+    StyleServices.GetElementDetails(Element), Box);
+end;
+
+procedure TFormMain.ToggleProgram(Row, Col: Integer);
+var
+  Entry: TProgramEntry;
+begin
+  if not ProgramAtRow(Row, Entry) then
+    Exit;
+  if Col = PROGRAM_COL_OFF then
+  begin
+    if FSettings.IsProcessExcluded(Entry.ExeName) then
+      FSettings.ExcludedProcesses := RemoveWord(FSettings.ExcludedProcesses, Entry.ExeName)
+    else
+      FSettings.ExcludedProcesses := FSettings.ExcludedProcesses + [Entry.ExeName];
+  end
+  else if Col = PROGRAM_COL_NO_AUTO then
+  begin
+    if FSettings.IsAutoCorrectDisabledFor(Entry.ExeName) then
+      FSettings.NoAutoCorrectProcesses :=
+        RemoveWord(FSettings.NoAutoCorrectProcesses, Entry.ExeName)
+    else
+      FSettings.NoAutoCorrectProcesses := FSettings.NoAutoCorrectProcesses + [Entry.ExeName];
+  end
+  else
+    Exit;
+  ApplySettings;
+  // The row stays visible even with "only checked": it disappears when the
+  // filter is applied again, not under the mouse.
+  sgPrograms.Invalidate;
+end;
+
+procedure TFormMain.sgProgramsMouseUp(Sender: TObject; Button: TMouseButton;
+  Shift: TShiftState; X, Y: Integer);
+var
+  Col, Row: Integer;
+begin
+  if Button <> mbLeft then
+    Exit;
+  sgPrograms.MouseToCell(X, Y, Col, Row);
+  if (Row > 0) and (Col >= PROGRAM_COL_OFF) then
+    ToggleProgram(Row, Col);
+end;
+
+procedure TFormMain.sgProgramsKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
+begin
+  if (Key = VK_SPACE) and (sgPrograms.Col >= PROGRAM_COL_OFF) then
+  begin
+    ToggleProgram(sgPrograms.Row, sgPrograms.Col);
+    Key := 0;
+  end;
+end;
+
+procedure TFormMain.sgProgramsSelectCell(Sender: TObject; ACol, ARow: Integer;
+  var CanSelect: Boolean);
+var
+  Entry: TProgramEntry;
+begin
+  btnRemoveProgram.Enabled := ProgramAtRow(ARow, Entry) and not Entry.Installed;
+end;
+
+procedure TFormMain.edProgramFilterChange(Sender: TObject);
+begin
+  RefreshProgramGrid;
+end;
+
+procedure TFormMain.chkProgramsCheckedOnlyClick(Sender: TObject);
+begin
+  RefreshProgramGrid;
+end;
+
+procedure TFormMain.btnAddProgramClick(Sender: TObject);
+var
+  Dialog: TOpenDialog;
+  Exe: string;
+  Entry: TProgramEntry;
+  Row: Integer;
+begin
+  EnsureProgramsLoaded;
+  Dialog := TOpenDialog.Create(nil);
+  try
+    Dialog.Title := T('Выберите программу или введите имя её exe-файла',
+      'Choose a program or type the name of its exe file');
+    Dialog.Filter := T('Программы', 'Programs') + ' (*.exe)|*.exe|' +
+      T('Все файлы', 'All files') + ' (*.*)|*.*';
+    // A name typed for a program that is not on this computer is accepted.
+    Dialog.Options := [ofHideReadOnly, ofEnableSizing, ofNoValidate];
+    if not Dialog.Execute(Handle) then
+      Exit;
+    Exe := Trim(ExtractFileName(Dialog.FileName));
+  finally
+    Dialog.Free;
+  end;
+  if Exe = '' then
+    Exit;
+  if ExtractFileExt(Exe) = '' then
+    Exe := Exe + '.exe';
+  if not SameText(ExtractFileExt(Exe), '.exe') then
+  begin
+    MessageBox(Handle, PChar(T('Укажите exe-файл программы.', 'Choose the exe file of a program.')),
+      'LayoutSwitcher', MB_OK or MB_ICONWARNING);
+    Exit;
+  end;
+  if not (FSettings.IsProcessExcluded(Exe) or FSettings.IsAutoCorrectDisabledFor(Exe)) then
+  begin
+    FSettings.CustomPrograms := RemoveWord(FSettings.CustomPrograms, Exe) + [Exe];
     ApplySettings;
   end;
-  LoadControlsFromSettings;
+  DiagnosticsLogFmt('programs.added process="%s"', [Exe]);
+  edProgramFilter.Text := '';
+  chkProgramsCheckedOnly.Checked := False;
+  RefreshProgramGrid;
+  for Row := 1 to sgPrograms.RowCount - 1 do
+    if ProgramAtRow(Row, Entry) and SameText(Entry.ExeName, Exe) then
+    begin
+      sgPrograms.Row := Row;
+      sgPrograms.Col := PROGRAM_COL_OFF;
+      Break;
+    end;
+  UpdateProgramButtons;
+  sgPrograms.SetFocus;
 end;
 
-procedure TFormMain.btnDefaultNoAutoCorrectClick(Sender: TObject);
+procedure TFormMain.btnRemoveProgramClick(Sender: TObject);
+var
+  Entry: TProgramEntry;
 begin
-  FSettings.NoAutoCorrectProcesses := TLSSettings.Defaults.NoAutoCorrectProcesses;
-  LoadControlsFromSettings;
+  if not ProgramAtRow(sgPrograms.Row, Entry) or Entry.Installed then
+    Exit;
+  FSettings.CustomPrograms := RemoveWord(FSettings.CustomPrograms, Entry.ExeName);
+  FSettings.ExcludedProcesses := RemoveWord(FSettings.ExcludedProcesses, Entry.ExeName);
+  FSettings.NoAutoCorrectProcesses := RemoveWord(FSettings.NoAutoCorrectProcesses,
+    Entry.ExeName);
+  DiagnosticsLogFmt('programs.removed process="%s"', [Entry.ExeName]);
   ApplySettings;
+  RefreshProgramGrid;
 end;
 
-procedure TFormMain.edExcludedExit(Sender: TObject);
+procedure TFormMain.btnDefaultProgramsClick(Sender: TObject);
 begin
-  ApplyExcludedFromEdit;
-end;
-
-procedure TFormMain.btnDefaultExcludedClick(Sender: TObject);
-begin
+  if MessageBox(Handle, PChar(T(
+       'Вернуть исходные отметки «Отключить» и «Без автоисправлений»? Отметки, сделанные вручную, будут сброшены.',
+       'Restore the default "Turn off" and "No automatic corrections" marks? Marks made by hand are reset.')),
+       'LayoutSwitcher', MB_YESNO or MB_ICONQUESTION) <> IDYES then
+    Exit;
   FSettings.ExcludedProcesses := TLSSettings.Defaults.ExcludedProcesses;
-  LoadControlsFromSettings;
+  FSettings.NoAutoCorrectProcesses := TLSSettings.Defaults.NoAutoCorrectProcesses;
   ApplySettings;
+  RefreshProgramGrid;
 end;
 
 procedure TFormMain.btnCloseClick(Sender: TObject);
@@ -1898,6 +2200,8 @@ end;
 procedure TFormMain.ShowSettingsWindow;
 begin
   DiagnosticsLog('ui.settings_open');
+  if pcMain.ActivePage = tsExclusions then
+    EnsureProgramsLoaded;
   LoadControlsFromSettings;
   Show;
   WindowState := wsNormal;
@@ -1947,6 +2251,7 @@ begin
     laInvertCase: Result := T('иНВЕРСИЯ', 'iNVERT');
     laTranslate: Result := T('Перевод', 'Translate');
     laWebSearch: Result := T('Поиск', 'Search');
+    laTranslateReplace: Result := T('Замена переводом', 'Translate in place');
     laTransliterate: Result := T('Транслит', 'Translit');
     laUndo: Result := T('Отмена', 'Undo');
   else
@@ -1957,7 +2262,7 @@ end;
 function TFormMain.GestureCombos: TArray<TComboBox>;
 begin
   Result := [cbConvert, cbUpper, cbLower, cbInvert, cbTranslit, cbUndo, cbTranslate,
-    cbWebSearch];
+    cbWebSearch, cbTranslateReplace];
 end;
 
 procedure TFormMain.ApplyLanguage;
@@ -2027,6 +2332,10 @@ begin
     lblUndo.Caption := ActionName(laUndo);
     lblTranslate.Caption := ActionName(laTranslate);
     lblWebSearch.Caption := ActionName(laWebSearch);
+    lblTranslateReplace.Caption := ActionName(laTranslateReplace);
+    lblDeepLKey.Caption := T('Ключ DeepL API для замены переводом:', 'DeepL API key for translating in place:');
+    edDeepLKey.TextHint := T('необязательно; без ключа — Google Переводчик',
+      'optional; Google Translate without a key');
     lblInterval.Caption := T('Интервал двойного нажатия:', 'Double-tap interval:');
     lblIntervalUnit.Caption := T('мс', 'ms');
     for Combo in GestureCombos do
@@ -2101,13 +2410,21 @@ begin
       'Corrections are made after a space. Undo the last one with a double Caps Lock.' +
       sLineBreak + 'They are off in the programs listed on the Exclusions tab.');
 
-    lblExcluded.Caption := T('Полностью отключить в программах (имя exe в строке):',
-      'Turn off completely in these programs (one exe name per line):');
-    btnDefaultExcluded.Caption := T('По умолчанию', 'Defaults');
-    lblNoAutoCorrect.Caption := T(
-      'Без автоисправлений и автопереключения (ручные действия работают):',
-      'No automatic corrections here (manual actions still work):');
-    btnDefaultNoAutoCorrect.Caption := T('По умолчанию', 'Defaults');
+    lblPrograms.Caption := T(
+      '«Отключить» — LayoutSwitcher не делает в программе ничего. «Без автоисправлений» —' +
+      sLineBreak + 'работают только ручные действия (двойной Shift и другие жесты).',
+      '"Turn off": LayoutSwitcher does nothing in the program. "No auto": only the' +
+      sLineBreak + 'manual actions (double Shift and the other gestures) work.');
+    if not Assigned(FProgramScan) or FProgramScan.Finished then
+      edProgramFilter.TextHint := T('Поиск программы', 'Find a program');
+    chkProgramsCheckedOnly.Caption := T('Только отмеченные', 'Only checked');
+    sgPrograms.Cells[PROGRAM_COL_NAME, 0] := T('Программа', 'Program');
+    sgPrograms.Cells[PROGRAM_COL_EXE, 0] := T('Файл', 'File');
+    sgPrograms.Cells[PROGRAM_COL_OFF, 0] := T('Отключить', 'Turn off');
+    sgPrograms.Cells[PROGRAM_COL_NO_AUTO, 0] := T('Без автоиспр.', 'No auto');
+    btnAddProgram.Caption := T('Добавить программу...', 'Add a program...');
+    btnRemoveProgram.Caption := T('Убрать из списка', 'Remove');
+    btnDefaultPrograms.Caption := T('По умолчанию', 'Defaults');
     btnReport.Caption := T('Собрать отчёт...', 'Create report...');
     btnClose.Caption := T('Закрыть', 'Close');
     lblVersion.Caption := T('Версия ', 'Version ') + FVersion;
@@ -2621,7 +2938,6 @@ begin
   if not Visible then
     Exit;
   ApplyCorrectionsFromEdit;
-  ApplyExcludedFromEdit;
 end;
 
 procedure TFormMain.LearnAutoSwitchException(const Word, Converted: string);
@@ -2749,6 +3065,13 @@ var
   Exceptions, SwitchExceptions, Learned: TArray<string>;
   Snippets: string;
 begin
+  if Trim(edDeepLKey.Text) <> FSettings.DeepLApiKey then
+  begin
+    FSettings.DeepLApiKey := Trim(edDeepLKey.Text);
+    DiagnosticsLogFmt('settings.deepl_key set=%s',
+      [BoolToStr(FSettings.DeepLApiKey <> '', True)]);
+    ApplySettings;
+  end;
   Exceptions := ParseWordList(memTwoCapsExceptions.Text);
   SwitchExceptions := ParseWordList(memAutoSwitchExceptions.Text);
   Learned := ParseWordList(memAutoSwitchLearned.Text);
@@ -2829,7 +3152,6 @@ procedure TFormMain.btnExportClick(Sender: TObject);
 var
   Dialog: TSaveDialog;
 begin
-  ApplyExcludedFromEdit;
   ApplyCorrectionsFromEdit;
   Dialog := TSaveDialog.Create(nil);
   try
@@ -2878,6 +3200,9 @@ begin
   end;
 
   // Autorun and the elevated task belong to this computer and stay as they are.
+  // Exported files carry no API key: keep the current one.
+  if Imported.DeepLApiKey = '' then
+    Imported.DeepLApiKey := FSettings.DeepLApiKey;
   FSettings := Imported;
   SetUILanguage(FSettings.Language);
   ApplySettings;

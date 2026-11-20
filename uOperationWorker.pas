@@ -52,6 +52,8 @@ type
     Capitalize: Boolean;
     // Template with {cursor}: Left key presses after typing.
     CaretBack: Integer;
+    // laTranslateReplace: DeepL key (empty = Google Translate).
+    DeepLApiKey: string;
     FocusWnd: HWND;
     WindowLayout: HKL;
     PreviousLayout: HKL;
@@ -96,6 +98,8 @@ type
       const Original, Converted: string; Res: TOperationResult): Boolean;
     function FindTypoFix(Request: TOperationRequest; const Word: string;
       Layout: HKL; out Fixed: string): Boolean;
+    function TranslateText(Request: TOperationRequest; const Text: string;
+      Res: TOperationResult; out Translated: string): Boolean;
     procedure HandleRequest(Request: TOperationRequest);
     procedure Process(Request: TOperationRequest; Res: TOperationResult);
     function ReadNativeEdit(Target: HWND; out Text: string;
@@ -136,7 +140,7 @@ implementation
 
 uses
   Winapi.ActiveX,
-  uDiagnostics, uWinUtils, uLocale, uTextTools;
+  uDiagnostics, uWinUtils, uLocale, uTextTools, uTranslate;
 
 const
   WM_LS_EXECUTE = WM_APP + 100;
@@ -563,10 +567,60 @@ begin
       Converted := InvertTextCase(Text);
     laTransliterate:
       Converted := TransliterateText(Text);
+    laTranslateReplace:
+      if not TranslateText(Request, Text, Res, Converted) then
+        Exit;
   else
     Exit;
   end;
   Result := True;
+end;
+
+function LayoutForLanguage(const Tag: string): HKL;
+var
+  Layout: HKL;
+  Primary: Word;
+begin
+  // The first installed layout of the language ("en" -> US English...).
+  if Tag = 'en' then
+    Primary := LANG_ENGLISH
+  else if Tag = 'ru' then
+    Primary := LANG_RUSSIAN
+  else
+    Exit(0);
+  for Layout in TKeyboardLayoutCatalog.InstalledLayouts do
+    if (LoWord(NativeUInt(Layout)) and $3FF) = Primary then
+      Exit(Layout);
+  Result := 0;
+end;
+
+function TOperationWorker.TranslateText(Request: TOperationRequest; const Text: string;
+  Res: TOperationResult; out Translated: string): Boolean;
+var
+  Target, Service, Error: string;
+  Started: DWORD;
+begin
+  // Only the length and the outcome are logged, never the text.
+  Target := ChooseTranslationTarget(Text);
+  Started := GetTickCount;
+  Result := TranslateOnline(Text, Target, Request.DeepLApiKey, Translated, Service, Error);
+  DiagnosticsLogFmt('translate.result service=%s target=%s length=%d ms=%d ok=%s error=%s',
+    [Service, Target, Length(Text), GetTickCount - Started, BoolToStr(Result, True), Error]);
+  if not Result then
+  begin
+    if Error = 'too_long' then
+      Notify(Res, 'translate_failed', Format(T(
+        'Слишком длинный текст для перевода (больше %d символов).',
+        'The text is too long to translate (more than %d characters).'),
+        [MAX_TRANSLATE_LENGTH]))
+    else if Error <> 'empty' then
+      Notify(Res, 'translate_failed', T(
+        'Не удалось перевести текст: переводчик недоступен. Проверьте подключение к интернету.',
+        'Could not translate the text: the translator is not available. Check the Internet connection.'));
+    Exit;
+  end;
+  // Continue typing in the language of the translation.
+  Res.TargetLayout := LayoutForLanguage(Target);
 end;
 
 function IsConsoleWindowClass(const ClassName: string): Boolean;
