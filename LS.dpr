@@ -27,6 +27,7 @@ uses
   uTrayIconData in 'uTrayIconData.pas',
   uTranslate in 'uTranslate.pas',
   uProgramList in 'uProgramList.pas',
+  uSounds in 'uSounds.pas',
   uOperationWorker in 'uOperationWorker.pas',
   uMain in 'uMain.pas' {FormMain};
 

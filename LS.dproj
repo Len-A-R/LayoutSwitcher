@@ -162,6 +162,7 @@
         <DCCReference Include="uTrayIconData.pas"/>
         <DCCReference Include="uTranslate.pas"/>
         <DCCReference Include="uProgramList.pas"/>
+        <DCCReference Include="uSounds.pas"/>
         <DCCReference Include="uOperationWorker.pas"/>
         <DCCReference Include="uMain.pas">
             <Form>FormMain</Form>

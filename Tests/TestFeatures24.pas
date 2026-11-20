@@ -7,7 +7,7 @@ interface
 
 uses
   DUnitX.TestFramework,
-  uTextTools, uInWordSwitch, uSettings, uProgramList;
+  uTextTools, uInWordSwitch, uSettings, uProgramList, uSounds;
 
 type
   [TestFixture]
@@ -87,6 +87,15 @@ type
     procedure AnyEnding;
     [Test]
     procedure DefaultsAndSettings;
+  end;
+
+  [TestFixture]
+  TSoundTests = class
+  public
+    [Test]
+    procedure BuiltInSoundsAreShortQuietWavs;
+    [Test]
+    procedure SoundSettings;
   end;
 
   [TestFixture]
@@ -501,6 +510,62 @@ begin
   end;
 end;
 
+{ TSoundTests }
+
+procedure TSoundTests.BuiltInSoundsAreShortQuietWavs;
+var
+  Kind, I, Samples: Integer;
+  Wav: TBytes;
+  Value, Peak: SmallInt;
+  Header: AnsiString;
+begin
+  for Kind := SOUND_CLICK to SOUND_LAST_BUILTIN do
+  begin
+    Wav := BuildFeedbackSound(Kind);
+    Assert.IsTrue(Length(Wav) > 44, 'empty sound');
+    SetString(Header, PAnsiChar(@Wav[0]), 4);
+    Assert.AreEqual(AnsiString('RIFF'), Header);
+    SetString(Header, PAnsiChar(@Wav[8]), 8);
+    Assert.AreEqual(AnsiString('WAVEfmt '), Header);
+    Samples := (Length(Wav) - 44) div 2;
+    // Short: at most a third of a second.
+    Assert.IsTrue(Samples <= SOUND_SAMPLE_RATE div 3, Format('kind %d too long', [Kind]));
+    Peak := 0;
+    for I := 0 to Samples - 1 do
+    begin
+      Move(Wav[44 + I * 2], Value, 2);
+      if Abs(Value) > Peak then
+        Peak := Abs(Value);
+    end;
+    // Audible but well below full scale, and no click at the end.
+    Assert.IsTrue((Peak > 3000) and (Peak < 26000), Format('kind %d peak %d', [Kind, Peak]));
+    Move(Wav[Length(Wav) - 2], Value, 2);
+    Assert.IsTrue(Abs(Value) < 300, Format('kind %d ends with %d', [Kind, Value]));
+  end;
+  Assert.AreEqual<Integer>(0, Length(BuildFeedbackSound(SOUND_FILE)));
+end;
+
+procedure TSoundTests.SoundSettings;
+var
+  FileName: string;
+  Source, Loaded: TLSSettings;
+  Diagnostics: Boolean;
+begin
+  Source := TLSSettings.Defaults;
+  Assert.AreEqual(SOUND_CLICK, Source.SoundKind);
+  FileName := TPath.Combine(TPath.GetTempPath, 'ls-settings-sound.ini');
+  try
+    Source.SoundKind := SOUND_FILE;
+    Source.SoundFile := 'C:\Windows\Media\chimes.wav';
+    Assert.IsTrue(ExportSettings(Source, FileName, False));
+    Assert.IsTrue(ImportSettings(FileName, Loaded, Diagnostics));
+    Assert.AreEqual(SOUND_FILE, Loaded.SoundKind);
+    Assert.AreEqual(Source.SoundFile, Loaded.SoundFile);
+  finally
+    System.SysUtils.DeleteFile(FileName);
+  end;
+end;
+
 { TSettings24Tests }
 
 procedure TSettings24Tests.DefaultsAndExport;
@@ -546,6 +611,7 @@ initialization
   TDUnitX.RegisterTestFixture(TTemplateTests);
   TDUnitX.RegisterTestFixture(TProgramListTests);
   TDUnitX.RegisterTestFixture(TAutoReplaceTests);
+  TDUnitX.RegisterTestFixture(TSoundTests);
   TDUnitX.RegisterTestFixture(TSettings24Tests);
 
 end.

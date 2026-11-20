@@ -106,6 +106,8 @@ type
     memAutoReplace: TMemo;
     lblCorrectionsNote: TLabel;
     chkSound: TCheckBox;
+    cbSound: TComboBox;
+    btnSoundTest: TButton;
     chkAutoSwitch: TCheckBox;
     lblAutoSwitchHint: TLabel;
     chkFixTypos: TCheckBox;
@@ -157,6 +159,8 @@ type
     procedure btnRemoveProgramClick(Sender: TObject);
     procedure btnDefaultProgramsClick(Sender: TObject);
     procedure chkAutorunClick(Sender: TObject);
+    procedure cbSoundChange(Sender: TObject);
+    procedure btnSoundTestClick(Sender: TObject);
     procedure chkAutorunElevatedClick(Sender: TObject);
     procedure chkDiagnosticsClick(Sender: TObject);
     procedure cbGestureChange(Sender: TObject);
@@ -358,7 +362,7 @@ uses
   Vcl.Imaging.pngimage, uTrayIconData,
   System.StrUtils,
   uDiagnostics, uWinUtils, uTaskAutorun, uLocale, uSettingsStore, uClipboardSnapshot,
-  uSpellCheck, uInWordSwitch, Vcl.Themes;
+  uSpellCheck, uInWordSwitch, Vcl.Themes, uSounds;
 
 const
   WM_LS_OPERATION_DONE = WM_APP + 10;
@@ -1269,7 +1273,7 @@ begin
     if Res.Action <> laAutoSwitch then
       FAutoSwitchOriginal := '';
     if FSettings.SoundEnabled and Res.Success and (Res.BufferAction = baSet) then
-      MessageBeep(MB_OK);
+      PlayFeedbackSound(FSettings.SoundKind, FSettings.SoundFile);
 
     if (Res.BufferAction = baSet) and FPendingAutomatic and
        (AtomicCmpExchange(GKeystrokeCount, 0, 0) <> FPendingStamp) then
@@ -1628,6 +1632,9 @@ begin
     chkAutoReplace.Checked := FSettings.AutoReplaceEnabled;
     memAutoReplace.Text := FSettings.AutoReplace;
     chkSound.Checked := FSettings.SoundEnabled;
+    cbSound.ItemIndex := FSettings.SoundKind;
+    cbSound.Enabled := FSettings.SoundEnabled;
+    btnSoundTest.Enabled := FSettings.SoundEnabled;
     chkAutoSwitch.Checked := FSettings.AutoSwitchEnabled;
     chkFixTypos.Checked := FSettings.FixTypos;
     chkFixTyposExtended.Checked := FSettings.FixTyposExtended;
@@ -1719,6 +1726,8 @@ begin
   FSettings.SnippetsEnabled := chkSnippets.Checked;
   FSettings.AutoReplaceEnabled := chkAutoReplace.Checked;
   FSettings.SoundEnabled := chkSound.Checked;
+  cbSound.Enabled := FSettings.SoundEnabled;
+  btnSoundTest.Enabled := FSettings.SoundEnabled;
   FSettings.AutoSwitchEnabled := chkAutoSwitch.Checked;
   FSettings.FixTypos := chkFixTypos.Checked;
   FSettings.FixTyposExtended := chkFixTyposExtended.Checked;
@@ -2029,6 +2038,50 @@ begin
   RefreshProgramGrid;
 end;
 
+procedure TFormMain.cbSoundChange(Sender: TObject);
+var
+  Dialog: TOpenDialog;
+begin
+  if FUpdatingControls or (cbSound.ItemIndex < 0) then
+    Exit;
+  if cbSound.ItemIndex = SOUND_FILE then
+  begin
+    Dialog := TOpenDialog.Create(nil);
+    try
+      Dialog.Title := T('Звук при исправлении текста', 'Sound when text is corrected');
+      Dialog.Filter := T('Звуки WAV', 'WAV sounds') + ' (*.wav)|*.wav';
+      Dialog.Options := [ofHideReadOnly, ofEnableSizing, ofFileMustExist];
+      if FSettings.SoundFile <> '' then
+        Dialog.FileName := FSettings.SoundFile
+      else
+        Dialog.InitialDir := GetEnvironmentVariable('WINDIR') + '\Media';
+      if not Dialog.Execute(Handle) then
+      begin
+        // Cancelled: back to the previous choice.
+        if FSettings.SoundFile = '' then
+          cbSound.ItemIndex := SOUND_CLICK
+        else if FSettings.SoundKind <> SOUND_FILE then
+          cbSound.ItemIndex := FSettings.SoundKind;
+        Exit;
+      end;
+      FSettings.SoundFile := Dialog.FileName;
+    finally
+      Dialog.Free;
+    end;
+  end;
+  FSettings.SoundKind := cbSound.ItemIndex;
+  ApplySettings;
+  // The combo shows the file name of the own sound.
+  ApplyLanguage;
+  LoadControlsFromSettings;
+  PlayFeedbackSound(FSettings.SoundKind, FSettings.SoundFile);
+end;
+
+procedure TFormMain.btnSoundTestClick(Sender: TObject);
+begin
+  PlayFeedbackSound(FSettings.SoundKind, FSettings.SoundFile);
+end;
+
 procedure TFormMain.btnCloseClick(Sender: TObject);
 begin
   Close;
@@ -2320,8 +2373,15 @@ begin
       'Turn off the Sticky Keys prompt on pressing Shift five times');
     chkLayoutIndicator.Caption := T('Показывать раскладку рядом с курсором при переключении',
       'Show the layout next to the caret when it changes');
-    chkSound.Caption := T('Звуковой сигнал при исправлении текста',
-      'Play a sound when text is corrected');
+    chkSound.Caption := T('Звук при исправлении текста:', 'Sound when text is corrected:');
+    if FSettings.SoundFile <> '' then
+      FillCombo(cbSound, [T('Щелчок', 'Click'), T('Тук', 'Knock'), T('Капля', 'Drop'),
+        T('Колокольчик', 'Bell'), T('Пузырёк', 'Bubble'),
+        T('Свой: ', 'Own: ') + ExtractFileName(FSettings.SoundFile)])
+    else
+      FillCombo(cbSound, [T('Щелчок', 'Click'), T('Тук', 'Knock'), T('Капля', 'Drop'),
+        T('Колокольчик', 'Bell'), T('Пузырёк', 'Bubble'), T('Свой WAV-файл...', 'Own WAV file...')]);
+    btnSoundTest.Hint := T('Прослушать', 'Listen');
     lblLanguage.Caption := T('Язык интерфейса / Language:', 'Language / Язык интерфейса:');
     FillCombo(cbLanguage, [T('Как в Windows', 'As in Windows'), 'Русский', 'English']);
     if IsPortableMode then

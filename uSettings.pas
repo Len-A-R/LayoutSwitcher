@@ -70,6 +70,8 @@ type
     // computer); kept even when neither box is checked.
     CustomPrograms: TArray<string>;
     SoundEnabled: Boolean;
+    SoundKind: Integer;      // SOUND_* in uSounds
+    SoundFile: string;       // WAV file for SOUND_FILE
     SearchEngine: Integer;   // SEARCH_* in uTextTools
     class function Defaults: TLSSettings; static;
     function ActionForGesture(Gesture: TLSGesture): TLSAction;
@@ -192,6 +194,8 @@ const
   VALUE_AUTO_SWITCH_EXCEPTIONS = 'AutoSwitchExceptions';
   VALUE_NO_AUTOCORRECT = 'NoAutoCorrectProcesses';
   VALUE_SOUND = 'SoundEnabled';
+  VALUE_SOUND_KIND = 'SoundKind';
+  VALUE_SOUND_FILE = 'SoundFile';
 
 { TLSSettings }
 
@@ -243,6 +247,8 @@ begin
   for I := 0 to High(DefaultNoAutoCorrectProcesses) do
     Result.NoAutoCorrectProcesses[I] := DefaultNoAutoCorrectProcesses[I];
   Result.SoundEnabled := False;
+  Result.SoundKind := 0;
+  Result.SoundFile := '';
   Result.ActionGestures[laTranslate] := lgDoubleRAlt;
   Result.ActionGestures[laWebSearch] := lgDoubleLAlt;
   Result.ActionGestures[laTranslateReplace] := lgRCtrlRAlt;
@@ -456,6 +462,15 @@ begin
     Result := Default;
 end;
 
+function EnsureSoundKind(Value: Integer): Integer;
+begin
+  // 0..5: the built-in sounds and "own file" (uSounds).
+  if (Value >= 0) and (Value <= 5) then
+    Result := Value
+  else
+    Result := 0;
+end;
+
 function RemoveProcess(const List: TArray<string>; const Name: string): TArray<string>;
 var
   Item: string;
@@ -566,6 +581,8 @@ begin
           Result.NoAutoCorrectProcesses, 'notepad++.exe');
     end;
     Result.SoundEnabled := Store.ReadBool(VALUE_SOUND, Result.SoundEnabled);
+    Result.SoundKind := EnsureSoundKind(Store.ReadInteger(VALUE_SOUND_KIND, Result.SoundKind));
+    Result.SoundFile := Store.ReadString(VALUE_SOUND_FILE, Result.SoundFile);
   except
     // A damaged value must not prevent the application from starting.
     Result := TLSSettings.Defaults;
@@ -617,6 +634,8 @@ begin
     Store.WriteString(VALUE_NO_AUTOCORRECT,
       ProcessListToText(Settings.NoAutoCorrectProcesses));
     Store.WriteBool(VALUE_SOUND, Settings.SoundEnabled);
+    Store.WriteInteger(VALUE_SOUND_KIND, Settings.SoundKind);
+    Store.WriteString(VALUE_SOUND_FILE, Settings.SoundFile);
     Store.WriteInteger(VALUE_SETTINGS_VERSION, CURRENT_SETTINGS_VERSION);
     Result := Store.Flush;
   except

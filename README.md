@@ -19,7 +19,7 @@
 * Заглавная буква в начале предложения и удаление случайного двойного пробела
 * Быстрые действия в меню трея: выключить автоисправления на час, «не исправлять это слово», «без автоисправлений в этой программе»
 * Правила для программ: в редакторах кода, терминалах и менеджерах паролей — только ручные действия
-* Звуковой сигнал при исправлении текста (по желанию, вкладка «Основные»)
+* Звук при исправлении текста: несколько мягких звуков на выбор или свой WAV-файл (по желанию, вкладка «Основные»)
 * Автоисправление: слова, набранные с Caps Lock (`пРИВЕТ` → `Привет`), и две заглавные (`ПРивет` → `Привет`)
 * Шаблоны: сокращение и пробел (`;дата` → `18.11.2026`), подстановка буфера обмена, позиция курсора, многострочный текст
 * Автоцензура: замена слов по справочнику — грубых на мягкие или на смайлики (по желанию)
@@ -247,6 +247,10 @@ Clipboard fallback не выполняется, если:
 
 Меню трея **«Текст в буфере обмена»**: исправить раскладку, ВЕРХНИЙ или нижний регистр, транслитерация. Программа читает текст из буфера, исправляет его и кладёт обратно — затем его можно вставить куда угодно, в том числе в окна администратора и удалённый рабочий стол.
 
+## Звук при исправлении
+
+Флажок **«Звук при исправлении текста»** на вкладке «Основные» (по умолчанию выключен). Рядом выбирается звук: «Щелчок», «Тук», «Капля», «Колокольчик», «Пузырёк» или «Свой WAV-файл...» (выбор файла, по умолчанию открывается папка `Windows\Media`); кнопка ▶ проигрывает выбранный звук, он же звучит сразу при выборе. Встроенные звуки короткие (до 0,3 с), тихие и синтезируются программой, поэтому не зависят от звуковой схемы Windows. Системный сигнал `MessageBeep`, который использовался раньше, в Windows 10/11 звучит как ошибка. Звук играет после ручных и автоматических исправлений, изменивших текст; если выбранный файл удалён, звучит «Щелчок».
+
 ## Индикатор раскладки
 
 Флажок **«Показывать раскладку рядом с курсором при переключении»** выводит на 1,2 с значок `RU` / `EN` (код языка ISO 639) у текстового курсора, когда раскладка окна меняется. Значок никогда не получает фокус и пропускает щелчки мыши. Если программа не сообщает положение каретки (часть браузеров), значок появляется у указателя мыши. При простом переходе в окно с другой раскладкой значок не показывается.
@@ -313,7 +317,7 @@ Clipboard fallback не выполняется, если:
 
 ## Настройки
 
-Хранятся в `HKCU\Software\LayoutSwitcher`: `Gesture.<действие>`, `DoubleTapInterval`, `ExcludedProcesses`, `PauseInFullscreen`, `ShowNotifications`, `DisableStickyKeysHotkey`, `ShowLayoutIndicator`, `Language`, `CheckForUpdates`, `LastUpdateCheck`, `FixCapsLock`, `FixTwoCapitals`, `TwoCapitalsExceptions`, `SnippetsEnabled`, `Snippets`, `AutoReplaceEnabled`, `AutoReplace`, `Translator`, `SearchEngine`, `AutoSwitchEnabled`, `InWordSwitch`, `LearnManualConversions`, `AutoSwitchLearned`, `AutoSwitchLearnCounts`, `FixTypos`, `FixTyposExtended`, `CapitalizeSentences`, `FixDoubleSpace`, `DeepLApiKey`, `AutoSwitchExceptions`, `NoAutoCorrectProcesses`, `CustomPrograms`, `SoundEnabled`, `SettingsVersion`, `EnableDiagnostics`. Повреждённые или противоречивые значения заменяются значениями по умолчанию.
+Хранятся в `HKCU\Software\LayoutSwitcher`: `Gesture.<действие>`, `DoubleTapInterval`, `ExcludedProcesses`, `PauseInFullscreen`, `ShowNotifications`, `DisableStickyKeysHotkey`, `ShowLayoutIndicator`, `Language`, `CheckForUpdates`, `LastUpdateCheck`, `FixCapsLock`, `FixTwoCapitals`, `TwoCapitalsExceptions`, `SnippetsEnabled`, `Snippets`, `AutoReplaceEnabled`, `AutoReplace`, `Translator`, `SearchEngine`, `AutoSwitchEnabled`, `InWordSwitch`, `LearnManualConversions`, `AutoSwitchLearned`, `AutoSwitchLearnCounts`, `FixTypos`, `FixTyposExtended`, `CapitalizeSentences`, `FixDoubleSpace`, `DeepLApiKey`, `AutoSwitchExceptions`, `NoAutoCorrectProcesses`, `CustomPrograms`, `SoundEnabled`, `SoundKind`, `SoundFile`, `SettingsVersion`, `EnableDiagnostics`. Повреждённые или противоречивые значения заменяются значениями по умолчанию.
 
 ### Экспорт, импорт и переносной режим
 
@@ -419,6 +423,7 @@ Export-Certificate -Cert $cert -FilePath LayoutSwitcher-codesign.cer
 | `uWordStarts.pas` | Начала слов русского и английского словарей (генерируется) |
 | `uTrayIconData.pas` | Иконки трея (генерируется из `res\tray-*.png`) |
 | `uProgramList.pas` | Таблица программ на вкладке «Исключения»: поиск установленных программ |
+| `uSounds.pas` | Звуки при исправлении (синтез WAV, свой файл) |
 | `uTranslate.pas` | Замена текста переводом: Google Translate и DeepL API |
 | `uSignature.pas` | Проверка подписи установщика (`WinVerifyTrust`) |
 | `tools\make-winget.ps1` | Генерация манифестов winget |

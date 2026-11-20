@@ -127,11 +127,31 @@ object FormMain: TFormMain
       object chkSound: TCheckBox
         Left = 12
         Top = 196
-        Width = 480
+        Width = 230
         Height = 17
         Caption = #1047#1074#1091#1082#1086#1074#1086#1081' '#1089#1080#1075#1085#1072#1083' '#1087#1088#1080' '#1080#1089#1087#1088#1072#1074#1083#1077#1085#1080#1080' '#1090#1077#1082#1089#1090#1072
         TabOrder = 8
         OnClick = chkBehaviorClick
+      end
+      object cbSound: TComboBox
+        Left = 248
+        Top = 194
+        Width = 180
+        Height = 21
+        Style = csDropDownList
+        TabOrder = 12
+        OnChange = cbSoundChange
+      end
+      object btnSoundTest: TButton
+        Left = 434
+        Top = 193
+        Width = 58
+        Height = 23
+        Caption = #9654
+        ParentShowHint = False
+        ShowHint = True
+        TabOrder = 13
+        OnClick = btnSoundTestClick
       end
       object lblLanguage: TLabel
         Left = 12
