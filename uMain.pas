@@ -10,7 +10,7 @@ uses
   Winapi.Windows, Winapi.Messages,
   System.SysUtils, System.Classes, System.Generics.Collections,
   Vcl.Graphics, Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.ExtCtrls, Vcl.Menus,
-  Vcl.StdCtrls, Vcl.ComCtrls, Vcl.Grids, uProgramList,
+  Vcl.StdCtrls, Vcl.ComCtrls, Vcl.Grids, uProgramList, uAiExplain, uExplainWindow,
   uSettings, uGestureDetector, uOperationWorker, uConversionChain,
   uLayoutIndicator, uUpdateCheck, uUpdateProgress, uLayoutConverter, uTextTools;
 
@@ -88,6 +88,20 @@ type
     cbWebSearch: TComboBox;
     lblTranslateReplace: TLabel;
     cbTranslateReplace: TComboBox;
+    lblExplain: TLabel;
+    cbExplain: TComboBox;
+    tsServices: TTabSheet;
+    lblAiHeader: TLabel;
+    lblAiService: TLabel;
+    cbAiService: TComboBox;
+    lblAiKey: TLabel;
+    edAiKey: TEdit;
+    lblAiUrl: TLabel;
+    edAiUrl: TEdit;
+    lblAiModel: TLabel;
+    edAiModel: TEdit;
+    lblAiNote: TLabel;
+    btnAiTest: TButton;
     lblDeepLKey: TLabel;
     edDeepLKey: TEdit;
     lblTranslator: TLabel;
@@ -160,6 +174,8 @@ type
     procedure btnDefaultProgramsClick(Sender: TObject);
     procedure chkAutorunClick(Sender: TObject);
     procedure cbSoundChange(Sender: TObject);
+    procedure cbAiServiceChange(Sender: TObject);
+    procedure btnAiTestClick(Sender: TObject);
     procedure btnSoundTestClick(Sender: TObject);
     procedure chkAutorunElevatedClick(Sender: TObject);
     procedure chkDiagnosticsClick(Sender: TObject);
@@ -265,6 +281,9 @@ type
     FInstalledPrograms: TArray<TProgramEntry>;
     FProgramsLoaded: Boolean;
     FProgramScan: TProgramScanThread;
+    // AI explanation window and the answer it waits for.
+    FExplainWindow: TExplainWindow;
+    FExplainSequence: Cardinal;
     FPrograms: TArray<TProgramEntry>;
     FVisiblePrograms: TArray<Integer>;
     FUpdateNotes: string;
@@ -307,6 +326,11 @@ type
     procedure UpdateProgramButtons;
     procedure pcMainChange(Sender: TObject);
     procedure ProgramScanDone(Sender: TObject);
+    function CurrentAiConfig: TAiConfig;
+    procedure LoadAiControls;
+    procedure ApplyAiFromEdit;
+    procedure StartExplain(const Text: string);
+    procedure ExplainDone(Sender: TObject);
     procedure SyncAutorunPath;
     procedure UpdateAutorunControls;
     procedure ShowSettingsWindow;
@@ -422,6 +446,9 @@ const
   ShortGestureNames: array[TLSGesture] of string = (
     '', 'Shift×2', 'LCtrl×2', 'RCtrl×2', 'Ctrl+Ctrl', 'Shift+Shift', 'Caps×2',
     'RAlt×2', 'LAlt×2', 'RCtrl+RAlt', 'Pause');
+  AI_PROVIDER_FREE = 0;
+  AI_PROVIDER_CLAUDE = 1;
+  AI_PROVIDER_OPENAI = 2;
 
 function ShortActionName(Action: TLSAction): string; forward;
 function ContainsDigit(const Text: string): Boolean; forward;
@@ -615,6 +642,8 @@ begin
     TUpdateDownloadResult(Msg.lParam).Free;
   for I := Low(FTrayIcons) to High(FTrayIcons) do
     FreeAndNil(FTrayIcons[I]);
+  // AI requests still running finish on their own; their results are ignored.
+  FExplainSequence := 0;
   if Assigned(FProgramScan) then
   begin
     FProgramScan.OnTerminate := nil;
@@ -1241,9 +1270,11 @@ begin
     end;
     FOperationBusy := False;
 
-    if Res.Action in [laTranslate, laWebSearch] then
+    if Res.Action in [laTranslate, laWebSearch, laExplain] then
     begin
-      if Res.Success then
+      if Res.Success and (Res.Action = laExplain) then
+        StartExplain(Res.LookupText)
+      else if Res.Success then
       begin
         if Res.Action = laTranslate then
           ShellExecute(0, 'open', PChar(BuildTranslateUrl(FSettings.Translator,
@@ -1611,6 +1642,7 @@ end;
 procedure TFormMain.LoadControlsFromSettings;
 begin
   RefreshProgramGrid;
+  LoadAiControls;
   FUpdatingControls := True;
   try
     cbConvert.ItemIndex := Ord(FSettings.GestureForAction(laConvert));
@@ -1622,6 +1654,7 @@ begin
     cbTranslate.ItemIndex := Ord(FSettings.GestureForAction(laTranslate));
     cbWebSearch.ItemIndex := Ord(FSettings.GestureForAction(laWebSearch));
     cbTranslateReplace.ItemIndex := Ord(FSettings.GestureForAction(laTranslateReplace));
+    cbExplain.ItemIndex := Ord(FSettings.GestureForAction(laExplain));
     edDeepLKey.Text := FSettings.DeepLApiKey;
     cbTranslator.ItemIndex := FSettings.Translator;
     cbSearchEngine.ItemIndex := FSettings.SearchEngine;
@@ -2314,6 +2347,7 @@ begin
     laTranslate: Result := T('Перевод', 'Translate');
     laWebSearch: Result := T('Поиск', 'Search');
     laTranslateReplace: Result := T('Замена переводом', 'Translate in place');
+    laExplain: Result := T('ИИ', 'AI');
     laTransliterate: Result := T('Транслит', 'Translit');
     laUndo: Result := T('Отмена', 'Undo');
   else
@@ -2324,7 +2358,7 @@ end;
 function TFormMain.GestureCombos: TArray<TComboBox>;
 begin
   Result := [cbConvert, cbUpper, cbLower, cbInvert, cbTranslit, cbUndo, cbTranslate,
-    cbWebSearch, cbTranslateReplace];
+    cbWebSearch, cbTranslateReplace, cbExplain];
 end;
 
 procedure TFormMain.ApplyLanguage;
@@ -2402,6 +2436,18 @@ begin
     lblTranslate.Caption := ActionName(laTranslate);
     lblWebSearch.Caption := ActionName(laWebSearch);
     lblTranslateReplace.Caption := ActionName(laTranslateReplace);
+    lblExplain.Caption := ActionName(laExplain);
+    tsServices.Caption := T('Сервисы', 'Services');
+    lblAiHeader.Caption := T('Объяснение выделенного текста с помощью ИИ', 'Explaining the selection with AI');
+    lblAiService.Caption := T('Сервис ИИ:', 'AI service:');
+    FillCombo(cbAiService, [T('Pollinations.ai — бесплатно, без регистрации',
+      'Pollinations.ai - free, no registration'), T('Anthropic Claude (ключ API)',
+      'Anthropic Claude (API key)'), T('Совместимый с OpenAI (OpenAI, OpenRouter, Ollama...)',
+      'OpenAI-compatible (OpenAI, OpenRouter, Ollama...)')]);
+    lblAiKey.Caption := T('Ключ API:', 'API key:');
+    lblAiUrl.Caption := T('Адрес API:', 'API address:');
+    lblAiModel.Caption := T('Модель:', 'Model:');
+    btnAiTest.Caption := T('Проверить', 'Test');
     lblDeepLKey.Caption := T('Ключ DeepL API для замены переводом:', 'DeepL API key for translating in place:');
     edDeepLKey.TextHint := T('необязательно; без ключа — Google Переводчик',
       'optional; Google Translate without a key');
@@ -3150,6 +3196,7 @@ var
   Exceptions, SwitchExceptions, Learned: TArray<string>;
   Snippets: string;
 begin
+  ApplyAiFromEdit;
   if Trim(edDeepLKey.Text) <> FSettings.DeepLApiKey then
   begin
     FSettings.DeepLApiKey := Trim(edDeepLKey.Text);
@@ -3177,6 +3224,222 @@ begin
     FSettings.Snippets := Snippets;
     ApplySettings;
   end;
+end;
+
+{ AI explanation }
+
+function TFormMain.CurrentAiConfig: TAiConfig;
+begin
+  Result.Provider := AiProviderFromInteger(FSettings.AiProvider);
+  case Result.Provider of
+    apClaude:
+      begin
+        Result.ApiKey := FSettings.AiClaudeKey;
+        Result.Model := FSettings.AiClaudeModel;
+      end;
+    apOpenAI:
+      begin
+        Result.ApiKey := FSettings.AiOpenAIKey;
+        Result.BaseUrl := FSettings.AiOpenAIUrl;
+        Result.Model := FSettings.AiOpenAIModel;
+      end;
+  else
+    Result.ApiKey := '';
+    Result.Model := '';
+  end;
+end;
+
+procedure TFormMain.LoadAiControls;
+var
+  Provider: TAiProvider;
+begin
+  FUpdatingControls := True;
+  try
+    Provider := AiProviderFromInteger(FSettings.AiProvider);
+    cbAiService.ItemIndex := Ord(Provider);
+    edAiKey.Enabled := Provider <> apFree;
+    lblAiKey.Enabled := edAiKey.Enabled;
+    edAiUrl.Enabled := Provider = apOpenAI;
+    lblAiUrl.Enabled := edAiUrl.Enabled;
+    edAiModel.Enabled := Provider <> apFree;
+    lblAiModel.Enabled := edAiModel.Enabled;
+    edAiModel.TextHint := DefaultAiModel(Provider);
+    case Provider of
+      apClaude:
+        begin
+          edAiKey.Text := FSettings.AiClaudeKey;
+          edAiUrl.Text := 'https://api.anthropic.com';
+          edAiModel.Text := FSettings.AiClaudeModel;
+          lblAiNote.Caption := T(
+            'Ключ API создаётся в консоли Anthropic (platform.claude.com). По умолчанию ' +
+            'модель claude-opus-5-5; дешевле — claude-sonnet-5-5 или claude-haiku-5-5.',
+            'Create the API key in the Anthropic Console (platform.claude.com). The default ' +
+            'model is claude-opus-5-5; cheaper: claude-sonnet-5-5 or claude-haiku-5-5.');
+        end;
+      apOpenAI:
+        begin
+          edAiKey.Text := FSettings.AiOpenAIKey;
+          edAiUrl.Text := FSettings.AiOpenAIUrl;
+          edAiModel.Text := FSettings.AiOpenAIModel;
+          lblAiNote.Caption := T(
+            'Адрес — до /chat/completions: https://api.openai.com/v1, https://openrouter.ai/api/v1, ' +
+            'https://api.deepseek.com/v1; локально Ollama — http://localhost:11434/v1 (ключ не нужен, ' +
+            'текст не уходит в интернет).',
+            'The address up to /chat/completions: https://api.openai.com/v1, ' +
+            'https://openrouter.ai/api/v1, https://api.deepseek.com/v1; a local Ollama - ' +
+            'http://localhost:11434/v1 (no key, the text stays on the computer).');
+        end;
+    else
+      edAiKey.Text := '';
+      edAiUrl.Text := POLLINATIONS_URL;
+      edAiModel.Text := '';
+      lblAiNote.Caption := T(
+        'Бесплатный открытый сервис без регистрации: не чаще одного ответа в 45 секунд, ' +
+        'качество скромнее платных моделей. Для лучших ответов подключите Claude или другой ИИ.',
+        'A free open service without registration: at most one answer every 45 seconds, ' +
+        'more modest quality than paid models. Connect Claude or another AI for better answers.');
+    end;
+    lblAiNote.Caption := lblAiNote.Caption + sLineBreak + T(
+      'Выделенный текст отправляется выбранному сервису только по жесту.',
+      'The selected text is sent to the chosen service only on the gesture.');
+  finally
+    FUpdatingControls := False;
+  end;
+end;
+
+procedure TFormMain.ApplyAiFromEdit;
+var
+  Changed: Boolean;
+
+  procedure Put(var Field: string; const Value: string);
+  begin
+    if Trim(Value) <> Field then
+    begin
+      Field := Trim(Value);
+      Changed := True;
+    end;
+  end;
+
+begin
+  Changed := False;
+  case AiProviderFromInteger(FSettings.AiProvider) of
+    apClaude:
+      begin
+        Put(FSettings.AiClaudeKey, edAiKey.Text);
+        Put(FSettings.AiClaudeModel, edAiModel.Text);
+      end;
+    apOpenAI:
+      begin
+        Put(FSettings.AiOpenAIKey, edAiKey.Text);
+        Put(FSettings.AiOpenAIUrl, edAiUrl.Text);
+        Put(FSettings.AiOpenAIModel, edAiModel.Text);
+      end;
+  end;
+  if Changed then
+  begin
+    DiagnosticsLogFmt('settings.ai provider=%d key_set=%s', [FSettings.AiProvider,
+      BoolToStr(CurrentAiConfig.ApiKey <> '', True)]);
+    ApplySettings;
+  end;
+end;
+
+procedure TFormMain.cbAiServiceChange(Sender: TObject);
+begin
+  if FUpdatingControls or (cbAiService.ItemIndex < 0) then
+    Exit;
+  // Fields of the previous service first.
+  ApplyAiFromEdit;
+  FSettings.AiProvider := cbAiService.ItemIndex;
+  ApplySettings;
+  LoadAiControls;
+end;
+
+procedure TFormMain.btnAiTestClick(Sender: TObject);
+var
+  Answer, Code, Error: string;
+begin
+  ApplyAiFromEdit;
+  Screen.Cursor := crHourGlass;
+  try
+    // A tiny request: is the service reachable and does it accept the key?
+    if AskAi(CurrentAiConfig, 'Answer with one word.', 'Say "OK".', Answer, Code, Error) then
+      MessageBox(Handle, PChar(T('Сервис ИИ отвечает: ', 'The AI service answers: ') + Answer),
+        'LayoutSwitcher', MB_OK or MB_ICONINFORMATION)
+    else
+      MessageBox(Handle, PChar(Error), 'LayoutSwitcher', MB_OK or MB_ICONWARNING);
+  finally
+    Screen.Cursor := crDefault;
+  end;
+  DiagnosticsLogFmt('ai.test provider=%d ok=%s error=%s',
+    [FSettings.AiProvider, BoolToStr(Code = '', True), Code]);
+end;
+
+procedure TFormMain.StartExplain(const Text: string);
+const
+  Services: array[TAiProvider] of string = ('Pollinations.ai', 'Anthropic Claude', '');
+var
+  Config: TAiConfig;
+  Thread: TAiExplainThread;
+  Service, Host: string;
+begin
+  Config := CurrentAiConfig;
+  Service := Services[Config.Provider];
+  if Config.Provider = apOpenAI then
+  begin
+    Host := Config.BaseUrl;
+    if Pos('://', Host) > 0 then
+      Host := Copy(Host, Pos('://', Host) + 3, MaxInt);
+    if Pos('/', Host) > 0 then
+      Host := Copy(Host, 1, Pos('/', Host) - 1);
+    Service := Host;
+  end;
+  // Once: the selected text leaves the computer.
+  if not FSettings.AiConsent and (Pos('localhost', LowerCase(Service)) = 0) and
+     (Pos('127.0.0.1', Service) = 0) then
+  begin
+    if MessageBox(0, PChar(Format(T(
+         'Выделенный текст будет отправлен сервису ИИ «%s», чтобы получить объяснение. ' +
+         'Он передаётся только когда вы сами вызываете объяснение. Сервис выбирается на ' +
+         'вкладке «Сервисы».' + sLineBreak + sLineBreak + 'Продолжить?',
+         'The selected text will be sent to the AI service "%s" to get an explanation. ' +
+         'It is sent only when you ask for an explanation. The service is chosen on the ' +
+         'Services tab.' + sLineBreak + sLineBreak + 'Continue?'), [Service])),
+         'LayoutSwitcher', MB_YESNO or MB_ICONQUESTION or MB_TOPMOST or MB_SETFOREGROUND) <> IDYES then
+      Exit;
+    FSettings.AiConsent := True;
+    ApplySettings;
+  end;
+  if FExplainWindow = nil then
+    FExplainWindow := TExplainWindow.Create(Self);
+  FExplainWindow.StartQuestion(Text, Service + ' · ' + EffectiveAiModel(Config));
+  Inc(FExplainSequence);
+  if FExplainSequence = 0 then
+    FExplainSequence := 1;
+  Thread := TAiExplainThread.Create(Config, ExplainSystemPrompt(T('ru', 'en') = 'ru'),
+    ExplainUserMessage(Text), FExplainSequence);
+  Thread.FreeOnTerminate := True;
+  Thread.OnTerminate := ExplainDone;
+  Thread.Start;
+  DiagnosticsLogFmt('ai.explain_start provider=%d length=%d', [Ord(Config.Provider),
+    Length(Text)]);
+end;
+
+procedure TFormMain.ExplainDone(Sender: TObject);
+var
+  Thread: TAiExplainThread;
+begin
+  // OnTerminate runs in the main thread.  A newer question or a closed
+  // window makes the answer obsolete.
+  Thread := TAiExplainThread(Sender);
+  DiagnosticsLogFmt('ai.explain_done ok=%s ms=%d error=%s',
+    [BoolToStr(Thread.Success, True), Thread.ElapsedMS, Thread.ErrorCode]);
+  if (Thread.Sequence <> FExplainSequence) or (FExplainWindow = nil) or
+     not FExplainWindow.Visible then
+    Exit;
+  if Thread.Success then
+    FExplainWindow.ShowAnswer(Thread.Answer, Thread.ElapsedMS)
+  else
+    FExplainWindow.ShowError(Thread.ErrorText);
 end;
 
 procedure TFormMain.cbServiceChange(Sender: TObject);
@@ -3293,6 +3556,10 @@ begin
   // Exported files carry no API key: keep the current one.
   if Imported.DeepLApiKey = '' then
     Imported.DeepLApiKey := FSettings.DeepLApiKey;
+  if Imported.AiClaudeKey = '' then
+    Imported.AiClaudeKey := FSettings.AiClaudeKey;
+  if Imported.AiOpenAIKey = '' then
+    Imported.AiOpenAIKey := FSettings.AiOpenAIKey;
   FSettings := Imported;
   SetUILanguage(FSettings.Language);
   ApplySettings;

@@ -350,27 +350,44 @@ object FormMain: TFormMain
         TabOrder = 8
         OnChange = cbGestureChange
       end
-      object lblInterval: TLabel
+      object lblExplain: TLabel
         Left = 12
         Top = 267
+        Width = 8
+        Height = 13
+        Caption = #1053#1072#1081#1090#1080' '#1074#1099#1076#1077#1083#1077#1085#1085#1086#1077' '#1074' '#1080#1085#1090#1077#1088#1085#1077#1090#1077
+      end
+      object cbExplain: TComboBox
+        Left = 240
+        Top = 264
+        Width = 252
+        Height = 21
+        Style = csDropDownList
+        Tag = 10
+        TabOrder = 9
+        OnChange = cbGestureChange
+      end
+      object lblInterval: TLabel
+        Left = 12
+        Top = 295
         Width = 8
         Height = 13
         Caption = #1048#1085#1090#1077#1088#1074#1072#1083' '#1076#1074#1086#1081#1085#1086#1075#1086' '#1085#1072#1078#1072#1090#1080#1103':'
       end
       object edInterval: TEdit
         Left = 240
-        Top = 264
+        Top = 292
         Width = 57
         Height = 21
         NumbersOnly = True
-        TabOrder = 9
+        TabOrder = 10
         Text = '500'
         OnChange = edIntervalChange
         OnExit = edIntervalExit
       end
       object udInterval: TUpDown
         Left = 297
-        Top = 264
+        Top = 292
         Width = 16
         Height = 21
         Associate = edInterval
@@ -378,63 +395,15 @@ object FormMain: TFormMain
         Max = 1000
         Increment = 50
         Position = 500
-        TabOrder = 10
+        TabOrder = 11
         Thousands = False
       end
       object lblIntervalUnit: TLabel
         Left = 320
-        Top = 267
+        Top = 295
         Width = 8
         Height = 13
         Caption = #1084#1089
-      end
-      object lblTranslator: TLabel
-        Left = 12
-        Top = 299
-        Width = 8
-        Height = 13
-        Caption = #1055#1077#1088#1077#1074#1086#1076#1095#1080#1082':'
-      end
-      object cbTranslator: TComboBox
-        Left = 240
-        Top = 296
-        Width = 252
-        Height = 21
-        Style = csDropDownList
-        TabOrder = 11
-        OnChange = cbServiceChange
-      end
-      object lblSearchEngine: TLabel
-        Left = 12
-        Top = 327
-        Width = 8
-        Height = 13
-        Caption = #1055#1086#1080#1089#1082':'
-      end
-      object cbSearchEngine: TComboBox
-        Left = 240
-        Top = 324
-        Width = 252
-        Height = 21
-        Style = csDropDownList
-        TabOrder = 12
-        OnChange = cbServiceChange
-      end
-      object lblDeepLKey: TLabel
-        Left = 12
-        Top = 355
-        Width = 8
-        Height = 13
-        Caption = #1050#1083#1102#1095' DeepL API '#1076#1083#1103' '#1079#1072#1084#1077#1085#1099' '#1087#1077#1088#1077#1074#1086#1076#1086#1084':'
-      end
-      object edDeepLKey: TEdit
-        Left = 240
-        Top = 352
-        Width = 252
-        Height = 21
-        PasswordChar = '*'
-        TabOrder = 13
-        OnExit = edCorrectionsExit
       end
     end
     object tsLayout: TTabSheet
@@ -649,6 +618,146 @@ object FormMain: TFormMain
         TabOrder = 3
         WordWrap = False
         OnExit = edCorrectionsExit
+      end
+    end
+    object tsServices: TTabSheet
+      Caption = #1057#1077#1088#1074#1080#1089#1099
+      object lblTranslator: TLabel
+        Left = 12
+        Top = 15
+        Width = 8
+        Height = 13
+        Caption = #1055#1077#1088#1077#1074#1086#1076#1095#1080#1082':'
+      end
+      object cbTranslator: TComboBox
+        Left = 240
+        Top = 12
+        Width = 252
+        Height = 21
+        Style = csDropDownList
+        TabOrder = 0
+        OnChange = cbServiceChange
+      end
+      object lblSearchEngine: TLabel
+        Left = 12
+        Top = 43
+        Width = 8
+        Height = 13
+        Caption = #1055#1086#1080#1089#1082':'
+      end
+      object cbSearchEngine: TComboBox
+        Left = 240
+        Top = 40
+        Width = 252
+        Height = 21
+        Style = csDropDownList
+        TabOrder = 1
+        OnChange = cbServiceChange
+      end
+      object lblDeepLKey: TLabel
+        Left = 12
+        Top = 71
+        Width = 8
+        Height = 13
+        Caption = #1050#1083#1102#1095' DeepL API '#1076#1083#1103' '#1079#1072#1084#1077#1085#1099' '#1087#1077#1088#1077#1074#1086#1076#1086#1084':'
+      end
+      object edDeepLKey: TEdit
+        Left = 240
+        Top = 68
+        Width = 252
+        Height = 21
+        PasswordChar = '*'
+        TabOrder = 2
+        OnExit = edCorrectionsExit
+      end
+      object lblAiHeader: TLabel
+        Left = 12
+        Top = 108
+        Width = 8
+        Height = 13
+        Caption = #1054#1073#1098#1103#1089#1085#1077#1085#1080#1077' '#1074#1099#1076#1077#1083#1077#1085#1085#1086#1075#1086' '#1090#1077#1082#1089#1090#1072' '#1089' '#1087#1086#1084#1086#1097#1100#1102' '#1048#1048
+        Font.Style = [fsBold]
+        ParentFont = False
+      end
+      object lblAiService: TLabel
+        Left = 12
+        Top = 135
+        Width = 8
+        Height = 13
+        Caption = #1057#1077#1088#1074#1080#1089' '#1048#1048':'
+      end
+      object cbAiService: TComboBox
+        Left = 240
+        Top = 132
+        Width = 252
+        Height = 21
+        Style = csDropDownList
+        TabOrder = 3
+        OnChange = cbAiServiceChange
+      end
+      object lblAiKey: TLabel
+        Left = 12
+        Top = 163
+        Width = 8
+        Height = 13
+        Caption = #1050#1083#1102#1095' API:'
+      end
+      object edAiKey: TEdit
+        Left = 240
+        Top = 160
+        Width = 252
+        Height = 21
+        PasswordChar = '*'
+        TabOrder = 4
+        OnExit = edCorrectionsExit
+      end
+      object lblAiUrl: TLabel
+        Left = 12
+        Top = 191
+        Width = 8
+        Height = 13
+        Caption = #1040#1076#1088#1077#1089' API:'
+      end
+      object edAiUrl: TEdit
+        Left = 240
+        Top = 188
+        Width = 252
+        Height = 21
+        TabOrder = 5
+        OnExit = edCorrectionsExit
+      end
+      object lblAiModel: TLabel
+        Left = 12
+        Top = 219
+        Width = 8
+        Height = 13
+        Caption = #1052#1086#1076#1077#1083#1100':'
+      end
+      object edAiModel: TEdit
+        Left = 240
+        Top = 216
+        Width = 252
+        Height = 21
+        TabOrder = 6
+        OnExit = edCorrectionsExit
+      end
+      object lblAiNote: TLabel
+        Left = 12
+        Top = 250
+        Width = 480
+        Height = 70
+        AutoSize = False
+        Caption = #1057#1077#1088#1074#1080#1089' '#1048#1048
+        WordWrap = True
+      end
+      object btnAiTest: TButton
+        Left = 12
+        Top = 330
+        Width = 120
+        Height = 25
+        Caption = #1055#1088#1086#1074#1077#1088#1080#1090#1100
+        TabOrder = 7
+        OnClick = btnAiTestClick
       end
     end
     object tsExclusions: TTabSheet

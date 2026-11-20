@@ -28,6 +28,8 @@ uses
   uTranslate in 'uTranslate.pas',
   uProgramList in 'uProgramList.pas',
   uSounds in 'uSounds.pas',
+  uAiExplain in 'uAiExplain.pas',
+  uExplainWindow in 'uExplainWindow.pas',
   uOperationWorker in 'uOperationWorker.pas',
   uMain in 'uMain.pas' {FormMain};
 

@@ -15,11 +15,12 @@ type
   // in front of laAutoSwitch (the TLSActionGestures range).
   TLSAction = (laNone, laConvert, laUpperCase, laLowerCase, laInvertCase,
     laTransliterate, laUndo, laTranslate, laWebSearch, laTranslateReplace,
+    laExplain,
     // Not bound to a gesture: started automatically after a space.
     laAutoSwitch);
   TLSGesture = (lgNone, lgDoubleShift, lgDoubleLCtrl, lgDoubleRCtrl, lgBothCtrl,
     lgBothShift, lgDoubleCapsLock, lgDoubleRAlt, lgDoubleLAlt, lgRCtrlRAlt, lgPause);
-  TLSActionGestures = array[laConvert..laTranslateReplace] of TLSGesture;
+  TLSActionGestures = array[laConvert..laExplain] of TLSGesture;
 
   TLSSettings = record
     ActionGestures: TLSActionGestures;
@@ -63,6 +64,16 @@ type
     // DeepL API key for "replace with translation"; empty = Google Translate.
     // Not written to exported settings files.
     DeepLApiKey: string;
+    // "Explain the selection": TAiProvider in uAiExplain (0 = free service),
+    // keys per service (not exported), base URL and models.
+    AiProvider: Integer;
+    AiClaudeKey: string;
+    AiClaudeModel: string;
+    AiOpenAIKey: string;
+    AiOpenAIUrl: string;
+    AiOpenAIModel: string;
+    // The user agreed that selected text is sent to the AI service.
+    AiConsent: Boolean;
     AutoSwitchExceptions: TArray<string>;
     // Programs where only the manual actions work (code editors, terminals).
     NoAutoCorrectProcesses: TArray<string>;
@@ -92,13 +103,14 @@ const
   // 3: translation and web search got default gestures.
   // 4: notepad++.exe left the default "no automatic corrections" list.
   // 5: "replace with translation" got the Right Ctrl + Right Alt gesture.
-  CURRENT_SETTINGS_VERSION = 5;
+  // 6: "explain the selection (AI)" got Pause/Break.
+  CURRENT_SETTINGS_VERSION = 6;
   STARTUP_VALUE_NAME = 'LayoutSwitcher';
 
   ActionKeys: array[TLSAction] of string = (
     'none', 'convert_layout', 'uppercase', 'lowercase', 'invert_case',
     'transliterate', 'undo', 'translate', 'web_search', 'translate_replace',
-    'auto_switch');
+    'explain', 'auto_switch');
 
   // Screenshot tools own full-screen overlays, use Shift/Ctrl themselves and
   // monitor the clipboard.  LayoutSwitcher must not inject input into them.
@@ -190,6 +202,13 @@ const
   VALUE_CAPITALIZE = 'CapitalizeSentences';
   VALUE_DOUBLE_SPACE = 'FixDoubleSpace';
   VALUE_DEEPL_KEY = 'DeepLApiKey';
+  VALUE_AI_PROVIDER = 'AiProvider';
+  VALUE_AI_CLAUDE_KEY = 'AiClaudeKey';
+  VALUE_AI_CLAUDE_MODEL = 'AiClaudeModel';
+  VALUE_AI_OPENAI_KEY = 'AiOpenAIKey';
+  VALUE_AI_OPENAI_URL = 'AiOpenAIUrl';
+  VALUE_AI_OPENAI_MODEL = 'AiOpenAIModel';
+  VALUE_AI_CONSENT = 'AiConsent';
   VALUE_CUSTOM_PROGRAMS = 'CustomPrograms';
   VALUE_AUTO_SWITCH_EXCEPTIONS = 'AutoSwitchExceptions';
   VALUE_NO_AUTOCORRECT = 'NoAutoCorrectProcesses';
@@ -241,6 +260,13 @@ begin
   Result.CapitalizeSentences := False;
   Result.FixDoubleSpace := False;
   Result.DeepLApiKey := '';
+  Result.AiProvider := 0;
+  Result.AiClaudeKey := '';
+  Result.AiClaudeModel := '';
+  Result.AiOpenAIKey := '';
+  Result.AiOpenAIUrl := 'https://api.openai.com/v1';
+  Result.AiOpenAIModel := '';
+  Result.AiConsent := False;
   Result.CustomPrograms := nil;
   Result.AutoSwitchExceptions := nil;
   SetLength(Result.NoAutoCorrectProcesses, Length(DefaultNoAutoCorrectProcesses));
@@ -252,6 +278,7 @@ begin
   Result.ActionGestures[laTranslate] := lgDoubleRAlt;
   Result.ActionGestures[laWebSearch] := lgDoubleLAlt;
   Result.ActionGestures[laTranslateReplace] := lgRCtrlRAlt;
+  Result.ActionGestures[laExplain] := lgPause;
 end;
 
 function ActionName(Action: TLSAction): string;
@@ -266,6 +293,7 @@ begin
     laTranslate: Result := T('Перевести выделенное', 'Translate selection');
     laWebSearch: Result := T('Найти выделенное в интернете', 'Search the web for selection');
     laTranslateReplace: Result := T('Заменить текст переводом', 'Replace text with translation');
+    laExplain: Result := T('Объяснить выделенное (ИИ)', 'Explain selection (AI)');
   else
     Result := T('Нет', 'None');
   end;
@@ -416,9 +444,9 @@ procedure MigrateActionGestures(var Gestures: TLSActionGestures;
   FromVersion: Integer);
 const
   // Actions that received a default gesture in the given settings version.
-  NewActions: array[0..4] of TLSAction = (laTransliterate, laUndo, laTranslate,
-    laWebSearch, laTranslateReplace);
-  IntroducedIn: array[0..4] of Integer = (2, 2, 3, 3, 5);
+  NewActions: array[0..5] of TLSAction = (laTransliterate, laUndo, laTranslate,
+    laWebSearch, laTranslateReplace, laExplain);
+  IntroducedIn: array[0..5] of Integer = (2, 2, 3, 3, 5, 6);
 var
   Defaults: TLSActionGestures;
   NewAction, Other: TLSAction;
@@ -567,6 +595,15 @@ begin
       Result.CapitalizeSentences);
     Result.FixDoubleSpace := Store.ReadBool(VALUE_DOUBLE_SPACE, Result.FixDoubleSpace);
     Result.DeepLApiKey := Trim(Store.ReadString(VALUE_DEEPL_KEY, ''));
+    Result.AiProvider := Store.ReadInteger(VALUE_AI_PROVIDER, Result.AiProvider);
+    if (Result.AiProvider < 0) or (Result.AiProvider > 2) then
+      Result.AiProvider := 0;
+    Result.AiClaudeKey := Trim(Store.ReadString(VALUE_AI_CLAUDE_KEY, ''));
+    Result.AiClaudeModel := Trim(Store.ReadString(VALUE_AI_CLAUDE_MODEL, ''));
+    Result.AiOpenAIKey := Trim(Store.ReadString(VALUE_AI_OPENAI_KEY, ''));
+    Result.AiOpenAIUrl := Trim(Store.ReadString(VALUE_AI_OPENAI_URL, Result.AiOpenAIUrl));
+    Result.AiOpenAIModel := Trim(Store.ReadString(VALUE_AI_OPENAI_MODEL, ''));
+    Result.AiConsent := Store.ReadBool(VALUE_AI_CONSENT, Result.AiConsent);
     Result.CustomPrograms := ParseProcessList(Store.ReadString(VALUE_CUSTOM_PROGRAMS, ''));
     if Store.ValueExists(VALUE_AUTO_SWITCH_EXCEPTIONS) then
       Result.AutoSwitchExceptions := ParseWordList(
@@ -628,6 +665,13 @@ begin
     Store.WriteBool(VALUE_CAPITALIZE, Settings.CapitalizeSentences);
     Store.WriteBool(VALUE_DOUBLE_SPACE, Settings.FixDoubleSpace);
     Store.WriteString(VALUE_DEEPL_KEY, Settings.DeepLApiKey);
+    Store.WriteInteger(VALUE_AI_PROVIDER, Settings.AiProvider);
+    Store.WriteString(VALUE_AI_CLAUDE_KEY, Settings.AiClaudeKey);
+    Store.WriteString(VALUE_AI_CLAUDE_MODEL, Settings.AiClaudeModel);
+    Store.WriteString(VALUE_AI_OPENAI_KEY, Settings.AiOpenAIKey);
+    Store.WriteString(VALUE_AI_OPENAI_URL, Settings.AiOpenAIUrl);
+    Store.WriteString(VALUE_AI_OPENAI_MODEL, Settings.AiOpenAIModel);
+    Store.WriteBool(VALUE_AI_CONSENT, Settings.AiConsent);
     Store.WriteString(VALUE_CUSTOM_PROGRAMS, ProcessListToText(Settings.CustomPrograms));
     Store.WriteString(VALUE_AUTO_SWITCH_EXCEPTIONS,
       string.Join('; ', Settings.AutoSwitchExceptions));
@@ -676,6 +720,8 @@ begin
   // An exported file is shared or copied around: no API keys in it.
   Exported := Settings;
   Exported.DeepLApiKey := '';
+  Exported.AiClaudeKey := '';
+  Exported.AiOpenAIKey := '';
   if FileExists(FileName) then
     System.SysUtils.DeleteFile(FileName);
   Store := TIniSettingsStore.Create(FileName);

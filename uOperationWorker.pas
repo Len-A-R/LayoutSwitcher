@@ -790,6 +790,7 @@ procedure TOperationWorker.ProcessLookup(Request: TOperationRequest;
   Res: TOperationResult; const Focus: TUIAFocusInfo);
 const
   MAX_LOOKUP_LEN = 1000;
+  MAX_EXPLAIN_LEN = 6000;
 var
   Text, Source: string;
   CaretText: WideString;
@@ -821,14 +822,28 @@ begin
   else
   begin
     DiagnosticsLog('lookup.no_text');
-    Notify(Res, 'lookup_empty', T('Выделите текст, который нужно перевести или найти.',
-      'Select the text to translate or search for.'));
+    if Request.Action = laExplain then
+      Notify(Res, 'lookup_empty', T('Выделите текст, который нужно объяснить.',
+        'Select the text to explain.'))
+    else
+      Notify(Res, 'lookup_empty', T('Выделите текст, который нужно перевести или найти.',
+        'Select the text to translate or search for.'));
     Exit;
   end;
-  Text := Trim(StringReplace(StringReplace(Text, #13, ' ', [rfReplaceAll]), #10, ' ',
-    [rfReplaceAll]));
-  if Length(Text) > MAX_LOOKUP_LEN then
-    SetLength(Text, MAX_LOOKUP_LEN);
+  if Request.Action = laExplain then
+  begin
+    // Code and lists keep their lines; the AI request takes more text.
+    Text := Trim(Text);
+    if Length(Text) > MAX_EXPLAIN_LEN then
+      SetLength(Text, MAX_EXPLAIN_LEN);
+  end
+  else
+  begin
+    Text := Trim(StringReplace(StringReplace(Text, #13, ' ', [rfReplaceAll]), #10, ' ',
+      [rfReplaceAll]));
+    if Length(Text) > MAX_LOOKUP_LEN then
+      SetLength(Text, MAX_LOOKUP_LEN);
+  end;
   DiagnosticsLogFmt('lookup.text source=%s length=%d', [Source, Length(Text)]);
   Res.LookupText := Text;
   Res.Success := Text <> '';
@@ -891,7 +906,7 @@ begin
     Exit;
   end;
 
-  if Request.Action in [laTranslate, laWebSearch] then
+  if Request.Action in [laTranslate, laWebSearch, laExplain] then
   begin
     ProcessLookup(Request, Res, Focus);
     Exit;
