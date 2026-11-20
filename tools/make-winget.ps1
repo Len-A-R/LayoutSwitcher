@@ -36,7 +36,7 @@ Write-Manifest "$PackageId.yaml" @"
 # yaml-language-server: `$schema=https://aka.ms/winget-manifest.version.1.6.0.schema.json
 PackageIdentifier: $PackageId
 PackageVersion: $Version
-DefaultLocale: ru-RU
+DefaultLocale: en-US
 ManifestType: version
 ManifestVersion: 1.6.0
 "@
@@ -64,26 +64,55 @@ ManifestType: installer
 ManifestVersion: 1.6.0
 "@
 
-Write-Manifest "$PackageId.locale.ru-RU.yaml" @"
+# English is the default locale (shown by winget and to the moderators),
+# Russian is an additional one.
+Write-Manifest "$PackageId.locale.en-US.yaml" @"
 # yaml-language-server: `$schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+PackageIdentifier: $PackageId
+PackageVersion: $Version
+PackageLocale: en-US
+Publisher: Len-A-R Soft
+PublisherUrl: https://github.com/Len-A-R
+PublisherSupportUrl: $Repo/issues
+PrivacyUrl: $Repo#privacy-policy
+Author: Len-A-R
+PackageName: LayoutSwitcher
+PackageUrl: $Repo
+License: MIT
+LicenseUrl: $Repo/blob/master/LICENSE
+Copyright: Copyright (c) 2026 Len-A-R
+ShortDescription: Fixes text typed in the wrong keyboard layout (Russian/English) and changes its case.
+Description: A double Shift fixes a word or phrase typed in the wrong keyboard layout. Automatic layout switching (also while typing), typo correction, sentence capitals, case changes, transliteration, templates, translation and web search of the selection.
+Moniker: layoutswitcher
+Tags:
+- keyboard
+- keyboard-layout
+- layout-switcher
+- punto-switcher
+- russian
+- typo
+ReleaseNotesUrl: $Repo/releases/tag/$Tag
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0
+"@
+
+Write-Manifest "$PackageId.locale.ru-RU.yaml" @"
+# yaml-language-server: `$schema=https://aka.ms/winget-manifest.locale.1.6.0.schema.json
 PackageIdentifier: $PackageId
 PackageVersion: $Version
 PackageLocale: ru-RU
 Publisher: Len-A-R Soft
-PublisherUrl: https://github.com/Len-A-R
-PublisherSupportUrl: $Repo/issues
 PackageName: LayoutSwitcher
-PackageUrl: $Repo
-License: Freeware
+License: MIT
 ShortDescription: Исправление текста, набранного в неправильной раскладке, и смена регистра.
-Description: Двойной Shift исправляет слово или фразу, набранные не в той раскладке; автопереключение раскладки, смена регистра, транслитерация, шаблоны, перевод и поиск выделенного.
+Description: Двойной Shift исправляет слово или фразу, набранные не в той раскладке; автопереключение раскладки (в том числе во время набора), исправление опечаток, заглавная буква в начале предложения, смена регистра, транслитерация, шаблоны, перевод и поиск выделенного.
 Tags:
-- keyboard
-- layout
+- клавиатура
+- раскладка
 - punto-switcher
 - russian
 ReleaseNotesUrl: $Repo/releases/tag/$Tag
-ManifestType: defaultLocale
+ManifestType: locale
 ManifestVersion: 1.6.0
 "@
 

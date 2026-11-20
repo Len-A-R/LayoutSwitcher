@@ -44,6 +44,18 @@ type
     AutoSwitchEnabled: Boolean;
     // Swapped neighbouring letters ("teh" -> "the") after a space.
     FixTypos: Boolean;
+    // Also one missing, extra or replaced letter, words of 5+ letters.
+    FixTyposExtended: Boolean;
+    // Switch the layout after 3-4 letters of an impossible word start.
+    InWordSwitch: Boolean;
+    // Words converted manually (double Shift) twice are switched automatically.
+    LearnManualConversions: Boolean;
+    // Correct forms of the learned words ("привет"), always switched.
+    AutoSwitchLearned: TArray<string>;
+    // Manual conversions not yet learned: "word=count".
+    AutoSwitchLearnCounts: TArray<string>;
+    CapitalizeSentences: Boolean;
+    FixDoubleSpace: Boolean;
     AutoSwitchExceptions: TArray<string>;
     // Programs where only the manual actions work (code editors, terminals).
     NoAutoCorrectProcesses: TArray<string>;
@@ -57,6 +69,7 @@ type
     function IsProcessExcluded(const ProcessName: string): Boolean;
     function IsAutoCorrectDisabledFor(const ProcessName: string): Boolean;
     function IsAutoSwitchException(const Word: string): Boolean;
+    function IsAutoSwitchLearned(const Word: string): Boolean;
   end;
 
 const
@@ -153,6 +166,13 @@ const
   VALUE_DIAGNOSTICS = 'EnableDiagnostics';
   VALUE_AUTO_SWITCH = 'AutoSwitchEnabled';
   VALUE_FIX_TYPOS = 'FixTypos';
+  VALUE_FIX_TYPOS_EXTENDED = 'FixTyposExtended';
+  VALUE_IN_WORD_SWITCH = 'InWordSwitch';
+  VALUE_LEARN_MANUAL = 'LearnManualConversions';
+  VALUE_AUTO_SWITCH_LEARNED = 'AutoSwitchLearned';
+  VALUE_AUTO_SWITCH_LEARN_COUNTS = 'AutoSwitchLearnCounts';
+  VALUE_CAPITALIZE = 'CapitalizeSentences';
+  VALUE_DOUBLE_SPACE = 'FixDoubleSpace';
   VALUE_AUTO_SWITCH_EXCEPTIONS = 'AutoSwitchExceptions';
   VALUE_NO_AUTOCORRECT = 'NoAutoCorrectProcesses';
   VALUE_SOUND = 'SoundEnabled';
@@ -191,6 +211,13 @@ begin
   Result.SearchEngine := SEARCH_YANDEX;
   Result.AutoSwitchEnabled := False;
   Result.FixTypos := False;
+  Result.FixTyposExtended := False;
+  Result.InWordSwitch := False;
+  Result.LearnManualConversions := True;
+  Result.AutoSwitchLearned := nil;
+  Result.AutoSwitchLearnCounts := nil;
+  Result.CapitalizeSentences := False;
+  Result.FixDoubleSpace := False;
   Result.AutoSwitchExceptions := nil;
   SetLength(Result.NoAutoCorrectProcesses, Length(DefaultNoAutoCorrectProcesses));
   for I := 0 to High(DefaultNoAutoCorrectProcesses) do
@@ -275,6 +302,16 @@ begin
   for Name in NoAutoCorrectProcesses do
     if SameText(Name, ProcessName) then
       Exit(True);
+end;
+
+function TLSSettings.IsAutoSwitchLearned(const Word: string): Boolean;
+var
+  Item: string;
+begin
+  for Item in AutoSwitchLearned do
+    if AnsiSameText(Item, Word) then
+      Exit(True);
+  Result := False;
 end;
 
 function TLSSettings.IsAutoSwitchException(const Word: string): Boolean;
@@ -475,6 +512,18 @@ begin
     Result.SearchEngine := Store.ReadInteger(VALUE_SEARCH_ENGINE, Result.SearchEngine);
     Result.AutoSwitchEnabled := Store.ReadBool(VALUE_AUTO_SWITCH, Result.AutoSwitchEnabled);
     Result.FixTypos := Store.ReadBool(VALUE_FIX_TYPOS, Result.FixTypos);
+    Result.FixTyposExtended := Store.ReadBool(VALUE_FIX_TYPOS_EXTENDED,
+      Result.FixTyposExtended);
+    Result.InWordSwitch := Store.ReadBool(VALUE_IN_WORD_SWITCH, Result.InWordSwitch);
+    Result.LearnManualConversions := Store.ReadBool(VALUE_LEARN_MANUAL,
+      Result.LearnManualConversions);
+    Result.AutoSwitchLearned := ParseWordList(
+      Store.ReadString(VALUE_AUTO_SWITCH_LEARNED, ''));
+    Result.AutoSwitchLearnCounts := ParseWordList(
+      Store.ReadString(VALUE_AUTO_SWITCH_LEARN_COUNTS, ''));
+    Result.CapitalizeSentences := Store.ReadBool(VALUE_CAPITALIZE,
+      Result.CapitalizeSentences);
+    Result.FixDoubleSpace := Store.ReadBool(VALUE_DOUBLE_SPACE, Result.FixDoubleSpace);
     if Store.ValueExists(VALUE_AUTO_SWITCH_EXCEPTIONS) then
       Result.AutoSwitchExceptions := ParseWordList(
         Store.ReadString(VALUE_AUTO_SWITCH_EXCEPTIONS, ''));
@@ -521,6 +570,15 @@ begin
     Store.WriteInteger(VALUE_SEARCH_ENGINE, Settings.SearchEngine);
     Store.WriteBool(VALUE_AUTO_SWITCH, Settings.AutoSwitchEnabled);
     Store.WriteBool(VALUE_FIX_TYPOS, Settings.FixTypos);
+    Store.WriteBool(VALUE_FIX_TYPOS_EXTENDED, Settings.FixTyposExtended);
+    Store.WriteBool(VALUE_IN_WORD_SWITCH, Settings.InWordSwitch);
+    Store.WriteBool(VALUE_LEARN_MANUAL, Settings.LearnManualConversions);
+    Store.WriteString(VALUE_AUTO_SWITCH_LEARNED,
+      string.Join('; ', Settings.AutoSwitchLearned));
+    Store.WriteString(VALUE_AUTO_SWITCH_LEARN_COUNTS,
+      string.Join('; ', Settings.AutoSwitchLearnCounts));
+    Store.WriteBool(VALUE_CAPITALIZE, Settings.CapitalizeSentences);
+    Store.WriteBool(VALUE_DOUBLE_SPACE, Settings.FixDoubleSpace);
     Store.WriteString(VALUE_AUTO_SWITCH_EXCEPTIONS,
       string.Join('; ', Settings.AutoSwitchExceptions));
     Store.WriteString(VALUE_NO_AUTOCORRECT,

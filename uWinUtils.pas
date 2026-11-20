@@ -49,6 +49,8 @@ function TypeUnicodeText(const Value: string): Boolean;
 function AreModifiersPhysicallyDown: Boolean;
 // Press and release one key; marked as our own input.
 function SendKeyTap(VK: Word): Boolean;
+// The same key Count times (template {cursor}: Left arrows).
+function SendKeyRepeat(VK: Word; Count: Integer): Boolean;
 
 implementation
 
@@ -431,6 +433,23 @@ begin
   Index := 1;
   while Index <= Length(Value) do
   begin
+    // Line breaks and tabs as real keys: a VK_PACKET carriage return is not
+    // a new line everywhere (templates with \n).
+    if CharInSet(Value[Index], [#13, #10, #9]) then
+    begin
+      if Value[Index] = #9 then
+        Result := SendKeyTap(VK_TAB)
+      else
+        Result := SendKeyTap(VK_RETURN);
+      if not Result then
+        Exit;
+      if (Value[Index] = #13) and (Index < Length(Value)) and (Value[Index + 1] = #10) then
+        Inc(Index);
+      Inc(Index);
+      if Index <= Length(Value) then
+        Sleep(CHAR_INTERVAL_MS);
+      Continue;
+    end;
     // A surrogate pair is one character and goes in one call.
     Units := 1;
     if Value[Index].IsHighSurrogate and (Index < Length(Value)) and
@@ -466,6 +485,31 @@ begin
   Inputs[1] := Inputs[0];
   Inputs[1].ki.dwFlags := KEYEVENTF_KEYUP;
   Result := SendInput(2, Inputs[0], SizeOf(TInput)) = 2;
+end;
+
+function SendKeyRepeat(VK: Word; Count: Integer): Boolean;
+var
+  Inputs: array[0..1] of TInput;
+  I: Integer;
+begin
+  // With a scan code and, for the arrows, the extended flag: applications
+  // that read scan codes would take a bare Left for numpad 4.
+  FillChar(Inputs, SizeOf(Inputs), 0);
+  Inputs[0].Itype := INPUT_KEYBOARD;
+  Inputs[0].ki.wVk := VK;
+  Inputs[0].ki.wScan := MapVirtualKey(VK, MAPVK_VK_TO_VSC);
+  if VK in [VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN, VK_HOME, VK_END] then
+    Inputs[0].ki.dwFlags := KEYEVENTF_EXTENDEDKEY;
+  Inputs[0].ki.dwExtraInfo := LS_INPUT_TAG;
+  Inputs[1] := Inputs[0];
+  Inputs[1].ki.dwFlags := Inputs[0].ki.dwFlags or KEYEVENTF_KEYUP;
+  Result := True;
+  for I := 1 to Count do
+  begin
+    if SendInput(2, Inputs[0], SizeOf(TInput)) <> 2 then
+      Exit(False);
+    Sleep(2);
+  end;
 end;
 
 function AreModifiersPhysicallyDown: Boolean;

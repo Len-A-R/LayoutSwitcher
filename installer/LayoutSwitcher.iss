@@ -21,6 +21,10 @@ AppPublisherURL=https://github.com/Len-A-R/LayoutSwitcher
 AppSupportURL=https://github.com/Len-A-R/LayoutSwitcher/issues
 AppUpdatesURL=https://github.com/Len-A-R/LayoutSwitcher/releases
 VersionInfoVersion={#AppVersion}
+; SignPath checks the product name and version of the signed installer.
+VersionInfoProductName={#AppName}
+VersionInfoProductVersion={#AppVersion}
+VersionInfoProductTextVersion={#AppVersion}
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
@@ -59,6 +63,8 @@ Name: "autostart"; Description: "{cm:AutostartTask}"
 Source: "..\Win64\Release\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion; Check: Is64BitInstallMode
 Source: "..\Win32\Release\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion; Check: not Is64BitInstallMode
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
+Source: "..\THIRD-PARTY-NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"

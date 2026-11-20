@@ -44,6 +44,14 @@ type
     AutoSwitchExceptions: TArray<string>;
     AllowLayoutSwitch: Boolean;
     AllowTypoFix: Boolean;
+    TypoExtended: Boolean;      // Also missing/extra/replaced letters.
+    AutoSwitchLearned: TArray<string>;  // Correct forms always switched.
+    // Switch decided by the main thread from the start of a word being typed.
+    InWord: Boolean;
+    // The word starts a sentence: capitalise the result (or only that).
+    Capitalize: Boolean;
+    // Template with {cursor}: Left key presses after typing.
+    CaretBack: Integer;
     FocusWnd: HWND;
     WindowLayout: HKL;
     PreviousLayout: HKL;
@@ -56,7 +64,10 @@ type
     Action: TLSAction;
     Success: Boolean;
     UsedBuffer: Boolean;   // The request plan was applied.
-    TypoFixed: Boolean;    // laAutoSwitch fixed swapped letters, no layout change.
+    TypoFixed: Boolean;    // laAutoSwitch fixed a typo, no layout change.
+    CapitalOnly: Boolean;  // laAutoSwitch only capitalised the word.
+    LearnedSwitch: Boolean; // Switched because the word was learned.
+    FixedWord: string;     // laAutoSwitch: the word as written by the correction.
     OriginalText: string;  // Text before a selection/caret replacement.
     LookupText: string;    // laTranslate / laWebSearch: text to look up.
     BufferAction: TBufferAction;
@@ -101,7 +112,9 @@ type
     function ReplaceSelection(const Value: string): Boolean;
     function TransformText(Request: TOperationRequest; const Text: string;
       Res: TOperationResult; out Converted: string): Boolean;
-    procedure SwitchLayout(FocusWnd: HWND; Target: HKL);
+    procedure DoSwitchLayout(FocusWnd: HWND; Target: HKL);
+    // True when the window has the Target layout afterwards.
+    function SwitchLayout(FocusWnd: HWND; Target: HKL): Boolean;
     function WaitForModifiersReleased(TimeoutMS: DWORD): Boolean;
     procedure Notify(Res: TOperationResult; const Key, Text: string);
   protected
@@ -563,7 +576,15 @@ begin
     SameText(ClassName, 'PseudoConsoleWindow');
 end;
 
-procedure TOperationWorker.SwitchLayout(FocusWnd: HWND; Target: HKL);
+function TOperationWorker.SwitchLayout(FocusWnd: HWND; Target: HKL): Boolean;
+begin
+  if (FocusWnd = 0) or (Target = 0) then
+    Exit(True);
+  DoSwitchLayout(FocusWnd, Target);
+  Result := GetKeyboardLayout(GetWindowThreadProcessId(FocusWnd, nil)) = Target;
+end;
+
+procedure TOperationWorker.DoSwitchLayout(FocusWnd: HWND; Target: HKL);
 
   function CurrentLayout: HKL;
   begin
@@ -653,6 +674,18 @@ begin
       DiagnosticsLog('autoswitch.skipped reason=exception');
       Exit;
     end;
+  if Request.InWord then
+  begin
+    DiagnosticsLogFmt('autoswitch.in_word length=%d', [Length(Original)]);
+    Exit(True);
+  end;
+  for Item in Request.AutoSwitchLearned do
+    if AnsiSameText(Item, Converted) then
+    begin
+      DiagnosticsLogFmt('autoswitch.check learned=True length=%d', [Length(Original)]);
+      Res.LearnedSwitch := True;
+      Exit(True);
+    end;
   SourceTag := LayoutLanguageTag(Res.SourceLayout);
   TargetTag := LayoutLanguageTag(Res.TargetLayout);
   SourceResult := FSpell.CheckWord(SourceTag, Original);
@@ -685,9 +718,10 @@ begin
   if FSpell.CheckWord(Tag, Word) <> scMisspelled then
     Exit;
   Suggestions := FSpell.Suggest(Tag, Word);
-  Result := ChooseTypoFix(Word, Suggestions, Fixed);
-  DiagnosticsLogFmt('typo.check lang=%s suggestions=%d length=%d fix=%s',
-    [Tag, Length(Suggestions), Length(Word), BoolToStr(Result, True)]);
+  Result := ChooseTypoFix(Word, Suggestions, Fixed, Request.TypoExtended);
+  DiagnosticsLogFmt('typo.check lang=%s suggestions=%d length=%d extended=%s fix=%s',
+    [Tag, Length(Suggestions), Length(Word), BoolToStr(Request.TypoExtended, True),
+     BoolToStr(Result, True)]);
 end;
 
 function TOperationWorker.TypingContinued(Request: TOperationRequest): Boolean;
@@ -835,8 +869,39 @@ begin
         Res.SourceLayout := 0;
         Res.TargetLayout := 0;
       end
+      else if Request.Capitalize and CanCapitalize(Region) then
+      begin
+        Converted := Region;
+        Res.CapitalOnly := True;
+        Res.SourceLayout := 0;
+        Res.TargetLayout := 0;
+      end
       else
       begin
+        Res.BufferAction := baKeep;
+        Exit;
+      end;
+      // First word of a sentence.
+      if Request.Capitalize and CanCapitalize(Converted) then
+        Converted := CapitalizeFirst(Converted);
+      Res.FixedWord := Converted;
+    end;
+    if Request.InWord and (Res.TargetLayout <> 0) then
+    begin
+      // The rest of the word is typed right after this: switch first, so
+      // that it never lands in the old layout, and leave the text alone in
+      // a window that ignores layout requests.
+      if not SwitchLayout(Request.FocusWnd, Res.TargetLayout) then
+      begin
+        DiagnosticsLog('autoswitch.in_word_skipped reason=layout_not_switched');
+        Res.BufferAction := baKeep;
+        Exit;
+      end;
+      Res.TargetLayout := 0;
+      if TypingContinued(Request) then
+      begin
+        // A key typed while switching is already in the new layout: the
+        // start stays as typed, the rest of the word follows in the target.
         Res.BufferAction := baKeep;
         Exit;
       end;
@@ -866,7 +931,16 @@ begin
       SendKeyTap(Request.CapsOffKey);
       DiagnosticsLog('autocorrect.caps_lock_turned_off');
     end;
-    if Res.Success then
+    if Res.Success and (Request.CaretBack > 0) then
+    begin
+      // Template with {cursor}: the caret leaves the tracked text.  The
+      // space typed after the abbreviation (the tail) is passed too.
+      SendKeyRepeat(VK_LEFT, Request.CaretBack + Length(Request.Plan.Tail));
+      Res.BufferAction := baClear;
+      DiagnosticsLogFmt('template.caret_back count=%d',
+        [Request.CaretBack + Length(Request.Plan.Tail)]);
+    end
+    else if Res.Success then
     begin
       Res.BufferAction := baSet;
       Res.NewBufferText := Request.Plan.Head + Typed;

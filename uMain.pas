@@ -10,7 +10,7 @@ uses
   Winapi.Windows, Winapi.Messages,
   System.SysUtils, System.Classes, System.Generics.Collections,
   Vcl.Graphics, Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.ExtCtrls, Vcl.Menus,
-  System.ImageList, Vcl.ImgList, PngImageList, Vcl.StdCtrls, Vcl.ComCtrls,
+  Vcl.StdCtrls, Vcl.ComCtrls,
   uSettings, uGestureDetector, uOperationWorker, uConversionChain,
   uLayoutIndicator, uUpdateCheck, uUpdateProgress, uLayoutConverter, uTextTools;
 
@@ -34,7 +34,6 @@ type
     mniDiagnostics: TMenuItem;
     mniSeparator: TMenuItem;
     mniExit: TMenuItem;
-    TrayIcons: TPngImageList;
     TimerLayout: TTimer;
     TimerPause: TTimer;
     TimerUpdate: TTimer;
@@ -46,7 +45,9 @@ type
     pcMain: TPageControl;
     tsGeneral: TTabSheet;
     tsHotkeys: TTabSheet;
+    tsLayout: TTabSheet;
     tsCorrections: TTabSheet;
+    tsSnippets: TTabSheet;
     tsExclusions: TTabSheet;
     lblConvert: TLabel;
     cbConvert: TComboBox;
@@ -98,6 +99,14 @@ type
     chkFixTypos: TCheckBox;
     lblAutoSwitchExceptions: TLabel;
     edAutoSwitchExceptions: TEdit;
+    chkInWordSwitch: TCheckBox;
+    chkLearnManual: TCheckBox;
+    lblAutoSwitchLearned: TLabel;
+    edAutoSwitchLearned: TEdit;
+    lblLayoutNote: TLabel;
+    chkFixTyposExtended: TCheckBox;
+    chkCapitalize: TCheckBox;
+    chkDoubleSpace: TCheckBox;
     lblNoAutoCorrect: TLabel;
     memNoAutoCorrect: TMemo;
     btnDefaultNoAutoCorrect: TButton;
@@ -161,7 +170,8 @@ type
 
     FPaused: Boolean;
     FPauseUntil: TDateTime;
-    FPausedIconBase: Integer;
+    // EN, RU and their grey copies for the paused state (ICON_*).
+    FTrayIcons: array[0..3] of TIcon;
 
     FOperationBusy: Boolean;
     FOperationStarted: DWORD;
@@ -201,6 +211,33 @@ type
     // Word changed by the last automatic layout switch; an immediate undo
     // adds it to the exceptions.
     FAutoSwitchOriginal: string;
+    FAutoSwitchResult: string;
+    // The last automatic switch or typo fix, for the tray menu.
+    FLastAutoWord: string;
+    FLastAutoResult: string;
+    // Manual conversion counted for learning; rolled back if the user widens
+    // or reverts it right away.
+    FLastLearnWord: string;
+    FLastLearnPromoted: Boolean;
+    // Options of the next QueueRequest.
+    FCapitalizeNext: Boolean;
+    FInWordNext: Boolean;
+    FCaretBackNext: Integer;
+    FPendingStamp: Integer;
+    // The buffer was dropped in the middle of a word: the next space ends a
+    // fragment, which must not be corrected.
+    FPartialWord: Boolean;
+    // Buffer right after a removed double space; one more space then means
+    // the user wants the spaces.
+    FDoubleSpaceNext: Boolean;
+    FPendingDoubleSpace: Boolean;
+    FDoubleSpaceFixed: string;
+    // Automatic corrections off until then (tray menu), 0 when on.
+    FAutoCorrectPausedUntil: TDateTime;
+    FMenuQuickSeparator: TMenuItem;
+    FMenuAutoCorrectOff: TMenuItem;
+    FMenuNeverFixLast: TMenuItem;
+    FMenuProgramRule: TMenuItem;
     FUpdateNotes: string;
     FPendingToggleCaps: Boolean;
 
@@ -229,7 +266,7 @@ type
     procedure PauseFor(Minutes: Integer);
     procedure Resume;
     procedure UpdatePauseState;
-    procedure CreatePausedIcons;
+    procedure CreateTrayIcons;
 
     procedure LoadControlsFromSettings;
     procedure ApplySettings;
@@ -254,7 +291,16 @@ type
     procedure HandleDownloadResult(Res: TUpdateDownloadResult);
     procedure HandleDownloadProgress(ReceivedKB, TotalKB: Int64);
     procedure OfferUpdate;
-    procedure LearnAutoSwitchException(const Word: string);
+    procedure LearnAutoSwitchException(const Word, Converted: string);
+    procedure CheckInWordSwitch;
+    procedure CommitPendingEdits;
+    procedure TrackManualConversion(Res: TOperationResult);
+    function AutoCorrectionsPaused: Boolean;
+    procedure CreateQuickMenu;
+    procedure PopupMenuPopup(Sender: TObject);
+    procedure QuickAutoCorrectOffClick(Sender: TObject);
+    procedure QuickNeverFixLastClick(Sender: TObject);
+    procedure QuickProgramRuleClick(Sender: TObject);
     procedure DownloadCancel(Sender: TObject);
     function DownloadRunning: Boolean;
   protected
@@ -277,9 +323,10 @@ implementation
 uses
   System.DateUtils,
   Winapi.ShellAPI, Winapi.ShlObj,
-  PngImage, PngFunctions,
+  Vcl.Imaging.pngimage, uTrayIconData,
   System.StrUtils,
-  uDiagnostics, uWinUtils, uTaskAutorun, uLocale, uSettingsStore, uClipboardSnapshot;
+  uDiagnostics, uWinUtils, uTaskAutorun, uLocale, uSettingsStore, uClipboardSnapshot,
+  uSpellCheck, uInWordSwitch;
 
 const
   WM_LS_OPERATION_DONE = WM_APP + 10;
@@ -295,6 +342,9 @@ const
   // Keys tracked as held longer than this are checked against the physical
   // keyboard state before each key press.
   STALE_KEY_MIN_AGE_MS = 250;
+  // A word converted manually this many times is switched automatically.
+  LEARN_AFTER_CONVERSIONS = 2;
+  AUTO_CORRECT_OFF_MINUTES = 60;
 
   WM_WTSSESSION_CHANGE = $02B1;
   NOTIFY_FOR_THIS_SESSION = 0;
@@ -329,6 +379,7 @@ const
 
   ICON_EN = 0;
   ICON_RU = 1;
+  ICON_PAUSED = 2;  // + ICON_EN / ICON_RU
   LANG_EN = $0409;
   LANG_RU = $0419;
 
@@ -338,6 +389,7 @@ const
 
 function ShortActionName(Action: TLSAction): string; forward;
 function ContainsDigit(const Text: string): Boolean; forward;
+function RemoveWord(const List: TArray<string>; const Word: string): TArray<string>; forward;
 
 type
   TLSRawInputDevice = record
@@ -456,7 +508,8 @@ begin
   SetWindowLong(Application.Handle, GWL_EXSTYLE,
     GetWindowLong(Application.Handle, GWL_EXSTYLE) and not WS_EX_APPWINDOW);
 
-  CreatePausedIcons;
+  CreateTrayIcons;
+  CreateQuickMenu;
 
   FWorker := TOperationWorker.Create(Handle, WM_LS_OPERATION_DONE);
   if not FWorker.WaitUntilReady(5000) then
@@ -486,6 +539,7 @@ end;
 procedure TFormMain.FormDestroy(Sender: TObject);
 var
   Msg: TMsg;
+  I: Integer;
 begin
   DiagnosticsLog('form.destroy begin');
   LSWTSUnRegisterSessionNotification(Handle);
@@ -520,6 +574,8 @@ begin
   while PeekMessage(Msg, Handle, WM_LS_UPDATE_DOWNLOADED, WM_LS_UPDATE_DOWNLOADED,
           PM_REMOVE) do
     TUpdateDownloadResult(Msg.lParam).Free;
+  for I := Low(FTrayIcons) to High(FTrayIcons) do
+    FreeAndNil(FTrayIcons[I]);
   FreeAndNil(FIndicator);
   FreeAndNil(FCatalog);
   FreeAndNil(FDetector);
@@ -897,7 +953,9 @@ begin
   begin
     AddChar(Ch);
     if Ch = ' ' then
-      CheckAutoCorrections;
+      CheckAutoCorrections
+    else
+      CheckInWordSwitch;
   end
   else
     ClearBuffer;
@@ -959,6 +1017,7 @@ begin
   // Any manual edit ends the word -> phrase -> revert chain.
   FChain.Reset;
   FAutoSwitchOriginal := '';
+  FLastLearnWord := '';
   if FBufferOverflowed then
     Exit;
   if Length(FBuffer) >= MAX_PHRASE_LEN then
@@ -974,6 +1033,7 @@ procedure TFormMain.BufferBackspace;
 begin
   FChain.Reset;
   FAutoSwitchOriginal := '';
+  FLastLearnWord := '';
   if not FBufferOverflowed and (FBuffer <> '') then
     SetLength(FBuffer, Length(FBuffer) - 1);
 end;
@@ -982,6 +1042,7 @@ procedure TFormMain.ClearBuffer;
 begin
   FBuffer := '';
   FBufferOverflowed := False;
+  FPartialWord := False;
   if Assigned(FChain) then
     FChain.Reset;
 end;
@@ -1090,7 +1151,15 @@ begin
   Request.SettleFocus := FSettleFocusNext;
   Request.AutoSwitchExceptions := FSettings.AutoSwitchExceptions;
   Request.AllowLayoutSwitch := FSettings.AutoSwitchEnabled;
-  Request.AllowTypoFix := FSettings.FixTypos;
+  // The start of a word being typed is only ever switched, never "fixed".
+  Request.AllowTypoFix := FSettings.FixTypos and not FInWordNext;
+  Request.TypoExtended := Request.AllowTypoFix and FSettings.FixTyposExtended;
+  Request.AutoSwitchLearned := FSettings.AutoSwitchLearned;
+  Request.InWord := FInWordNext;
+  Request.Capitalize := FCapitalizeNext and not FInWordNext;
+  Request.CaretBack := FCaretBackNext;
+  FPendingStamp := Request.KeystrokeStamp;
+  FPendingDoubleSpace := FDoubleSpaceNext;
   if FCapsShiftLock then
     Request.CapsOffKey := VK_SHIFT
   else
@@ -1151,32 +1220,67 @@ begin
     // Undoing an automatic layout switch right away teaches an exception.
     if Res.Success and (FAutoSwitchOriginal <> '') and
        (FPendingPlan.Mode in [bmUndo, bmRevert]) then
-      LearnAutoSwitchException(FAutoSwitchOriginal);
+      LearnAutoSwitchException(FAutoSwitchOriginal, FAutoSwitchResult);
     if Res.Action <> laAutoSwitch then
       FAutoSwitchOriginal := '';
     if FSettings.SoundEnabled and Res.Success and (Res.BufferAction = baSet) then
       MessageBeep(MB_OK);
 
-    case Res.BufferAction of
-      baClear: ClearBuffer;
-      baSet: SetBufferText(Res.NewBufferText);
+    if (Res.BufferAction = baSet) and FPendingAutomatic and
+       (AtomicCmpExchange(GKeystrokeCount, 0, 0) <> FPendingStamp) then
+    begin
+      // Keys typed while the correction was applied follow the corrected
+      // text (the buffer has them as they appeared on the screen).
+      if StartsStr(FPendingPlan.Text, FBuffer) then
+      begin
+        SetBufferText(Res.NewBufferText + Copy(FBuffer, Length(FPendingPlan.Text) + 1, MaxInt));
+        DiagnosticsLog('buffer.extended reason=typed_during_correction');
+      end
+      else
+      begin
+        ClearBuffer;
+        FPartialWord := True;
+        DiagnosticsLog('buffer.cleared reason=typed_during_correction');
+      end;
+    end
+    else
+      case Res.BufferAction of
+        baClear: ClearBuffer;
+        baSet: SetBufferText(Res.NewBufferText);
+      end;
+    if Res.Success and FPendingDoubleSpace then
+      FDoubleSpaceFixed := FBuffer;
+    // The last automatic change of a word, for "Never change" in the tray.
+    if Res.Success and Res.UsedBuffer and (Res.Action = laAutoSwitch) and
+       not Res.CapitalOnly then
+    begin
+      FLastAutoWord := FPendingPlan.Region;
+      FLastAutoResult := Res.FixedWord;
     end;
     // Remember the step so that repeating the action widens it.
     if not Res.Success or (FBuffer = '') then
       FChain.Reset
-    else if Res.UsedBuffer and Res.TypoFixed then
+    else if Res.UsedBuffer and (Res.TypoFixed or Res.CapitalOnly) then
     begin
       // Undo-able like the other corrections; double Shift converts as usual.
       FChain.Completed(FPendingPlan, laNone, FBuffer, 0, 0);
-      FAutoSwitchOriginal := FPendingPlan.Region;
-      DiagnosticsLog('typo.applied');
+      if Res.TypoFixed then
+      begin
+        FAutoSwitchOriginal := FPendingPlan.Region;
+        FAutoSwitchResult := Res.FixedWord;
+        DiagnosticsLog('typo.applied');
+      end
+      else
+        DiagnosticsLog('autocorrect.capitalized');
     end
     else if Res.UsedBuffer and (Res.Action = laAutoSwitch) then
     begin
       FChain.CompletedAutoSwitch(FPendingPlan, FBuffer, Res.SourceLayout,
         Res.TargetLayout);
       FAutoSwitchOriginal := FPendingPlan.Region;
-      DiagnosticsLog('autoswitch.applied');
+      FAutoSwitchResult := Res.FixedWord;
+      DiagnosticsLogFmt('autoswitch.applied learned=%s',
+        [BoolToStr(Res.LearnedSwitch, True)]);
     end
     else if Res.UsedBuffer then
       FChain.Completed(FPendingPlan, Res.Action, FBuffer, Res.SourceLayout,
@@ -1186,6 +1290,8 @@ begin
         Res.SourceLayout, Res.TargetLayout);
     if Res.Success and (Res.SourceLayout <> 0) then
       FPreviousLayout := Res.SourceLayout;
+    if Res.Success and Res.UsedBuffer and not FPendingAutomatic then
+      TrackManualConversion(Res);
     // Automatic corrections never bother the user with notifications.
     if (Res.Notification <> '') and not FPendingAutomatic then
     begin
@@ -1265,33 +1371,96 @@ begin
   UpdateTrayIcon(True);
 end;
 
-procedure TFormMain.CreatePausedIcons;
+function IconFromPng(Png: TPngImage): TIcon;
+var
+  Stream: TMemoryStream;
+  Handle: HICON;
+begin
+  // Windows builds an icon directly from PNG data (Vista and later).
+  Result := nil;
+  Stream := TMemoryStream.Create;
+  try
+    Png.SaveToStream(Stream);
+    Handle := CreateIconFromResourceEx(Stream.Memory, Stream.Size, True, $00030000,
+      0, 0, LR_DEFAULTCOLOR);
+    if Handle = 0 then
+      Exit;
+    Result := TIcon.Create;
+    Result.Handle := Handle;
+  finally
+    Stream.Free;
+  end;
+end;
+
+procedure MakePausedImage(Png: TPngImage);
+type
+  TRGB = packed record
+    B, G, R: Byte;
+  end;
+  PRGBLine = ^TRGBLine;
+  TRGBLine = array[0..32767] of TRGB;
+  PAlphaLine = ^TAlphaLine;
+  TAlphaLine = array[0..32767] of Byte;
+var
+  X, Y: Integer;
+  Line: PRGBLine;
+  Alpha: PAlphaLine;
+  Gray: Byte;
+begin
+  // Grey and partly transparent (the PNG is 8-bit RGBA).
+  for Y := 0 to Png.Height - 1 do
+  begin
+    Line := Png.Scanline[Y];
+    Alpha := PAlphaLine(Png.AlphaScanline[Y]);
+    for X := 0 to Png.Width - 1 do
+    begin
+      Gray := (Line[X].R * 30 + Line[X].G * 59 + Line[X].B * 11) div 100;
+      Line[X].R := Gray;
+      Line[X].G := Gray;
+      Line[X].B := Gray;
+      if Alpha <> nil then
+        Alpha[X] := Alpha[X] * 160 div 255;
+    end;
+  end;
+end;
+
+procedure TFormMain.CreateTrayIcons;
+
+  function LoadPng(const Data: array of Byte): TPngImage;
+  var
+    Stream: TMemoryStream;
+  begin
+    Result := TPngImage.Create;
+    Stream := TMemoryStream.Create;
+    try
+      Stream.WriteBuffer(Data[0], Length(Data));
+      Stream.Position := 0;
+      Result.LoadFromStream(Stream);
+    finally
+      Stream.Free;
+    end;
+  end;
+
 var
   I: Integer;
   Png: TPngImage;
 begin
-  // Grey, half-transparent copies of the EN/RU icons for the paused state.
-  FPausedIconBase := -1;
+  for I := ICON_EN to ICON_RU do
   try
-    FPausedIconBase := TrayIcons.Count;
-    for I := ICON_EN to ICON_RU do
-    begin
-      Png := TPngImage.Create;
-      try
-        Png.Assign(TrayIcons.PngImages[I].PngImage);
-        MakeImageGrayscale(Png);
-        MakeImageBlended(Png, 160);
-        TrayIcons.AddPng(Png);
-      finally
-        Png.Free;
-      end;
+    if I = ICON_EN then
+      Png := LoadPng(TrayIconEnPng)
+    else
+      Png := LoadPng(TrayIconRuPng);
+    try
+      FTrayIcons[I] := IconFromPng(Png);
+      MakePausedImage(Png);
+      FTrayIcons[ICON_PAUSED + I] := IconFromPng(Png);
+    finally
+      Png.Free;
     end;
   except
     on E: Exception do
-    begin
-      FPausedIconBase := -1;
-      DiagnosticsLogException('tray.paused_icons', E);
-    end;
+      DiagnosticsLogException('tray.icons', E);
   end;
 end;
 
@@ -1301,7 +1470,6 @@ var
   Layout: HKL;
   LangID: Word;
   Index: Integer;
-  Icon: TIcon;
 begin
   Target := GetFocusedWindow;
   Layout := 0;
@@ -1330,25 +1498,19 @@ begin
   else
     Index := -1;
   end;
-  if FPaused and (FPausedIconBase >= 0) then
+  if FPaused then
   begin
     if Index < 0 then
       Index := ICON_EN;
-    Index := FPausedIconBase + Index;
+    Inc(Index, ICON_PAUSED);
   end;
 
-  if Index < 0 then
+  if (Index < 0) or (FTrayIcons[Index] = nil) then
   begin
     TrayIcon.Icon := Application.Icon;
     Exit;
   end;
-  Icon := TIcon.Create;
-  try
-    TrayIcons.GetIcon(Index, Icon);
-    TrayIcon.Icon := Icon;
-  finally
-    Icon.Free;
-  end;
+  TrayIcon.Icon := FTrayIcons[Index];
 end;
 
 procedure TFormMain.UpdateTrayHint;
@@ -1418,6 +1580,12 @@ begin
     chkSound.Checked := FSettings.SoundEnabled;
     chkAutoSwitch.Checked := FSettings.AutoSwitchEnabled;
     chkFixTypos.Checked := FSettings.FixTypos;
+    chkFixTyposExtended.Checked := FSettings.FixTyposExtended;
+    chkInWordSwitch.Checked := FSettings.InWordSwitch;
+    chkLearnManual.Checked := FSettings.LearnManualConversions;
+    edAutoSwitchLearned.Text := string.Join('; ', FSettings.AutoSwitchLearned);
+    chkCapitalize.Checked := FSettings.CapitalizeSentences;
+    chkDoubleSpace.Checked := FSettings.FixDoubleSpace;
     edAutoSwitchExceptions.Text := string.Join('; ', FSettings.AutoSwitchExceptions);
     memNoAutoCorrect.Text := string.Join(sLineBreak, FSettings.NoAutoCorrectProcesses);
     memSnippets.Text := FSettings.Snippets;
@@ -1503,6 +1671,11 @@ begin
   FSettings.SoundEnabled := chkSound.Checked;
   FSettings.AutoSwitchEnabled := chkAutoSwitch.Checked;
   FSettings.FixTypos := chkFixTypos.Checked;
+  FSettings.FixTyposExtended := chkFixTyposExtended.Checked;
+  FSettings.InWordSwitch := chkInWordSwitch.Checked;
+  FSettings.LearnManualConversions := chkLearnManual.Checked;
+  FSettings.CapitalizeSentences := chkCapitalize.Checked;
+  FSettings.FixDoubleSpace := chkDoubleSpace.Checked;
   if not FSettings.ShowLayoutIndicator then
     FIndicator.HideNow;
   ApplySettings;
@@ -1812,7 +1985,9 @@ begin
       'LayoutSwitcher - Keyboard layout switcher');
     tsGeneral.Caption := T('Основные', 'General');
     tsHotkeys.Caption := T('Сочетания', 'Shortcuts');
+    tsLayout.Caption := T('Раскладка', 'Layout');
     tsCorrections.Caption := T('Исправления', 'Corrections');
+    tsSnippets.Caption := T('Шаблоны', 'Templates');
     tsExclusions.Caption := T('Исключения', 'Exclusions');
 
     chkAutorun.Caption := T('Автозапуск при старте системы', 'Start with Windows');
@@ -1878,10 +2053,29 @@ begin
       'Automatically fix words typed in the wrong keyboard layout');
     lblAutoSwitchHint.Caption := T('Решает проверка орфографии Windows.',
       'The Windows spell checker decides.');
+    chkInWordSwitch.Caption := T(
+      'Переключать уже во время набора — по невозможному началу слова (ghb → при)',
+      'Switch while typing - when the start of a word is impossible (рудд → hell)');
+    chkLearnManual.Caption := T(
+      'Запоминать слова, дважды исправленные вручную, и дальше переключать их сами',
+      'Remember words fixed manually twice and switch them automatically');
+    lblAutoSwitchLearned.Caption := T('Всегда переключать:', 'Always switch:');
+    lblAutoSwitchExceptions.Caption := T('Не исправлять:', 'Never change:');
+    lblLayoutNote.Caption := T(
+      'Ошибочное переключение отменяется двойным Shift или двойным Caps Lock — слово' +
+      sLineBreak + 'попадает в список «Не исправлять». «Не исправлять» действует и на опечатки.',
+      'Undo a wrong switch with a double Shift or a double Caps Lock: the word is added' +
+      sLineBreak + 'to "Never change". "Never change" also applies to typo fixes.');
     chkFixTypos.Caption := T(
       'Исправлять опечатки: переставленные соседние буквы (пирвет → привет)',
       'Fix typos: swapped neighbouring letters (teh → the)');
-    lblAutoSwitchExceptions.Caption := T('Не исправлять:', 'Never change:');
+    chkFixTyposExtended.Caption := T(
+      'А также пропущенную, лишнюю или заменённую букву (превет → привет)',
+      'Also a missing, extra or replaced letter (wrold → world)');
+    chkCapitalize.Caption := T('Заглавная буква в начале предложения (. привет → . Привет)',
+      'Capital letter at the start of a sentence (. hello → . Hello)');
+    chkDoubleSpace.Caption := T('Убирать случайный двойной пробел',
+      'Remove an accidental double space');
     chkFixCapsLock.Caption := T(
       'Исправлять слова, набранные с включённым Caps Lock (пРИВЕТ → Привет)',
       'Fix words typed with Caps Lock on (hELLO → Hello)');
@@ -1892,8 +2086,12 @@ begin
     chkSnippets.Caption := T('Заменять шаблоны: сокращение и пробел',
       'Expand templates: abbreviation followed by a space');
     lblSnippetsHint.Caption := T(
-      'Каждая строка: сокращение=текст. Подстановки: {date}, {time}, {datetime}.',
-      'One per line: abbreviation=text. Placeholders: {date}, {time}, {datetime}.');
+      'Каждая строка: сокращение=текст. Подстановки: {date}, {time}, {datetime},' + sLineBreak +
+      '{clipboard} — текст из буфера обмена, {cursor} — где оставить курсор.' + sLineBreak +
+      '\n — новая строка, \t — табуляция, \\ — обратная косая черта.',
+      'One per line: abbreviation=text. Placeholders: {date}, {time}, {datetime},' + sLineBreak +
+      '{clipboard} - the clipboard text, {cursor} - where to leave the caret.' + sLineBreak +
+      '\n - new line, \t - tab, \\ - backslash.');
     lblCorrectionsNote.Caption := T(
       'Исправления выполняются после пробела. Отменить последнее — двойной Caps Lock.' +
       sLineBreak + 'Не работают в программах из списка «Без автоисправлений» на вкладке «Исключения».',
@@ -2147,16 +2345,31 @@ end;
 
 { Automatic corrections }
 
+function TFormMain.AutoCorrectionsPaused: Boolean;
+begin
+  Result := (FAutoCorrectPausedUntil <> 0) and (Now < FAutoCorrectPausedUntil);
+end;
+
 procedure TFormMain.CheckAutoCorrections;
 var
-  WordStart, WordLength: Integer;
-  Word, Template, Replacement, Fixed: string;
-  ToggleCaps: Boolean;
+  WordStart, WordLength, CaretBack: Integer;
+  Word, Template, Replacement, Fixed, Clip: string;
+  ToggleCaps, Capital, IsTemplate: Boolean;
 begin
+  // The word before this space was typed partly before the buffer was
+  // dropped: only its end is known.
+  if FPartialWord then
+  begin
+    FPartialWord := False;
+    Exit;
+  end;
   if FPaused or FBufferOverflowed or FFocusIsPassword or FOperationBusy then
     Exit;
+  if AutoCorrectionsPaused then
+    Exit;
   if not (FSettings.FixCapsLock or FSettings.FixTwoCapitals or FSettings.AutoSwitchEnabled or
-          FSettings.FixTypos or (FSettings.SnippetsEnabled and (Length(FSnippets) > 0))) then
+          FSettings.FixTypos or FSettings.CapitalizeSentences or FSettings.FixDoubleSpace or
+          (FSettings.SnippetsEnabled and (Length(FSnippets) > 0))) then
     Exit;
   // Code editors, terminals, password managers: manual actions only.
   if FSettings.IsAutoCorrectDisabledFor(FLastProcessName) then
@@ -2170,17 +2383,51 @@ begin
     end;
     Exit;
   end;
+
+  // "word  ": the second space was typed by accident.
+  if FSettings.FixDoubleSpace and EndsWithDoubleSpace(FBuffer) then
+  begin
+    // A space typed again right after the fix: the spaces are wanted.
+    if (FDoubleSpaceFixed <> '') and (FBuffer = FDoubleSpaceFixed + ' ') then
+    begin
+      FDoubleSpaceFixed := '';
+      Exit;
+    end;
+    DiagnosticsLog('autocorrect.queue kind=double_space');
+    FDoubleSpaceNext := True;
+    try
+      QueueRequest(laNone, TConversionChain.PlanReplacement(FBuffer, Length(FBuffer) - 1,
+        2, ' '), True, False);
+    finally
+      FDoubleSpaceNext := False;
+    end;
+    Exit;
+  end;
+
   // Exactly one space has just been typed after the word.
   if not FindLastWord(FBuffer, WordStart, WordLength) or
      (WordStart + WordLength <> Length(FBuffer)) then
     Exit;
   Word := Copy(FBuffer, WordStart, WordLength);
+  Capital := FSettings.CapitalizeSentences and
+    IsSentenceStart(Copy(FBuffer, 1, WordStart - 1));
 
   Replacement := '';
   Template := '';
   ToggleCaps := False;
-  if FSettings.SnippetsEnabled and FindSnippet(FSnippets, Word, Template) then
-    Replacement := ExpandSnippet(Template, Now)
+  CaretBack := 0;
+  IsTemplate := FSettings.SnippetsEnabled and FindSnippet(FSnippets, Word, Template);
+  if IsTemplate then
+  begin
+    Clip := '';
+    if SnippetUsesClipboard(Template) then
+      Clip := ReadClipboardText(Handle);
+    Replacement := ExpandSnippet(Template, Now, Clip, CaretBack);
+    if Replacement = '' then
+      Exit;
+    // A template is inserted exactly as written.
+    Capital := False;
+  end
   else if FSettings.FixCapsLock and FCapsOn and IsCapsLockMistake(Word) then
   begin
     Replacement := FixCapsLockMistake(Word);
@@ -2189,23 +2436,159 @@ begin
   else if FSettings.FixTwoCapitals and
      FixTwoCapitals(Word, FSettings.TwoCapitalsExceptions, Fixed) then
     Replacement := Fixed;
+
   if Replacement = '' then
   begin
     // Nothing else to fix: the spell checker decides about the layout and
-    // about swapped letters.
+    // typos; the worker also capitalises the first word of a sentence.
     if (FSettings.AutoSwitchEnabled or FSettings.FixTypos) and not ContainsDigit(Word) then
-      QueueRequest(laAutoSwitch, TConversionChain.PlanWord(FBuffer, WordStart,
-        WordLength), True, False);
+    begin
+      FCapitalizeNext := Capital;
+      try
+        QueueRequest(laAutoSwitch, TConversionChain.PlanWord(FBuffer, WordStart,
+          WordLength), True, False);
+      finally
+        FCapitalizeNext := False;
+      end;
+    end
+    else if Capital and CanCapitalize(Word) then
+    begin
+      DiagnosticsLog('autocorrect.queue kind=capital');
+      QueueRequest(laNone, TConversionChain.PlanReplacement(FBuffer, WordStart,
+        WordLength, CapitalizeFirst(Word)), True, False);
+    end;
     Exit;
   end;
+  if Capital and CanCapitalize(Replacement) then
+    Replacement := CapitalizeFirst(Replacement);
   if Replacement = Word then
     Exit;
 
-  DiagnosticsLogFmt('autocorrect.queue kind=%s length=%d',
-    [IfThen(ToggleCaps, 'caps_lock', IfThen(Template <> '', 'template', 'two_capitals')),
-     Length(Word)]);
-  QueueRequest(laNone, TConversionChain.PlanReplacement(FBuffer, WordStart,
-    WordLength, Replacement), True, ToggleCaps);
+  DiagnosticsLogFmt('autocorrect.queue kind=%s length=%d caret_back=%d',
+    [IfThen(ToggleCaps, 'caps_lock', IfThen(IsTemplate, 'template', 'two_capitals')),
+     Length(Word), CaretBack]);
+  FCaretBackNext := CaretBack;
+  try
+    QueueRequest(laNone, TConversionChain.PlanReplacement(FBuffer, WordStart,
+      WordLength, Replacement), True, ToggleCaps);
+  finally
+    FCaretBackNext := 0;
+  end;
+end;
+
+procedure TFormMain.CheckInWordSwitch;
+var
+  WordStart, Len: Integer;
+  Typed, Converted, Item: string;
+  Focus: HWND;
+  Layout: HKL;
+  Pair: TLayoutPair;
+  Plan: TBufferPlan;
+begin
+  if not (FSettings.AutoSwitchEnabled and FSettings.InWordSwitch) then
+    Exit;
+  if FPaused or FBufferOverflowed or FFocusIsPassword or FOperationBusy or FPartialWord or
+     AutoCorrectionsPaused or FSettings.IsAutoCorrectDisabledFor(FLastProcessName) then
+    Exit;
+  // The word being typed: from the last space to the end of the buffer.
+  WordStart := Length(FBuffer);
+  while (WordStart > 1) and not CharInSet(FBuffer[WordStart - 1], [' ', #9, #$00A0]) do
+    Dec(WordStart);
+  Len := Length(FBuffer) - WordStart + 1;
+  if (Len < 3) or (Len > 4) then
+    Exit;
+  Typed := Copy(FBuffer, WordStart, Len);
+
+  Focus := GetFocusedWindow;
+  if Focus = 0 then
+    Exit;
+  Layout := GetKeyboardLayout(GetWindowThreadProcessId(Focus, nil));
+  if not FCatalog.ChoosePair(Typed, Layout, FPreviousLayout, Pair) or
+     (Pair.Source <> Layout) then
+    Exit;
+  Converted := ConvertTextBetweenLayouts(Typed, FCatalog.KeyChars(Pair.Source),
+    FCatalog.KeyChars(Pair.Target));
+  if not ShouldSwitchInWord(WordStartLanguage(LayoutLanguageTag(Pair.Source)),
+       WordStartLanguage(LayoutLanguageTag(Pair.Target)), Typed, Converted) then
+    Exit;
+  // "ghbdtn" in "Never change" keeps every word typed as "ghb..." intact;
+  // an undone in-word switch adds the prefix itself.
+  for Item in FSettings.AutoSwitchExceptions do
+    if StartsText(Typed, Item) or StartsText(Item, Typed) then
+      Exit;
+
+  Plan := TConversionChain.PlanWord(FBuffer, WordStart, Len);
+  Plan.ForcedSource := Pair.Source;
+  Plan.ForcedTarget := Pair.Target;
+  DiagnosticsLogFmt('autoswitch.in_word_queue length=%d', [Len]);
+  FInWordNext := True;
+  try
+    QueueRequest(laAutoSwitch, Plan, True, False);
+  finally
+    FInWordNext := False;
+  end;
+end;
+
+procedure TFormMain.TrackManualConversion(Res: TOperationResult);
+var
+  Word: string;
+  Count: Integer;
+begin
+  // Reverting or undoing right after a counted conversion: it was not what
+  // the user wanted.  Widening to the phrase keeps it (the word was right).
+  if (FLastLearnWord <> '') and (FPendingPlan.Mode in [bmRevert, bmUndo]) then
+  begin
+    if FLastLearnPromoted then
+    begin
+      CommitPendingEdits;
+      FSettings.AutoSwitchLearned := RemoveWord(FSettings.AutoSwitchLearned, FLastLearnWord);
+      // Back to the count before the conversion that taught it.
+      BumpLearnCount(FSettings.AutoSwitchLearnCounts, FLastLearnWord,
+        LEARN_AFTER_CONVERSIONS - 1);
+    end
+    else
+      BumpLearnCount(FSettings.AutoSwitchLearnCounts, FLastLearnWord, -1);
+    DiagnosticsLog('learn.rolled_back');
+    ApplySettings;
+    if FLastLearnPromoted then
+      LoadControlsFromSettings;
+    FLastLearnWord := '';
+    FLastLearnPromoted := False;
+    Exit;
+  end;
+  if FPendingPlan.Mode = bmPhrase then
+    Exit;
+  FLastLearnWord := '';
+  FLastLearnPromoted := False;
+  if (Res.Action <> laConvert) or (FPendingPlan.Mode <> bmWord) or
+     not FSettings.AutoSwitchEnabled or not FSettings.LearnManualConversions then
+    Exit;
+  // The word as it reads now ("привет"), the same length as the typed one.
+  Word := Copy(FBuffer, FPendingPlan.RegionStart, FPendingPlan.RegionLength);
+  if not IsAutoSwitchCandidate(Word) or FSettings.IsAutoSwitchException(Word) or
+     FSettings.IsAutoSwitchLearned(Word) then
+    Exit;
+  Count := BumpLearnCount(FSettings.AutoSwitchLearnCounts, Word, 1);
+  FLastLearnWord := Word;
+  if Count >= LEARN_AFTER_CONVERSIONS then
+  begin
+    CommitPendingEdits;
+    BumpLearnCount(FSettings.AutoSwitchLearnCounts, Word, -Count);
+    FSettings.AutoSwitchLearned := FSettings.AutoSwitchLearned + [AnsiLowerCase(Word)];
+    FLastLearnPromoted := True;
+    DiagnosticsLog('learn.word_learned');
+    FBalloonUrl := '';
+    FBalloonInstall := False;
+    FNotificationTimes.Remove('learned');
+    ShowNotification('learned', Format(T(
+      'Слово «%s» теперь будет переключаться автоматически. Список — «Всегда переключать» на вкладке «Раскладка».',
+      'The word "%s" will now be switched automatically. See "Always switch" on the Layout tab.'),
+      [AnsiLowerCase(Word)]));
+  end;
+  ApplySettings;
+  // Only the "Always switch" list is visible; the counts are not.
+  if FLastLearnPromoted then
+    LoadControlsFromSettings;
 end;
 
 function ContainsDigit(const Text: string): Boolean;
@@ -2218,11 +2601,36 @@ begin
   Result := False;
 end;
 
-procedure TFormMain.LearnAutoSwitchException(const Word: string);
+function RemoveWord(const List: TArray<string>; const Word: string): TArray<string>;
+var
+  Item: string;
 begin
-  if (Word = '') or FSettings.IsAutoSwitchException(Word) then
+  Result := nil;
+  for Item in List do
+    if not AnsiSameText(Item, Word) then
+      Result := Result + [Item];
+end;
+
+procedure TFormMain.CommitPendingEdits;
+begin
+  // Edits are saved on leaving the field; switching to another program does
+  // not leave it.  Save them before the lists are reloaded from FSettings.
+  if not Visible then
     Exit;
-  FSettings.AutoSwitchExceptions := FSettings.AutoSwitchExceptions + [Word];
+  ApplyCorrectionsFromEdit;
+  ApplyExcludedFromEdit;
+end;
+
+procedure TFormMain.LearnAutoSwitchException(const Word, Converted: string);
+begin
+  if Word = '' then
+    Exit;
+  CommitPendingEdits;
+  // A learned word that turns out unwanted is forgotten as well.
+  if (Converted <> '') and FSettings.IsAutoSwitchLearned(Converted) then
+    FSettings.AutoSwitchLearned := RemoveWord(FSettings.AutoSwitchLearned, Converted);
+  if not FSettings.IsAutoSwitchException(Word) then
+    FSettings.AutoSwitchExceptions := FSettings.AutoSwitchExceptions + [Word];
   ApplySettings;
   LoadControlsFromSettings;
   DiagnosticsLog('autoswitch.exception_learned');
@@ -2234,6 +2642,100 @@ begin
     'The word "%s" will no longer be changed automatically.'), [Word]));
 end;
 
+{ Quick actions in the tray menu }
+
+procedure TFormMain.CreateQuickMenu;
+var
+  Index: Integer;
+
+  function AddItem(Handler: TNotifyEvent): TMenuItem;
+  begin
+    Result := TMenuItem.Create(PopupMenu);
+    Result.OnClick := Handler;
+    PopupMenu.Items.Insert(Index, Result);
+    Inc(Index);
+  end;
+
+begin
+  // After the pause items, before the update items.
+  Index := PopupMenu.Items.IndexOf(mniSeparator2);
+  if Index < 0 then
+    Index := PopupMenu.Items.Count;
+  FMenuQuickSeparator := AddItem(nil);
+  FMenuQuickSeparator.Caption := '-';
+  FMenuAutoCorrectOff := AddItem(QuickAutoCorrectOffClick);
+  FMenuNeverFixLast := AddItem(QuickNeverFixLastClick);
+  FMenuProgramRule := AddItem(QuickProgramRuleClick);
+  PopupMenu.OnPopup := PopupMenuPopup;
+end;
+
+procedure TFormMain.PopupMenuPopup(Sender: TObject);
+var
+  Program_: string;
+begin
+  if AutoCorrectionsPaused then
+    FMenuAutoCorrectOff.Caption := Format(T('Включить автоисправления (выключены до %s)',
+      'Turn automatic corrections on (off until %s)'),
+      [FormatDateTime('hh:nn', FAutoCorrectPausedUntil)])
+  else
+    FMenuAutoCorrectOff.Caption := T('Выключить автоисправления на 1 час',
+      'Turn automatic corrections off for 1 hour');
+
+  FMenuNeverFixLast.Visible := FLastAutoWord <> '';
+  if FLastAutoResult <> '' then
+    FMenuNeverFixLast.Caption := Format(T('Не исправлять «%s» (→ %s)',
+      'Never change "%s" (-> %s)'), [FLastAutoWord, FLastAutoResult])
+  else
+    FMenuNeverFixLast.Caption := Format(T('Не исправлять «%s»', 'Never change "%s"'),
+      [FLastAutoWord]);
+
+  // The program the user typed in last; the tray itself has the focus now.
+  Program_ := FLastProcessName;
+  FMenuProgramRule.Visible := (Program_ <> '') and
+    not SameText(Program_, ExtractFileName(ParamStr(0)));
+  FMenuProgramRule.Checked := FSettings.IsAutoCorrectDisabledFor(Program_);
+  FMenuProgramRule.Caption := Format(T('Без автоисправлений в %s',
+    'No automatic corrections in %s'), [Program_]);
+end;
+
+procedure TFormMain.QuickAutoCorrectOffClick(Sender: TObject);
+begin
+  if AutoCorrectionsPaused then
+    FAutoCorrectPausedUntil := 0
+  else
+    FAutoCorrectPausedUntil := IncMinute(Now, AUTO_CORRECT_OFF_MINUTES);
+  DiagnosticsLogFmt('autocorrect.paused until=%s',
+    [IfThen(FAutoCorrectPausedUntil = 0, 'none',
+      FormatDateTime('hh:nn', FAutoCorrectPausedUntil))]);
+end;
+
+procedure TFormMain.QuickNeverFixLastClick(Sender: TObject);
+begin
+  if FLastAutoWord = '' then
+    Exit;
+  LearnAutoSwitchException(FLastAutoWord, FLastAutoResult);
+  FLastAutoWord := '';
+  FLastAutoResult := '';
+end;
+
+procedure TFormMain.QuickProgramRuleClick(Sender: TObject);
+var
+  Program_: string;
+begin
+  Program_ := FLastProcessName;
+  if Program_ = '' then
+    Exit;
+  CommitPendingEdits;
+  if FSettings.IsAutoCorrectDisabledFor(Program_) then
+    FSettings.NoAutoCorrectProcesses := RemoveWord(FSettings.NoAutoCorrectProcesses, Program_)
+  else
+    FSettings.NoAutoCorrectProcesses := FSettings.NoAutoCorrectProcesses + [Program_];
+  DiagnosticsLogFmt('program_rule.toggled process="%s" no_autocorrect=%s',
+    [Program_, BoolToStr(FSettings.IsAutoCorrectDisabledFor(Program_), True)]);
+  ApplySettings;
+  LoadControlsFromSettings;
+end;
+
 procedure TFormMain.edCorrectionsExit(Sender: TObject);
 begin
   ApplyCorrectionsFromEdit;
@@ -2241,18 +2743,21 @@ end;
 
 procedure TFormMain.ApplyCorrectionsFromEdit;
 var
-  Exceptions, SwitchExceptions: TArray<string>;
+  Exceptions, SwitchExceptions, Learned: TArray<string>;
   Snippets: string;
 begin
   Exceptions := ParseWordList(edTwoCapsExceptions.Text);
   SwitchExceptions := ParseWordList(edAutoSwitchExceptions.Text);
+  Learned := ParseWordList(edAutoSwitchLearned.Text);
   Snippets := TrimRight(memSnippets.Text);
   if (string.Join('; ', Exceptions) <> string.Join('; ', FSettings.TwoCapitalsExceptions)) or
      (string.Join('; ', SwitchExceptions) <> string.Join('; ', FSettings.AutoSwitchExceptions)) or
+     (string.Join('; ', Learned) <> string.Join('; ', FSettings.AutoSwitchLearned)) or
      (Snippets <> FSettings.Snippets) then
   begin
     FSettings.TwoCapitalsExceptions := Exceptions;
     FSettings.AutoSwitchExceptions := SwitchExceptions;
+    FSettings.AutoSwitchLearned := Learned;
     FSettings.Snippets := Snippets;
     ApplySettings;
   end;
