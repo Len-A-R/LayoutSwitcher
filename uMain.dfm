@@ -425,34 +425,38 @@ object FormMain: TFormMain
         Top = 108
         Width = 8
         Height = 13
-        Caption = #1042#1089#1077#1075#1076#1072' '#1087#1077#1088#1077#1082#1083#1102#1095#1072#1090#1100':'
+        Caption = #1042#1089#1077#1075#1076#1072' '#1087#1077#1088#1077#1082#1083#1102#1095#1072#1090#1100' ('#1089#1083#1086#1074#1086' '#1074' '#1089#1090#1088#1086#1082#1077'):'
       end
-      object edAutoSwitchLearned: TEdit
-        Left = 150
-        Top = 105
-        Width = 350
-        Height = 21
+      object memAutoSwitchLearned: TMemo
+        Left = 30
+        Top = 126
+        Width = 230
+        Height = 150
+        ScrollBars = ssVertical
         TabOrder = 3
+        WordWrap = False
         OnExit = edCorrectionsExit
       end
       object lblAutoSwitchExceptions: TLabel
-        Left = 30
-        Top = 139
+        Left = 270
+        Top = 108
         Width = 8
         Height = 13
-        Caption = #1053#1077' '#1080#1089#1087#1088#1072#1074#1083#1103#1090#1100':'
+        Caption = #1053#1077' '#1080#1089#1087#1088#1072#1074#1083#1103#1090#1100' ('#1089#1083#1086#1074#1086' '#1074' '#1089#1090#1088#1086#1082#1077'):'
       end
-      object edAutoSwitchExceptions: TEdit
-        Left = 150
-        Top = 136
-        Width = 350
-        Height = 21
+      object memAutoSwitchExceptions: TMemo
+        Left = 270
+        Top = 126
+        Width = 230
+        Height = 150
+        ScrollBars = ssVertical
         TabOrder = 4
+        WordWrap = False
         OnExit = edCorrectionsExit
       end
       object lblLayoutNote: TLabel
         Left = 12
-        Top = 176
+        Top = 290
         Width = 8
         Height = 13
         Caption = #1054#1096#1080#1073#1086#1095#1085#1086#1077' '#1087#1077#1088#1077#1082#1083#1102#1095#1077#1085#1080#1077' '#1086#1090#1084#1077#1085#1103#1077#1090#1089#1103' '#1076#1074#1086#1081#1085#1099#1084' Shift '#1080#1083#1080' '#1076#1074#1086#1081#1085#1099#1084' Caps Lock.'
@@ -516,22 +520,24 @@ object FormMain: TFormMain
       end
       object lblTwoCapsExceptions: TLabel
         Left = 30
-        Top = 165
+        Top = 164
         Width = 8
         Height = 13
-        Caption = #1048#1089#1082#1083#1102#1095#1077#1085#1080#1103':'
+        Caption = #1048#1089#1082#1083#1102#1095#1077#1085#1080#1103' '#1076#1083#1103' '#1076#1074#1091#1093' '#1079#1072#1075#1083#1072#1074#1085#1099#1093' ('#1089#1083#1086#1074#1086' '#1074' '#1089#1090#1088#1086#1082#1077'):'
       end
-      object edTwoCapsExceptions: TEdit
-        Left = 130
-        Top = 162
-        Width = 370
-        Height = 21
+      object memTwoCapsExceptions: TMemo
+        Left = 30
+        Top = 182
+        Width = 470
+        Height = 100
+        ScrollBars = ssVertical
         TabOrder = 6
+        WordWrap = False
         OnExit = edCorrectionsExit
       end
       object lblCorrectionsNote: TLabel
         Left = 12
-        Top = 200
+        Top = 296
         Width = 8
         Height = 13
         Caption = #1048#1089#1087#1088#1072#1074#1083#1077#1085#1080#1103' '#1074#1099#1087#1086#1083#1085#1103#1102#1090#1089#1103' '#1087#1086#1089#1083#1077' '#1087#1088#1086#1073#1077#1083#1072'. '#1054#1090#1084#1077#1085#1080#1090#1100' '#1087#1086#1089#1083#1077#1076#1085#1077#1077' '#8212' '#1076#1074#1086#1081#1085#1086#1081' Caps Lock.'

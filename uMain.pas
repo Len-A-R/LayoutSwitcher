@@ -88,7 +88,7 @@ type
     chkFixCapsLock: TCheckBox;
     chkFixTwoCapitals: TCheckBox;
     lblTwoCapsExceptions: TLabel;
-    edTwoCapsExceptions: TEdit;
+    memTwoCapsExceptions: TMemo;
     chkSnippets: TCheckBox;
     lblSnippetsHint: TLabel;
     memSnippets: TMemo;
@@ -98,11 +98,11 @@ type
     lblAutoSwitchHint: TLabel;
     chkFixTypos: TCheckBox;
     lblAutoSwitchExceptions: TLabel;
-    edAutoSwitchExceptions: TEdit;
+    memAutoSwitchExceptions: TMemo;
     chkInWordSwitch: TCheckBox;
     chkLearnManual: TCheckBox;
     lblAutoSwitchLearned: TLabel;
-    edAutoSwitchLearned: TEdit;
+    memAutoSwitchLearned: TMemo;
     lblLayoutNote: TLabel;
     chkFixTyposExtended: TCheckBox;
     chkCapitalize: TCheckBox;
@@ -1575,7 +1575,7 @@ begin
     cbSearchEngine.ItemIndex := FSettings.SearchEngine;
     chkFixCapsLock.Checked := FSettings.FixCapsLock;
     chkFixTwoCapitals.Checked := FSettings.FixTwoCapitals;
-    edTwoCapsExceptions.Text := string.Join('; ', FSettings.TwoCapitalsExceptions);
+    memTwoCapsExceptions.Text := string.Join(sLineBreak, FSettings.TwoCapitalsExceptions);
     chkSnippets.Checked := FSettings.SnippetsEnabled;
     chkSound.Checked := FSettings.SoundEnabled;
     chkAutoSwitch.Checked := FSettings.AutoSwitchEnabled;
@@ -1583,10 +1583,10 @@ begin
     chkFixTyposExtended.Checked := FSettings.FixTyposExtended;
     chkInWordSwitch.Checked := FSettings.InWordSwitch;
     chkLearnManual.Checked := FSettings.LearnManualConversions;
-    edAutoSwitchLearned.Text := string.Join('; ', FSettings.AutoSwitchLearned);
+    memAutoSwitchLearned.Text := string.Join(sLineBreak, FSettings.AutoSwitchLearned);
     chkCapitalize.Checked := FSettings.CapitalizeSentences;
     chkDoubleSpace.Checked := FSettings.FixDoubleSpace;
-    edAutoSwitchExceptions.Text := string.Join('; ', FSettings.AutoSwitchExceptions);
+    memAutoSwitchExceptions.Text := string.Join(sLineBreak, FSettings.AutoSwitchExceptions);
     memNoAutoCorrect.Text := string.Join(sLineBreak, FSettings.NoAutoCorrectProcesses);
     memSnippets.Text := FSettings.Snippets;
     udInterval.Position := Integer(FSettings.DoubleTapInterval);
@@ -2059,8 +2059,10 @@ begin
     chkLearnManual.Caption := T(
       'Запоминать слова, дважды исправленные вручную, и дальше переключать их сами',
       'Remember words fixed manually twice and switch them automatically');
-    lblAutoSwitchLearned.Caption := T('Всегда переключать:', 'Always switch:');
-    lblAutoSwitchExceptions.Caption := T('Не исправлять:', 'Never change:');
+    lblAutoSwitchLearned.Caption := T('Всегда переключать (слово в строке):',
+      'Always switch (one word per line):');
+    lblAutoSwitchExceptions.Caption := T('Не исправлять (слово в строке):',
+      'Never change (one word per line):');
     lblLayoutNote.Caption := T(
       'Ошибочное переключение отменяется двойным Shift или двойным Caps Lock — слово' +
       sLineBreak + 'попадает в список «Не исправлять». «Не исправлять» действует и на опечатки.',
@@ -2082,7 +2084,8 @@ begin
     chkFixTwoCapitals.Caption := T(
       'Исправлять две заглавные буквы в начале слова (ПРивет → Привет)',
       'Fix two capitals at the start of a word (HEllo → Hello)');
-    lblTwoCapsExceptions.Caption := T('Исключения:', 'Exceptions:');
+    lblTwoCapsExceptions.Caption := T('Исключения для двух заглавных (слово в строке):',
+      'Exceptions for two capitals (one word per line):');
     chkSnippets.Caption := T('Заменять шаблоны: сокращение и пробел',
       'Expand templates: abbreviation followed by a space');
     lblSnippetsHint.Caption := T(
@@ -2746,9 +2749,9 @@ var
   Exceptions, SwitchExceptions, Learned: TArray<string>;
   Snippets: string;
 begin
-  Exceptions := ParseWordList(edTwoCapsExceptions.Text);
-  SwitchExceptions := ParseWordList(edAutoSwitchExceptions.Text);
-  Learned := ParseWordList(edAutoSwitchLearned.Text);
+  Exceptions := ParseWordList(memTwoCapsExceptions.Text);
+  SwitchExceptions := ParseWordList(memAutoSwitchExceptions.Text);
+  Learned := ParseWordList(memAutoSwitchLearned.Text);
   Snippets := TrimRight(memSnippets.Text);
   if (string.Join('; ', Exceptions) <> string.Join('; ', FSettings.TwoCapitalsExceptions)) or
      (string.Join('; ', SwitchExceptions) <> string.Join('; ', FSettings.AutoSwitchExceptions)) or
