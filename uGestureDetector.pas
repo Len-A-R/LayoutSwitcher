@@ -6,7 +6,8 @@
 
 // Pure state machine that turns physical key transitions into gestures:
 // double Shift, double Left Ctrl, double Right Ctrl, Left Ctrl + Right Ctrl,
-// Left Shift + Right Shift, double Caps Lock, double left/right Alt.  A double
+// Left Shift + Right Shift, double Caps Lock, double left/right Alt,
+// Right Ctrl + Right Alt, Pause/Break.  A double
 // Alt opens and closes the menu of classic applications.  A double Caps Lock toggles the
 // Caps Lock state twice and so leaves it unchanged.
 // It has no Win32 calls besides VK_* constants, so it is fully unit-testable.
@@ -61,6 +62,10 @@ type
     ChordValid: Boolean;
     ShiftChordActive: Boolean;
     ShiftChordValid: Boolean;
+    // Right Ctrl + Right Alt pressed together and released.
+    CtrlAltChordActive: Boolean;
+    CtrlAltChordValid: Boolean;
+    CtrlAltChordStart: Cardinal;
   end;
 
   TGestureDetector = class
@@ -168,6 +173,7 @@ begin
   FS.RCtrlEligible := False;
   FS.ChordValid := False;
   FS.ShiftChordValid := False;
+  FS.CtrlAltChordValid := False;
   FS.CapsEligible := False;
   FS.AltEligible[0] := False;
   FS.AltEligible[1] := False;
@@ -181,6 +187,7 @@ begin
   ResetTaps;
   FS.ChordActive := False;
   FS.ShiftChordActive := False;
+  FS.CtrlAltChordActive := False;
 end;
 
 function TGestureDetector.ReleaseStaleKeys(const IsPhysicallyDown: TKeyStateQuery;
@@ -204,6 +211,7 @@ begin
     ResetTaps;
     FS.ChordActive := False;
     FS.ShiftChordActive := False;
+    FS.CtrlAltChordActive := False;
   end;
 end;
 
@@ -284,6 +292,13 @@ begin
     FS := FBeforeCtrl;
     FFakeCtrlVK := FLastCtrlDownVK;
   end;
+  // Drivers that report the fake Ctrl as Right Ctrl: a real Right Ctrl
+  // pressed while AltGr is held (Right Ctrl + Right Alt in that order) comes
+  // as the same key, but not together with Right Alt.
+  if (FFakeCtrlVK <> 0) and (VK = FFakeCtrlVK) and not IsKeyUp and
+     FS.KeyDown[VK_RMENU] and not FS.KeyDown[VK] and
+     (Time - FS.KeyDownTime[VK_RMENU] > ALTGR_MAX_GAP_MS) then
+    FFakeCtrlVK := 0;
   if (FFakeCtrlVK <> 0) and (VK = FFakeCtrlVK) then
   begin
     if IsKeyUp then
@@ -390,6 +405,18 @@ begin
       FS.ShiftChordValid := False;
       CancelPending;
     end;
+
+    // A quick press of both keys, like the other gestures: holding AltGr
+    // alone longer could make its auto-repeat look like a Right Ctrl.
+    if FS.CtrlAltChordActive and not FS.KeyDown[VK_RCONTROL] and
+       not FS.KeyDown[VK_RMENU] then
+    begin
+      FS.CtrlAltChordActive := False;
+      if FS.CtrlAltChordValid and (Time - FS.CtrlAltChordStart <= FInterval) then
+        Result := lgRCtrlRAlt;
+      FS.CtrlAltChordValid := False;
+      CancelPending;
+    end;
     Exit;
   end;
 
@@ -436,6 +463,24 @@ begin
     FS.ChordValid := False;
   if FS.ShiftChordActive and not IsShiftKey(VK) then
     FS.ShiftChordValid := False;
+  if FS.CtrlAltChordActive and (VK <> VK_RCONTROL) and (VK <> VK_RMENU) then
+    FS.CtrlAltChordValid := False;
+  // Pause/Break sends its press and release together when pressed, so it
+  // is a gesture on the press, alone (Ctrl+Pause is VK_CANCEL).  Its scan
+  // code sequence (E1 1D 45) can also be reported partly as Num Lock.
+  if (VK = VK_PAUSE) and not OtherKeysDown(VK_PAUSE, VK_NUMLOCK, VK_PAUSE) then
+    Result := lgPause;
+  // Right Ctrl + Right Alt in either order.
+  if ((VK = VK_RMENU) and FS.KeyDown[VK_RCONTROL]) or
+     ((VK = VK_RCONTROL) and FS.KeyDown[VK_RMENU]) then
+  begin
+    FS.CtrlAltChordActive := True;
+    FS.CtrlAltChordValid := not OtherKeysDown(VK_RCONTROL, VK_RMENU, VK_RMENU);
+    if VK = VK_RMENU then
+      FS.CtrlAltChordStart := FS.KeyDownTime[VK_RCONTROL]
+    else
+      FS.CtrlAltChordStart := FS.KeyDownTime[VK_RMENU];
+  end;
 
   if IsShiftKey(VK) then
   begin

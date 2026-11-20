@@ -1,0 +1,150 @@
+# Release build signed by SignPath (free code signing for open source:
+# https://signpath.org).  See docs/SIGNING.md for the one-time setup.
+#
+# Delphi cannot be installed on GitHub-hosted runners, so the build runs on a
+# self-hosted Windows runner with RAD Studio 12 and Inno Setup (labels
+# "self-hosted", "windows", "delphi").
+#
+# Steps: build + unit tests -> sign LS.exe (x64, x86) -> installer -> sign
+# the installer -> winget manifests -> draft GitHub release.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write   # draft release
+  actions: read     # SignPath reads the workflow run and its artifacts
+
+jobs:
+  release:
+    runs-on: [self-hosted, windows, delphi]
+    env:
+      SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+      SIGNPATH_PROJECT_SLUG: LayoutSwitcher
+      SIGNPATH_POLICY_SLUG: release-signing
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Build and unit tests
+        shell: cmd
+        run: call build-release.cmd /binaries
+
+      - name: Find the version
+        id: version
+        shell: pwsh
+        run: |
+          $version = (Get-Item Win64/Release/LS.exe).VersionInfo.FileVersion
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Collect the executables
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path out/unsigned | Out-Null
+          Copy-Item Win64/Release/LS.exe out/unsigned/LS-x64.exe
+          Copy-Item Win32/Release/LS.exe out/unsigned/LS-x86.exe
+
+      - name: Upload the unsigned executables
+        id: upload-executables
+        uses: actions/upload-artifact@v4
+        with:
+          name: executables-unsigned
+          path: out/unsigned
+          if-no-files-found: error
+
+      - name: Sign the executables (SignPath)
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ env.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ env.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ env.SIGNPATH_POLICY_SLUG }}
+          artifact-configuration-slug: executables
+          github-artifact-id: ${{ steps.upload-executables.outputs.artifact-id }}
+          parameters: |
+            version: "${{ steps.version.outputs.version }}"
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: out/signed
+
+      - name: Use the signed executables
+        shell: pwsh
+        run: |
+          $signed = 'out/signed'
+          Get-ChildItem $signed -Filter *.zip | ForEach-Object {
+            Expand-Archive $_.FullName -DestinationPath $signed -Force
+          }
+          Copy-Item "$signed/LS-x64.exe" Win64/Release/LS.exe -Force
+          Copy-Item "$signed/LS-x86.exe" Win32/Release/LS.exe -Force
+          foreach ($file in 'Win64/Release/LS.exe', 'Win32/Release/LS.exe') {
+            $sig = Get-AuthenticodeSignature $file
+            if ($sig.Status -ne 'Valid') { throw "$file is not signed: $($sig.Status)" }
+            Write-Output "$file signed by $($sig.SignerCertificate.Subject)"
+          }
+
+      - name: Installer
+        shell: cmd
+        run: call build-release.cmd /package
+
+      - name: Collect the installer
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path out/installer | Out-Null
+          Copy-Item "dist/LayoutSwitcher-Setup-${{ steps.version.outputs.version }}.exe" out/installer/
+
+      - name: Upload the unsigned installer
+        id: upload-installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-unsigned
+          path: out/installer
+          if-no-files-found: error
+
+      - name: Sign the installer (SignPath)
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ env.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ env.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ env.SIGNPATH_POLICY_SLUG }}
+          artifact-configuration-slug: installer
+          github-artifact-id: ${{ steps.upload-installer.outputs.artifact-id }}
+          parameters: |
+            version: "${{ steps.version.outputs.version }}"
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: out/installer-signed
+
+      - name: Release files and winget manifests
+        shell: pwsh
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          $signed = 'out/installer-signed'
+          Get-ChildItem $signed -Filter *.zip | ForEach-Object {
+            Expand-Archive $_.FullName -DestinationPath $signed -Force
+          }
+          $installer = "dist/LayoutSwitcher-Setup-$version.exe"
+          Copy-Item "$signed/LayoutSwitcher-Setup-$version.exe" $installer -Force
+          if ((Get-AuthenticodeSignature $installer).Status -ne 'Valid') {
+            throw 'The installer is not signed.'
+          }
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools/make-winget.ps1 `
+            -Version $version -InstallerPath $installer -OutDir dist/winget
+          Compress-Archive -Path "dist/winget/LenAR.LayoutSwitcher/$version/*" `
+            -DestinationPath "dist/winget-manifests-$version.zip" -Force
+
+      - name: Draft GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', steps.version.outputs.version) }}
+          name: LayoutSwitcher ${{ steps.version.outputs.version }}
+          files: |
+            dist/LayoutSwitcher-Setup-${{ steps.version.outputs.version }}.exe
+            dist/LayoutSwitcher-${{ steps.version.outputs.version }}-x64.exe
+            dist/LayoutSwitcher-${{ steps.version.outputs.version }}-x86.exe
+            dist/winget-manifests-${{ steps.version.outputs.version }}.zip

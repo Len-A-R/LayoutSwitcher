@@ -13,7 +13,7 @@
 
 uses
   Winapi.Windows, Winapi.Messages,
-  System.SysUtils, System.Classes,
+  System.SysUtils, System.Classes, Winapi.ActiveX,
   Vcl.Forms, Vcl.Controls, Vcl.StdCtrls, Vcl.ComCtrls,
   uSettings in '..\..\uSettings.pas',
   uLocale in '..\..\uLocale.pas',
@@ -23,6 +23,7 @@ uses
   uLayoutConverter in '..\..\uLayoutConverter.pas',
   uClipboardSnapshot in '..\..\uClipboardSnapshot.pas',
   uConversionChain in '..\..\uConversionChain.pas',
+  uSpellCheck in '..\..\uSpellCheck.pas',
   uOperationWorker in '..\..\uOperationWorker.pas';
 
 const
@@ -89,8 +90,11 @@ begin
     raise TFocusLost.Create('the test window lost the focus');
 end;
 
+type
+  TRequestSetup = reference to procedure(Request: TOperationRequest);
+
 function Run(Action: TLSAction; Control: TWinControl;
-  const Plan: TBufferPlan): TOperationResult;
+  const Plan: TBufferPlan; const Setup: TRequestSetup = nil): TOperationResult;
 var
   Request: TOperationRequest;
   Started: DWORD;
@@ -104,6 +108,8 @@ begin
   Request.FocusWnd := Control.Handle;
   Request.WindowLayout := GetKeyboardLayout(0);
   Request.PreviousLayout := 0;
+  if Assigned(Setup) then
+    Setup(Request);
   if not Worker.Post(Request) then
     raise Exception.Create('cannot post the request');
   Started := GetTickCount;
@@ -305,6 +311,108 @@ begin
   end;
 end;
 
+// 2.4: what the main window queues after a space or while typing.
+procedure ScenarioAutomaticCorrections;
+var
+  Res: TOperationResult;
+  Text: string;
+  Spell: TSpellCheck;
+  HasRussianDictionary: Boolean;
+begin
+  // Capital letter at the start of a sentence, nothing else to fix.
+  SetEdit('Привет. как ', 12, 0);
+  Res := Run(laAutoSwitch, Form.Edit, TConversionChain.PlanWord(Form.Edit.Text, 9, 3),
+    procedure(Request: TOperationRequest)
+    begin
+      Request.Capitalize := True;
+    end);
+  try
+    Check('capital: first word of a sentence', Form.Edit.Text = 'Привет. Как ',
+      Form.Edit.Text);
+    Check('capital: reported as capital only', Res.Success and Res.CapitalOnly);
+  finally
+    Res.Free;
+  end;
+
+  // Accidental double space.
+  SetEdit('слово  ', 7, 0);
+  Res := Run(laNone, Form.Edit, TConversionChain.PlanReplacement(Form.Edit.Text, 6, 2, ' '));
+  Res.Free;
+  Check('double space removed', Form.Edit.Text = 'слово ', '"' + Form.Edit.Text + '"');
+
+  // Template with {cursor}: the caret ends up between the tags.
+  SetEdit('x ;b ', 5, 0);
+  Res := Run(laNone, Form.Edit, TConversionChain.PlanReplacement(Form.Edit.Text, 3, 2,
+    '<b></b>'),
+    procedure(Request: TOperationRequest)
+    begin
+      Request.CaretBack := 4;
+    end);
+  Res.Free;
+  Check('template: text inserted', Form.Edit.Text = 'x <b></b> ', Form.Edit.Text);
+  Check('template: caret at {cursor}', Form.Edit.SelStart = 5,
+    IntToStr(Form.Edit.SelStart));
+
+  // Multi-line template in a RichEdit.
+  Form.Rich.Text := 'a ;s ';
+  Form.Rich.SelStart := Form.Rich.GetTextLen;
+  Res := Run(laNone, Form.Rich, TConversionChain.PlanReplacement('a ;s ', 3, 2,
+    'Line1'#13#10'Line2'));
+  Res.Free;
+  Text := StringReplace(Form.Rich.Text, sLineBreak, '|', [rfReplaceAll]);
+  Text := StringReplace(Text, #13, '|', [rfReplaceAll]);
+  Check('template: line break in a RichEdit', Text = 'a Line1|Line2 ', Text);
+
+  // Swapped letters (needs the Russian spelling dictionary).
+  Spell := TSpellCheck.Create;
+  try
+    HasRussianDictionary := Spell.CheckWord('ru-RU', 'привет') <> scUnknown;
+  finally
+    Spell.Free;
+  end;
+  if not HasRussianDictionary or (RuLayout = 0) then
+    Skip('typo fix', 'no Russian layout or spelling dictionary')
+  else
+  begin
+    ActivateKeyboardLayout(RuLayout, 0);
+    SetEdit('скажи пирвет ', 13, 0);
+    Res := Run(laAutoSwitch, Form.Edit, TConversionChain.PlanWord(Form.Edit.Text, 7, 6),
+      procedure(Request: TOperationRequest)
+      begin
+        Request.WindowLayout := RuLayout;
+        Request.AllowTypoFix := True;
+      end);
+    try
+      Check('typo: swapped letters fixed', Form.Edit.Text = 'скажи привет ',
+        Form.Edit.Text);
+      Check('typo: reported', Res.TypoFixed and (Res.FixedWord = 'привет'), Res.FixedWord);
+    finally
+      Res.Free;
+    end;
+  end;
+
+  // Layout switch decided while typing: "ghb" -> "при", layout Russian.
+  if (EnLayout = 0) or (RuLayout = 0) then
+    Skip('in-word switch', 'US English and Russian layouts are not both installed')
+  else
+  begin
+    ActivateKeyboardLayout(EnLayout, 0);
+    SetEdit('ghb', 3, 0);
+    Res := Run(laAutoSwitch, Form.Edit, TConversionChain.PlanWord(Form.Edit.Text, 1, 3),
+      procedure(Request: TOperationRequest)
+      begin
+        Request.InWord := True;
+        Request.AllowLayoutSwitch := True;
+        Request.Plan.ForcedSource := EnLayout;
+        Request.Plan.ForcedTarget := RuLayout;
+      end);
+    Res.Free;
+    Check('in-word: start converted', Form.Edit.Text = 'при', Form.Edit.Text);
+    Check('in-word: layout switched to Russian', GetKeyboardLayout(0) = RuLayout,
+      IntToHex(NativeUInt(GetKeyboardLayout(0)), 8));
+  end;
+end;
+
 procedure FindLayouts;
 var
   Layout: HKL;
@@ -319,6 +427,7 @@ begin
 end;
 
 begin
+  CoInitializeEx(nil, COINIT_APARTMENTTHREADED);
   Application.Initialize;
   Form := THarnessForm.CreateNew(nil);
   Chain := TConversionChain.Create;
@@ -353,6 +462,7 @@ begin
         ScenarioNativeSelection;
         ScenarioPassword;
         ScenarioRichEditAfterLineBreak;
+        ScenarioAutomaticCorrections;
       except
         on E: TFocusLost do
         begin

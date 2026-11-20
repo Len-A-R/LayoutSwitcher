@@ -10,7 +10,7 @@ uses
   Winapi.Windows, Winapi.Messages,
   System.SysUtils, System.Classes, System.Generics.Collections,
   Vcl.Graphics, Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.ExtCtrls, Vcl.Menus,
-  System.ImageList, Vcl.ImgList, PngImageList, Vcl.StdCtrls, Vcl.ComCtrls,
+  Vcl.StdCtrls, Vcl.ComCtrls, Vcl.Grids, uProgramList, uAiExplain, uExplainWindow, uModernUI,
   uSettings, uGestureDetector, uOperationWorker, uConversionChain,
   uLayoutIndicator, uUpdateCheck, uUpdateProgress, uLayoutConverter, uTextTools;
 
@@ -34,7 +34,6 @@ type
     mniDiagnostics: TMenuItem;
     mniSeparator: TMenuItem;
     mniExit: TMenuItem;
-    TrayIcons: TPngImageList;
     TimerLayout: TTimer;
     TimerPause: TTimer;
     TimerUpdate: TTimer;
@@ -46,7 +45,9 @@ type
     pcMain: TPageControl;
     tsGeneral: TTabSheet;
     tsHotkeys: TTabSheet;
+    tsLayout: TTabSheet;
     tsCorrections: TTabSheet;
+    tsSnippets: TTabSheet;
     tsExclusions: TTabSheet;
     lblConvert: TLabel;
     cbConvert: TComboBox;
@@ -71,8 +72,13 @@ type
     chkCheckUpdates: TCheckBox;
     lblLanguage: TLabel;
     cbLanguage: TComboBox;
-    lblExcluded: TLabel;
-    edExcluded: TMemo;
+    lblPrograms: TLabel;
+    edProgramFilter: TEdit;
+    chkProgramsCheckedOnly: TCheckBox;
+    sgPrograms: TStringGrid;
+    btnAddProgram: TButton;
+    btnRemoveProgram: TButton;
+    btnDefaultPrograms: TButton;
     lblStorage: TLabel;
     btnExport: TButton;
     btnImport: TButton;
@@ -80,6 +86,24 @@ type
     cbTranslate: TComboBox;
     lblWebSearch: TLabel;
     cbWebSearch: TComboBox;
+    lblTranslateReplace: TLabel;
+    cbTranslateReplace: TComboBox;
+    lblExplain: TLabel;
+    cbExplain: TComboBox;
+    tsServices: TTabSheet;
+    lblAiHeader: TLabel;
+    lblAiService: TLabel;
+    cbAiService: TComboBox;
+    lblAiKey: TLabel;
+    edAiKey: TEdit;
+    lblAiUrl: TLabel;
+    edAiUrl: TEdit;
+    lblAiModel: TLabel;
+    edAiModel: TEdit;
+    lblAiNote: TLabel;
+    btnAiTest: TButton;
+    lblDeepLKey: TLabel;
+    edDeepLKey: TEdit;
     lblTranslator: TLabel;
     cbTranslator: TComboBox;
     lblSearchEngine: TLabel;
@@ -87,26 +111,36 @@ type
     chkFixCapsLock: TCheckBox;
     chkFixTwoCapitals: TCheckBox;
     lblTwoCapsExceptions: TLabel;
-    edTwoCapsExceptions: TEdit;
+    memTwoCapsExceptions: TMemo;
     chkSnippets: TCheckBox;
     lblSnippetsHint: TLabel;
     memSnippets: TMemo;
+    chkAutoReplace: TCheckBox;
+    lblAutoReplaceHint: TLabel;
+    memAutoReplace: TMemo;
     lblCorrectionsNote: TLabel;
     chkSound: TCheckBox;
+    cbSound: TComboBox;
+    btnSoundTest: TButton;
     chkAutoSwitch: TCheckBox;
     lblAutoSwitchHint: TLabel;
+    chkFixTypos: TCheckBox;
     lblAutoSwitchExceptions: TLabel;
-    edAutoSwitchExceptions: TEdit;
-    lblNoAutoCorrect: TLabel;
-    memNoAutoCorrect: TMemo;
-    btnDefaultNoAutoCorrect: TButton;
+    memAutoSwitchExceptions: TMemo;
+    chkInWordSwitch: TCheckBox;
+    chkLearnManual: TCheckBox;
+    lblAutoSwitchLearned: TLabel;
+    memAutoSwitchLearned: TMemo;
+    lblLayoutNote: TLabel;
+    chkFixTyposExtended: TCheckBox;
+    chkCapitalize: TCheckBox;
+    chkDoubleSpace: TCheckBox;
     mniClipboard: TMenuItem;
     mniClipConvert: TMenuItem;
     mniClipUpper: TMenuItem;
     mniClipLower: TMenuItem;
     mniClipTranslit: TMenuItem;
     mniSeparator3: TMenuItem;
-    btnDefaultExcluded: TButton;
     btnReport: TButton;
     btnClose: TButton;
     procedure FormCreate(Sender: TObject);
@@ -126,16 +160,29 @@ type
     procedure cbServiceChange(Sender: TObject);
     procedure edCorrectionsExit(Sender: TObject);
     procedure mniClipboardClick(Sender: TObject);
-    procedure btnDefaultNoAutoCorrectClick(Sender: TObject);
+    procedure edProgramFilterChange(Sender: TObject);
+    procedure chkProgramsCheckedOnlyClick(Sender: TObject);
+    procedure sgProgramsDrawCell(Sender: TObject; ACol, ARow: Integer; Rect: TRect;
+      State: TGridDrawState);
+    procedure sgProgramsMouseUp(Sender: TObject; Button: TMouseButton;
+      Shift: TShiftState; X, Y: Integer);
+    procedure sgProgramsKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
+    procedure sgProgramsSelectCell(Sender: TObject; ACol, ARow: Integer;
+      var CanSelect: Boolean);
+    procedure btnAddProgramClick(Sender: TObject);
+    procedure btnRemoveProgramClick(Sender: TObject);
+    procedure btnDefaultProgramsClick(Sender: TObject);
     procedure chkAutorunClick(Sender: TObject);
+    procedure cbSoundChange(Sender: TObject);
+    procedure cbAiServiceChange(Sender: TObject);
+    procedure btnAiTestClick(Sender: TObject);
+    procedure btnSoundTestClick(Sender: TObject);
     procedure chkAutorunElevatedClick(Sender: TObject);
     procedure chkDiagnosticsClick(Sender: TObject);
     procedure cbGestureChange(Sender: TObject);
     procedure edIntervalChange(Sender: TObject);
     procedure edIntervalExit(Sender: TObject);
     procedure chkBehaviorClick(Sender: TObject);
-    procedure edExcludedExit(Sender: TObject);
-    procedure btnDefaultExcludedClick(Sender: TObject);
     procedure btnCloseClick(Sender: TObject);
     procedure mniSettingsClick(Sender: TObject);
     procedure mniPauseClick(Sender: TObject);
@@ -160,7 +207,8 @@ type
 
     FPaused: Boolean;
     FPauseUntil: TDateTime;
-    FPausedIconBase: Integer;
+    // EN, RU and their grey copies for the paused state (ICON_*).
+    FTrayIcons: array[0..3] of TIcon;
 
     FOperationBusy: Boolean;
     FOperationStarted: DWORD;
@@ -188,6 +236,7 @@ type
     FProgress: TUpdateProgressWindow;
     FCatalog: TKeyboardLayoutCatalog;
     FSnippets: TArray<TSnippet>;
+    FAutoReplace: TArray<TAutoReplace>;
     // Caps Lock state tracked from Raw Input: GetKeyState in this thread does
     // not see key messages of other applications.
     FCapsOn: Boolean;
@@ -196,9 +245,54 @@ type
     FSettleFocusNext: Boolean;
     // Process of the focused window (rules for programs).
     FLastProcessName: string;
+    FAutoCorrectSkipLogged: string;
     // Word changed by the last automatic layout switch; an immediate undo
     // adds it to the exceptions.
     FAutoSwitchOriginal: string;
+    FAutoSwitchResult: string;
+    // The last automatic switch or typo fix, for the tray menu.
+    FLastAutoWord: string;
+    FLastAutoResult: string;
+    // Manual conversion counted for learning; rolled back if the user widens
+    // or reverts it right away.
+    FLastLearnWord: string;
+    FLastLearnPromoted: Boolean;
+    // Options of the next QueueRequest.
+    FCapitalizeNext: Boolean;
+    FInWordNext: Boolean;
+    FCaretBackNext: Integer;
+    FPendingStamp: Integer;
+    // The buffer was dropped in the middle of a word: the next space ends a
+    // fragment, which must not be corrected.
+    FPartialWord: Boolean;
+    // Buffer right after a removed double space; one more space then means
+    // the user wants the spaces.
+    FDoubleSpaceNext: Boolean;
+    FPendingDoubleSpace: Boolean;
+    FDoubleSpaceFixed: string;
+    // Automatic corrections off until then (tray menu), 0 when on.
+    FAutoCorrectPausedUntil: TDateTime;
+    FMenuQuickSeparator: TMenuItem;
+    FMenuAutoCorrectOff: TMenuItem;
+    FMenuNeverFixLast: TMenuItem;
+    FMenuProgramRule: TMenuItem;
+    // Exclusions table: programs found on the computer (read when the tab
+    // is opened for the first time), all rows and the rows shown.
+    FInstalledPrograms: TArray<TProgramEntry>;
+    FProgramsLoaded: Boolean;
+    FProgramScan: TProgramScanThread;
+    // AI explanation window and the answer it waits for.
+    FExplainWindow: TExplainWindow;
+    FExplainSequence: Cardinal;
+    // Windows 11 look of the settings window: side navigation, page title,
+    // flat buttons (built over the form at start).
+    FUiTheme: TUiTheme;
+    FNav: TNavBar;
+    FPageTitle: TLabel;
+    FFlatReport: TFlatButton;
+    FFlatClose: TFlatButton;
+    FPrograms: TArray<TProgramEntry>;
+    FVisiblePrograms: TArray<Integer>;
     FUpdateNotes: string;
     FPendingToggleCaps: Boolean;
 
@@ -227,11 +321,26 @@ type
     procedure PauseFor(Minutes: Integer);
     procedure Resume;
     procedure UpdatePauseState;
-    procedure CreatePausedIcons;
+    procedure CreateTrayIcons;
 
     procedure LoadControlsFromSettings;
     procedure ApplySettings;
-    procedure ApplyExcludedFromEdit;
+    procedure EnsureProgramsLoaded;
+    procedure RefreshProgramGrid;
+    procedure SetupProgramGrid;
+    procedure ToggleProgram(Row, Col: Integer);
+    function ProgramAtRow(Row: Integer; out Entry: TProgramEntry): Boolean;
+    procedure UpdateProgramButtons;
+    procedure pcMainChange(Sender: TObject);
+    procedure ProgramScanDone(Sender: TObject);
+    procedure ModernizeSettingsWindow;
+    procedure NavChange(Sender: TObject);
+    procedure SettingsKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
+    function CurrentAiConfig: TAiConfig;
+    procedure LoadAiControls;
+    procedure ApplyAiFromEdit;
+    procedure StartExplain(const Text: string);
+    procedure ExplainDone(Sender: TObject);
     procedure SyncAutorunPath;
     procedure UpdateAutorunControls;
     procedure ShowSettingsWindow;
@@ -252,7 +361,16 @@ type
     procedure HandleDownloadResult(Res: TUpdateDownloadResult);
     procedure HandleDownloadProgress(ReceivedKB, TotalKB: Int64);
     procedure OfferUpdate;
-    procedure LearnAutoSwitchException(const Word: string);
+    procedure LearnAutoSwitchException(const Word, Converted: string);
+    procedure CheckInWordSwitch;
+    procedure CommitPendingEdits;
+    procedure TrackManualConversion(Res: TOperationResult);
+    function AutoCorrectionsPaused: Boolean;
+    procedure CreateQuickMenu;
+    procedure PopupMenuPopup(Sender: TObject);
+    procedure QuickAutoCorrectOffClick(Sender: TObject);
+    procedure QuickNeverFixLastClick(Sender: TObject);
+    procedure QuickProgramRuleClick(Sender: TObject);
     procedure DownloadCancel(Sender: TObject);
     function DownloadRunning: Boolean;
   protected
@@ -275,9 +393,10 @@ implementation
 uses
   System.DateUtils,
   Winapi.ShellAPI, Winapi.ShlObj,
-  PngImage, PngFunctions,
+  Vcl.Imaging.pngimage, uTrayIconData,
   System.StrUtils,
-  uDiagnostics, uWinUtils, uTaskAutorun, uLocale, uSettingsStore, uClipboardSnapshot;
+  uDiagnostics, uWinUtils, uTaskAutorun, uLocale, uSettingsStore, uClipboardSnapshot,
+  uSpellCheck, uInWordSwitch, Vcl.Themes, uSounds;
 
 const
   WM_LS_OPERATION_DONE = WM_APP + 10;
@@ -293,6 +412,9 @@ const
   // Keys tracked as held longer than this are checked against the physical
   // keyboard state before each key press.
   STALE_KEY_MIN_AGE_MS = 250;
+  // A word converted manually this many times is switched automatically.
+  LEARN_AFTER_CONVERSIONS = 2;
+  AUTO_CORRECT_OFF_MINUTES = 60;
 
   WM_WTSSESSION_CHANGE = $02B1;
   NOTIFY_FOR_THIS_SESSION = 0;
@@ -327,15 +449,20 @@ const
 
   ICON_EN = 0;
   ICON_RU = 1;
+  ICON_PAUSED = 2;  // + ICON_EN / ICON_RU
   LANG_EN = $0409;
   LANG_RU = $0419;
 
   ShortGestureNames: array[TLSGesture] of string = (
     '', 'Shift×2', 'LCtrl×2', 'RCtrl×2', 'Ctrl+Ctrl', 'Shift+Shift', 'Caps×2',
-    'RAlt×2', 'LAlt×2');
+    'RAlt×2', 'LAlt×2', 'RCtrl+RAlt', 'Pause');
+  AI_PROVIDER_FREE = 0;
+  AI_PROVIDER_CLAUDE = 1;
+  AI_PROVIDER_OPENAI = 2;
 
 function ShortActionName(Action: TLSAction): string; forward;
 function ContainsDigit(const Text: string): Boolean; forward;
+function RemoveWord(const List: TArray<string>; const Word: string): TArray<string>; forward;
 
 type
   TLSRawInputDevice = record
@@ -406,6 +533,8 @@ end;
 procedure TFormMain.CreateWnd;
 begin
   inherited;
+  if Assigned(FNav) then
+    ApplyWindowChrome(Handle, FUiTheme, FUiTheme.Footer);
   // Lets a second launch find this instance and allows the message through
   // UIPI when this instance runs elevated.
   SetProp(Handle, INSTANCE_WINDOW_PROP, 1);
@@ -431,8 +560,11 @@ begin
   FIndicator := TLayoutIndicator.Create;
   FCatalog := TKeyboardLayoutCatalog.Create;
   FSnippets := ParseSnippets(FSettings.Snippets);
+  FAutoReplace := ParseAutoReplace(FSettings.AutoReplace);
   FCapsShiftLock := IsCapsLockOffByShift;
   FCapsOn := (GetKeyState(VK_CAPITAL) and 1) <> 0;
+  // Before any window of the form exists: the layout is resized once.
+  ModernizeSettingsWindow;
   ApplyLanguage;
 
   // Assigning Checked raises OnClick; the guard keeps FormCreate from
@@ -454,7 +586,10 @@ begin
   SetWindowLong(Application.Handle, GWL_EXSTYLE,
     GetWindowLong(Application.Handle, GWL_EXSTYLE) and not WS_EX_APPWINDOW);
 
-  CreatePausedIcons;
+  CreateTrayIcons;
+  CreateQuickMenu;
+  SetupProgramGrid;
+  pcMain.OnChange := pcMainChange;
 
   FWorker := TOperationWorker.Create(Handle, WM_LS_OPERATION_DONE);
   if not FWorker.WaitUntilReady(5000) then
@@ -484,6 +619,7 @@ end;
 procedure TFormMain.FormDestroy(Sender: TObject);
 var
   Msg: TMsg;
+  I: Integer;
 begin
   DiagnosticsLog('form.destroy begin');
   LSWTSUnRegisterSessionNotification(Handle);
@@ -518,6 +654,16 @@ begin
   while PeekMessage(Msg, Handle, WM_LS_UPDATE_DOWNLOADED, WM_LS_UPDATE_DOWNLOADED,
           PM_REMOVE) do
     TUpdateDownloadResult(Msg.lParam).Free;
+  for I := Low(FTrayIcons) to High(FTrayIcons) do
+    FreeAndNil(FTrayIcons[I]);
+  // AI requests still running finish on their own; their results are ignored.
+  FExplainSequence := 0;
+  if Assigned(FProgramScan) then
+  begin
+    FProgramScan.OnTerminate := nil;
+    FProgramScan.WaitFor;
+    FreeAndNil(FProgramScan);
+  end;
   FreeAndNil(FIndicator);
   FreeAndNil(FCatalog);
   FreeAndNil(FDetector);
@@ -528,7 +674,6 @@ end;
 
 procedure TFormMain.FormCloseQuery(Sender: TObject; var CanClose: Boolean);
 begin
-  ApplyExcludedFromEdit;
   ApplyCorrectionsFromEdit;
   CanClose := False;
   Hide;
@@ -825,7 +970,7 @@ begin
         'after a double Caps Lock. Press Shift or assign another gesture.'));
     end;
     // After a double Alt the application still has to leave its menu mode.
-    FSettleFocusNext := Gesture in [lgDoubleRAlt, lgDoubleLAlt];
+    FSettleFocusNext := Gesture in [lgDoubleRAlt, lgDoubleLAlt, lgRCtrlRAlt];
     QueueAction(FSettings.ActionForGesture(Gesture));
     FSettleFocusNext := False;
   end;
@@ -881,7 +1026,8 @@ begin
           BufferBackspace;
         Exit;
       end;
-    VK_CAPITAL, VK_NUMLOCK, VK_SCROLL:
+    // Lock keys and Pause/Break (a gesture key) do not change the text.
+    VK_CAPITAL, VK_NUMLOCK, VK_SCROLL, VK_PAUSE:
       Exit;
   end;
 
@@ -895,7 +1041,9 @@ begin
   begin
     AddChar(Ch);
     if Ch = ' ' then
-      CheckAutoCorrections;
+      CheckAutoCorrections
+    else
+      CheckInWordSwitch;
   end
   else
     ClearBuffer;
@@ -957,6 +1105,7 @@ begin
   // Any manual edit ends the word -> phrase -> revert chain.
   FChain.Reset;
   FAutoSwitchOriginal := '';
+  FLastLearnWord := '';
   if FBufferOverflowed then
     Exit;
   if Length(FBuffer) >= MAX_PHRASE_LEN then
@@ -972,6 +1121,7 @@ procedure TFormMain.BufferBackspace;
 begin
   FChain.Reset;
   FAutoSwitchOriginal := '';
+  FLastLearnWord := '';
   if not FBufferOverflowed and (FBuffer <> '') then
     SetLength(FBuffer, Length(FBuffer) - 1);
 end;
@@ -980,6 +1130,7 @@ procedure TFormMain.ClearBuffer;
 begin
   FBuffer := '';
   FBufferOverflowed := False;
+  FPartialWord := False;
   if Assigned(FChain) then
     FChain.Reset;
 end;
@@ -1005,10 +1156,13 @@ var
 begin
   if (Action = laNone) or FPaused then
     Exit;
-  if not FBufferOverflowed and not FFocusIsPassword then
-    Plan := FChain.Plan(Action, FBuffer)
+  if FBufferOverflowed or FFocusIsPassword then
+    Plan := FChain.Plan(laNone, '')
+  else if Action = laTranslateReplace then
+    // A translation needs the whole phrase, not only the last word.
+    Plan := TConversionChain.PlanPhrase(FBuffer)
   else
-    Plan := FChain.Plan(laNone, '');
+    Plan := FChain.Plan(Action, FBuffer);
   if (Action = laUndo) and (Plan.Mode <> bmUndo) then
   begin
     DiagnosticsLog('operation.skipped action=undo reason=nothing_to_undo');
@@ -1087,6 +1241,17 @@ begin
   Request.ToggleCapsLock := ToggleCaps;
   Request.SettleFocus := FSettleFocusNext;
   Request.AutoSwitchExceptions := FSettings.AutoSwitchExceptions;
+  Request.AllowLayoutSwitch := FSettings.AutoSwitchEnabled;
+  // The start of a word being typed is only ever switched, never "fixed".
+  Request.AllowTypoFix := FSettings.FixTypos and not FInWordNext;
+  Request.TypoExtended := Request.AllowTypoFix and FSettings.FixTyposExtended;
+  Request.AutoSwitchLearned := FSettings.AutoSwitchLearned;
+  Request.InWord := FInWordNext;
+  Request.Capitalize := FCapitalizeNext and not FInWordNext;
+  Request.CaretBack := FCaretBackNext;
+  Request.DeepLApiKey := FSettings.DeepLApiKey;
+  FPendingStamp := Request.KeystrokeStamp;
+  FPendingDoubleSpace := FDoubleSpaceNext;
   if FCapsShiftLock then
     Request.CapsOffKey := VK_SHIFT
   else
@@ -1119,9 +1284,11 @@ begin
     end;
     FOperationBusy := False;
 
-    if Res.Action in [laTranslate, laWebSearch] then
+    if Res.Action in [laTranslate, laWebSearch, laExplain] then
     begin
-      if Res.Success then
+      if Res.Success and (Res.Action = laExplain) then
+        StartExplain(Res.LookupText)
+      else if Res.Success then
       begin
         if Res.Action = laTranslate then
           ShellExecute(0, 'open', PChar(BuildTranslateUrl(FSettings.Translator,
@@ -1147,25 +1314,67 @@ begin
     // Undoing an automatic layout switch right away teaches an exception.
     if Res.Success and (FAutoSwitchOriginal <> '') and
        (FPendingPlan.Mode in [bmUndo, bmRevert]) then
-      LearnAutoSwitchException(FAutoSwitchOriginal);
+      LearnAutoSwitchException(FAutoSwitchOriginal, FAutoSwitchResult);
     if Res.Action <> laAutoSwitch then
       FAutoSwitchOriginal := '';
     if FSettings.SoundEnabled and Res.Success and (Res.BufferAction = baSet) then
-      MessageBeep(MB_OK);
+      PlayFeedbackSound(FSettings.SoundKind, FSettings.SoundFile);
 
-    case Res.BufferAction of
-      baClear: ClearBuffer;
-      baSet: SetBufferText(Res.NewBufferText);
+    if (Res.BufferAction = baSet) and FPendingAutomatic and
+       (AtomicCmpExchange(GKeystrokeCount, 0, 0) <> FPendingStamp) then
+    begin
+      // Keys typed while the correction was applied follow the corrected
+      // text (the buffer has them as they appeared on the screen).
+      if StartsStr(FPendingPlan.Text, FBuffer) then
+      begin
+        SetBufferText(Res.NewBufferText + Copy(FBuffer, Length(FPendingPlan.Text) + 1, MaxInt));
+        DiagnosticsLog('buffer.extended reason=typed_during_correction');
+      end
+      else
+      begin
+        ClearBuffer;
+        FPartialWord := True;
+        DiagnosticsLog('buffer.cleared reason=typed_during_correction');
+      end;
+    end
+    else
+      case Res.BufferAction of
+        baClear: ClearBuffer;
+        baSet: SetBufferText(Res.NewBufferText);
+      end;
+    if Res.Success and FPendingDoubleSpace then
+      FDoubleSpaceFixed := FBuffer;
+    // The last automatic change of a word, for "Never change" in the tray.
+    if Res.Success and Res.UsedBuffer and (Res.Action = laAutoSwitch) and
+       not Res.CapitalOnly then
+    begin
+      FLastAutoWord := FPendingPlan.Region;
+      FLastAutoResult := Res.FixedWord;
     end;
     // Remember the step so that repeating the action widens it.
     if not Res.Success or (FBuffer = '') then
       FChain.Reset
+    else if Res.UsedBuffer and (Res.TypoFixed or Res.CapitalOnly) then
+    begin
+      // Undo-able like the other corrections; double Shift converts as usual.
+      FChain.Completed(FPendingPlan, laNone, FBuffer, 0, 0);
+      if Res.TypoFixed then
+      begin
+        FAutoSwitchOriginal := FPendingPlan.Region;
+        FAutoSwitchResult := Res.FixedWord;
+        DiagnosticsLog('typo.applied');
+      end
+      else
+        DiagnosticsLog('autocorrect.capitalized');
+    end
     else if Res.UsedBuffer and (Res.Action = laAutoSwitch) then
     begin
       FChain.CompletedAutoSwitch(FPendingPlan, FBuffer, Res.SourceLayout,
         Res.TargetLayout);
       FAutoSwitchOriginal := FPendingPlan.Region;
-      DiagnosticsLog('autoswitch.applied');
+      FAutoSwitchResult := Res.FixedWord;
+      DiagnosticsLogFmt('autoswitch.applied learned=%s',
+        [BoolToStr(Res.LearnedSwitch, True)]);
     end
     else if Res.UsedBuffer then
       FChain.Completed(FPendingPlan, Res.Action, FBuffer, Res.SourceLayout,
@@ -1175,6 +1384,8 @@ begin
         Res.SourceLayout, Res.TargetLayout);
     if Res.Success and (Res.SourceLayout <> 0) then
       FPreviousLayout := Res.SourceLayout;
+    if Res.Success and Res.UsedBuffer and not FPendingAutomatic then
+      TrackManualConversion(Res);
     // Automatic corrections never bother the user with notifications.
     if (Res.Notification <> '') and not FPendingAutomatic then
     begin
@@ -1254,33 +1465,96 @@ begin
   UpdateTrayIcon(True);
 end;
 
-procedure TFormMain.CreatePausedIcons;
+function IconFromPng(Png: TPngImage): TIcon;
+var
+  Stream: TMemoryStream;
+  Handle: HICON;
+begin
+  // Windows builds an icon directly from PNG data (Vista and later).
+  Result := nil;
+  Stream := TMemoryStream.Create;
+  try
+    Png.SaveToStream(Stream);
+    Handle := CreateIconFromResourceEx(Stream.Memory, Stream.Size, True, $00030000,
+      0, 0, LR_DEFAULTCOLOR);
+    if Handle = 0 then
+      Exit;
+    Result := TIcon.Create;
+    Result.Handle := Handle;
+  finally
+    Stream.Free;
+  end;
+end;
+
+procedure MakePausedImage(Png: TPngImage);
+type
+  TRGB = packed record
+    B, G, R: Byte;
+  end;
+  PRGBLine = ^TRGBLine;
+  TRGBLine = array[0..32767] of TRGB;
+  PAlphaLine = ^TAlphaLine;
+  TAlphaLine = array[0..32767] of Byte;
+var
+  X, Y: Integer;
+  Line: PRGBLine;
+  Alpha: PAlphaLine;
+  Gray: Byte;
+begin
+  // Grey and partly transparent (the PNG is 8-bit RGBA).
+  for Y := 0 to Png.Height - 1 do
+  begin
+    Line := Png.Scanline[Y];
+    Alpha := PAlphaLine(Png.AlphaScanline[Y]);
+    for X := 0 to Png.Width - 1 do
+    begin
+      Gray := (Line[X].R * 30 + Line[X].G * 59 + Line[X].B * 11) div 100;
+      Line[X].R := Gray;
+      Line[X].G := Gray;
+      Line[X].B := Gray;
+      if Alpha <> nil then
+        Alpha[X] := Alpha[X] * 160 div 255;
+    end;
+  end;
+end;
+
+procedure TFormMain.CreateTrayIcons;
+
+  function LoadPng(const Data: array of Byte): TPngImage;
+  var
+    Stream: TMemoryStream;
+  begin
+    Result := TPngImage.Create;
+    Stream := TMemoryStream.Create;
+    try
+      Stream.WriteBuffer(Data[0], Length(Data));
+      Stream.Position := 0;
+      Result.LoadFromStream(Stream);
+    finally
+      Stream.Free;
+    end;
+  end;
+
 var
   I: Integer;
   Png: TPngImage;
 begin
-  // Grey, half-transparent copies of the EN/RU icons for the paused state.
-  FPausedIconBase := -1;
+  for I := ICON_EN to ICON_RU do
   try
-    FPausedIconBase := TrayIcons.Count;
-    for I := ICON_EN to ICON_RU do
-    begin
-      Png := TPngImage.Create;
-      try
-        Png.Assign(TrayIcons.PngImages[I].PngImage);
-        MakeImageGrayscale(Png);
-        MakeImageBlended(Png, 160);
-        TrayIcons.AddPng(Png);
-      finally
-        Png.Free;
-      end;
+    if I = ICON_EN then
+      Png := LoadPng(TrayIconEnPng)
+    else
+      Png := LoadPng(TrayIconRuPng);
+    try
+      FTrayIcons[I] := IconFromPng(Png);
+      MakePausedImage(Png);
+      FTrayIcons[ICON_PAUSED + I] := IconFromPng(Png);
+    finally
+      Png.Free;
     end;
   except
     on E: Exception do
-    begin
-      FPausedIconBase := -1;
-      DiagnosticsLogException('tray.paused_icons', E);
-    end;
+      DiagnosticsLogException('tray.icons', E);
   end;
 end;
 
@@ -1290,7 +1564,6 @@ var
   Layout: HKL;
   LangID: Word;
   Index: Integer;
-  Icon: TIcon;
 begin
   Target := GetFocusedWindow;
   Layout := 0;
@@ -1319,25 +1592,19 @@ begin
   else
     Index := -1;
   end;
-  if FPaused and (FPausedIconBase >= 0) then
+  if FPaused then
   begin
     if Index < 0 then
       Index := ICON_EN;
-    Index := FPausedIconBase + Index;
+    Inc(Index, ICON_PAUSED);
   end;
 
-  if Index < 0 then
+  if (Index < 0) or (FTrayIcons[Index] = nil) then
   begin
     TrayIcon.Icon := Application.Icon;
     Exit;
   end;
-  Icon := TIcon.Create;
-  try
-    TrayIcons.GetIcon(Index, Icon);
-    TrayIcon.Icon := Icon;
-  finally
-    Icon.Free;
-  end;
+  TrayIcon.Icon := FTrayIcons[Index];
 end;
 
 procedure TFormMain.UpdateTrayHint;
@@ -1388,6 +1655,8 @@ end;
 
 procedure TFormMain.LoadControlsFromSettings;
 begin
+  RefreshProgramGrid;
+  LoadAiControls;
   FUpdatingControls := True;
   try
     cbConvert.ItemIndex := Ord(FSettings.GestureForAction(laConvert));
@@ -1398,16 +1667,30 @@ begin
     cbUndo.ItemIndex := Ord(FSettings.GestureForAction(laUndo));
     cbTranslate.ItemIndex := Ord(FSettings.GestureForAction(laTranslate));
     cbWebSearch.ItemIndex := Ord(FSettings.GestureForAction(laWebSearch));
+    cbTranslateReplace.ItemIndex := Ord(FSettings.GestureForAction(laTranslateReplace));
+    cbExplain.ItemIndex := Ord(FSettings.GestureForAction(laExplain));
+    edDeepLKey.Text := FSettings.DeepLApiKey;
     cbTranslator.ItemIndex := FSettings.Translator;
     cbSearchEngine.ItemIndex := FSettings.SearchEngine;
     chkFixCapsLock.Checked := FSettings.FixCapsLock;
     chkFixTwoCapitals.Checked := FSettings.FixTwoCapitals;
-    edTwoCapsExceptions.Text := string.Join('; ', FSettings.TwoCapitalsExceptions);
+    memTwoCapsExceptions.Text := string.Join(sLineBreak, FSettings.TwoCapitalsExceptions);
     chkSnippets.Checked := FSettings.SnippetsEnabled;
+    chkAutoReplace.Checked := FSettings.AutoReplaceEnabled;
+    memAutoReplace.Text := FSettings.AutoReplace;
     chkSound.Checked := FSettings.SoundEnabled;
+    cbSound.ItemIndex := FSettings.SoundKind;
+    cbSound.Enabled := FSettings.SoundEnabled;
+    btnSoundTest.Enabled := FSettings.SoundEnabled;
     chkAutoSwitch.Checked := FSettings.AutoSwitchEnabled;
-    edAutoSwitchExceptions.Text := string.Join('; ', FSettings.AutoSwitchExceptions);
-    memNoAutoCorrect.Text := string.Join(sLineBreak, FSettings.NoAutoCorrectProcesses);
+    chkFixTypos.Checked := FSettings.FixTypos;
+    chkFixTyposExtended.Checked := FSettings.FixTyposExtended;
+    chkInWordSwitch.Checked := FSettings.InWordSwitch;
+    chkLearnManual.Checked := FSettings.LearnManualConversions;
+    memAutoSwitchLearned.Text := string.Join(sLineBreak, FSettings.AutoSwitchLearned);
+    chkCapitalize.Checked := FSettings.CapitalizeSentences;
+    chkDoubleSpace.Checked := FSettings.FixDoubleSpace;
+    memAutoSwitchExceptions.Text := string.Join(sLineBreak, FSettings.AutoSwitchExceptions);
     memSnippets.Text := FSettings.Snippets;
     udInterval.Position := Integer(FSettings.DoubleTapInterval);
     edInterval.Text := IntToStr(FSettings.DoubleTapInterval);
@@ -1417,7 +1700,6 @@ begin
     chkLayoutIndicator.Checked := FSettings.ShowLayoutIndicator;
     chkCheckUpdates.Checked := FSettings.CheckForUpdates;
     cbLanguage.ItemIndex := Ord(FSettings.Language);
-    edExcluded.Text := string.Join(sLineBreak, FSettings.ExcludedProcesses);
   finally
     FUpdatingControls := False;
   end;
@@ -1427,6 +1709,7 @@ procedure TFormMain.ApplySettings;
 begin
   FDetector.Interval := FSettings.DoubleTapInterval;
   FSnippets := ParseSnippets(FSettings.Snippets);
+  FAutoReplace := ParseAutoReplace(FSettings.AutoReplace);
   if not SaveSettings(FSettings) then
     DiagnosticsLog('settings.save_failed');
   UpdateTrayHint;
@@ -1488,48 +1771,501 @@ begin
   FSettings.FixCapsLock := chkFixCapsLock.Checked;
   FSettings.FixTwoCapitals := chkFixTwoCapitals.Checked;
   FSettings.SnippetsEnabled := chkSnippets.Checked;
+  FSettings.AutoReplaceEnabled := chkAutoReplace.Checked;
   FSettings.SoundEnabled := chkSound.Checked;
+  cbSound.Enabled := FSettings.SoundEnabled;
+  btnSoundTest.Enabled := FSettings.SoundEnabled;
   FSettings.AutoSwitchEnabled := chkAutoSwitch.Checked;
+  FSettings.FixTypos := chkFixTypos.Checked;
+  FSettings.FixTyposExtended := chkFixTyposExtended.Checked;
+  FSettings.InWordSwitch := chkInWordSwitch.Checked;
+  FSettings.LearnManualConversions := chkLearnManual.Checked;
+  FSettings.CapitalizeSentences := chkCapitalize.Checked;
+  FSettings.FixDoubleSpace := chkDoubleSpace.Checked;
   if not FSettings.ShowLayoutIndicator then
     FIndicator.HideNow;
   ApplySettings;
   ApplyStickyKeysSetting;
 end;
 
-procedure TFormMain.ApplyExcludedFromEdit;
+{ Windows 11 look }
+
+type
+  TControlAccess = class(TControl);
+
+procedure TFormMain.ModernizeSettingsWindow;
+const
+  NAV_WIDTH = 210;
+  GAP = 20;
+  TITLE_HEIGHT = 64;
+  // The pages were designed for Tahoma 8; Segoe UI 9 needs more room.
+  EXTRA_WIDTH = 80;
 var
-  Excluded, NoAutoCorrect: TArray<string>;
-begin
-  Excluded := ParseProcessList(edExcluded.Text);
-  NoAutoCorrect := ParseProcessList(memNoAutoCorrect.Text);
-  if (ProcessListToText(Excluded) <> ProcessListToText(FSettings.ExcludedProcesses)) or
-     (ProcessListToText(NoAutoCorrect) <>
-      ProcessListToText(FSettings.NoAutoCorrectProcesses)) then
+  I, J, PageWidth, PageHeight, OldRight, Delta: Integer;
+  Control: TControl;
+  Page: TTabSheet;
+
+  function S(Value: Integer): Integer;
   begin
-    FSettings.ExcludedProcesses := Excluded;
-    FSettings.NoAutoCorrectProcesses := NoAutoCorrect;
+    Result := MulDiv(Value, CurrentPPI, 96);
+  end;
+
+begin
+  FUiTheme := CurrentUiTheme(True);
+  // The modern font everywhere (Tahoma 8 of the form designer).
+  Font.Name := ModernFontName;
+  Font.Size := 9;
+  for I := 0 to ComponentCount - 1 do
+    if Components[I] is TControl then
+    begin
+      Control := TControl(Components[I]);
+      if SameText(TControlAccess(Control).Font.Name, 'Tahoma') then
+      begin
+        TControlAccess(Control).Font.Name := Font.Name;
+        if TControlAccess(Control).Font.Size = 8 then
+          TControlAccess(Control).Font.Size := 9;
+      end;
+    end;
+  Color := FUiTheme.Footer;
+  lblVersion.Visible := False;
+  lblAuthor.Visible := False;
+  btnReport.Visible := False;
+  btnClose.Visible := False;
+
+  // Pages without tabs: the side navigation switches them.
+  PageWidth := pcMain.Width;
+  PageHeight := pcMain.Height;
+  for I := 0 to pcMain.PageCount - 1 do
+    pcMain.Pages[I].TabVisible := False;
+  pcMain.ActivePageIndex := 0;
+
+  // Wider pages: controls reaching the right edge grow, buttons there move.
+  OldRight := pcMain.Pages[0].ClientWidth;
+  Delta := S(EXTRA_WIDTH);
+  PageWidth := PageWidth + Delta;
+  pcMain.Width := PageWidth;
+  for I := 0 to pcMain.PageCount - 1 do
+  begin
+    Page := pcMain.Pages[I];
+    for J := 0 to Page.ControlCount - 1 do
+    begin
+      Control := Page.Controls[J];
+      if (Control.Left + Control.Width < OldRight - S(30)) or (Control = btnSoundTest) then
+        Continue;
+      if (Control is TButton) and (Control.Left > OldRight div 2) then
+        Control.Left := Control.Left + Delta
+      else if not ((Control is TLabel) and TLabel(Control).AutoSize) then
+        Control.Width := Control.Width + Delta;
+    end;
+  end;
+  // The two-line hint above the program table is taller now.
+  edProgramFilter.Top := edProgramFilter.Top + S(8);
+  chkProgramsCheckedOnly.Top := chkProgramsCheckedOnly.Top + S(8);
+  sgPrograms.Top := sgPrograms.Top + S(8);
+  sgPrograms.Height := sgPrograms.Height - S(8);
+
+  FNav := TNavBar.Create(Self);
+  FNav.Parent := Self;
+  FNav.SetBounds(0, 0, S(NAV_WIDTH), ClientHeight);
+  FNav.Setup(pcMain, [#$E713, #$E765, #$E774, #$E8FB, #$E8AB, #$E753, #$E733], FUiTheme);
+  FNav.Title := 'LayoutSwitcher';
+  FNav.OnChange := NavChange;
+
+  pcMain.SetBounds(S(NAV_WIDTH) + S(GAP), S(TITLE_HEIGHT), PageWidth, PageHeight);
+
+  FPageTitle := TLabel.Create(Self);
+  FPageTitle.Parent := Self;
+  FPageTitle.ParentFont := False;
+  FPageTitle.Font.Name := ModernFontName(True);
+  FPageTitle.Font.Size := 18;
+  FPageTitle.Font.Style := [fsBold];
+  FPageTitle.Font.Color := FUiTheme.Text;
+  FPageTitle.Transparent := True;
+  FPageTitle.SetBounds(pcMain.Left + S(2), S(18), PageWidth, S(32));
+
+  FFlatClose := TFlatButton.Create(Self);
+  FFlatClose.Parent := Self;
+  FFlatClose.Primary := True;
+  FFlatClose.Theme := FUiTheme;
+  FFlatClose.Font.Assign(Font);
+  FFlatClose.SetBounds(pcMain.Left + PageWidth - S(112), pcMain.Top + PageHeight + S(14),
+    S(112), S(32));
+  FFlatClose.OnClick := btnCloseClick;
+
+  FFlatReport := TFlatButton.Create(Self);
+  FFlatReport.Parent := Self;
+  FFlatReport.Theme := FUiTheme;
+  FFlatReport.Font.Assign(Font);
+  FFlatReport.SetBounds(FFlatClose.Left - S(8) - S(150), FFlatClose.Top, S(150), S(32));
+  FFlatReport.OnClick := mniReportClick;
+
+  ClientWidth := pcMain.Left + PageWidth + S(GAP);
+  ClientHeight := FFlatClose.Top + FFlatClose.Height + S(16);
+  FNav.Height := ClientHeight;
+
+  KeyPreview := True;
+  OnKeyDown := SettingsKeyDown;
+  if HandleAllocated then
+    ApplyWindowChrome(Handle, FUiTheme, FUiTheme.Footer);
+end;
+
+procedure TFormMain.NavChange(Sender: TObject);
+begin
+  FPageTitle.Caption := pcMain.ActivePage.Caption;
+  // Setting ActivePageIndex in code does not raise OnChange.
+  pcMainChange(pcMain);
+end;
+
+procedure TFormMain.SettingsKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
+begin
+  // Esc closes the window, like the old "Close" button (Cancel).
+  if (Key = VK_ESCAPE) and not ((ActiveControl is TComboBox) and
+     TComboBox(ActiveControl).DroppedDown) then
+  begin
+    Close;
+    Key := 0;
+  end;
+end;
+
+{ Exclusions table }
+
+const
+  PROGRAM_COL_NAME = 0;
+  PROGRAM_COL_EXE = 1;
+  PROGRAM_COL_OFF = 2;
+  PROGRAM_COL_NO_AUTO = 3;
+
+procedure TFormMain.SetupProgramGrid;
+var
+  Fixed: Integer;
+begin
+  sgPrograms.ColCount := 4;
+  sgPrograms.FixedCols := 0;
+  sgPrograms.FixedRows := 1;
+  sgPrograms.ColWidths[PROGRAM_COL_NAME] := MulDiv(196, CurrentPPI, 96);
+  sgPrograms.ColWidths[PROGRAM_COL_EXE] := MulDiv(130, CurrentPPI, 96);
+  sgPrograms.ColWidths[PROGRAM_COL_OFF] := MulDiv(70, CurrentPPI, 96);
+  Fixed := sgPrograms.ColWidths[PROGRAM_COL_NAME] + sgPrograms.ColWidths[PROGRAM_COL_EXE] +
+    sgPrograms.ColWidths[PROGRAM_COL_OFF] + 4 * sgPrograms.GridLineWidth +
+    GetSystemMetrics(SM_CXVSCROLL);
+  sgPrograms.ColWidths[PROGRAM_COL_NO_AUTO] := sgPrograms.ClientWidth - Fixed;
+end;
+
+procedure TFormMain.pcMainChange(Sender: TObject);
+begin
+  if pcMain.ActivePage = tsExclusions then
+    EnsureProgramsLoaded;
+end;
+
+procedure TFormMain.EnsureProgramsLoaded;
+begin
+  if FProgramsLoaded then
+    Exit;
+  // The table shows the programs of the settings right away; the ones found
+  // on the computer are added when the search (a few seconds) is done.
+  FProgramsLoaded := True;
+  edProgramFilter.TextHint := T('Идёт поиск программ на компьютере...',
+    'Looking for programs on this computer...');
+  FProgramScan := TProgramScanThread.Create(True);
+  FProgramScan.OnTerminate := ProgramScanDone;
+  FProgramScan.Start;
+  RefreshProgramGrid;
+end;
+
+procedure TFormMain.ProgramScanDone(Sender: TObject);
+begin
+  // OnTerminate runs in the main thread.
+  FInstalledPrograms := TProgramScanThread(Sender).Programs;
+  DiagnosticsLogFmt('programs.loaded count=%d', [Length(FInstalledPrograms)]);
+  edProgramFilter.TextHint := T('Поиск программы', 'Find a program');
+  RefreshProgramGrid;
+end;
+
+function TFormMain.ProgramAtRow(Row: Integer; out Entry: TProgramEntry): Boolean;
+begin
+  Result := (Row >= 1) and (Row - 1 < Length(FVisiblePrograms));
+  if Result then
+    Entry := FPrograms[FVisiblePrograms[Row - 1]];
+end;
+
+procedure TFormMain.RefreshProgramGrid;
+var
+  Selected: string;
+  Entry: TProgramEntry;
+  I, Row: Integer;
+begin
+  if not FProgramsLoaded then
+    Exit;
+  Selected := '';
+  if ProgramAtRow(sgPrograms.Row, Entry) then
+    Selected := Entry.ExeName;
+  FPrograms := MergePrograms(FInstalledPrograms, [FSettings.ExcludedProcesses,
+    FSettings.NoAutoCorrectProcesses, FSettings.CustomPrograms]);
+  FVisiblePrograms := nil;
+  for I := 0 to High(FPrograms) do
+    if ProgramMatches(FPrograms[I], edProgramFilter.Text) and
+       (not chkProgramsCheckedOnly.Checked or
+        FSettings.IsProcessExcluded(FPrograms[I].ExeName) or
+        FSettings.IsAutoCorrectDisabledFor(FPrograms[I].ExeName)) then
+      FVisiblePrograms := FVisiblePrograms + [I];
+  // A grid with a fixed row needs at least one more row.
+  if Length(FVisiblePrograms) = 0 then
+    sgPrograms.RowCount := 2
+  else
+    sgPrograms.RowCount := Length(FVisiblePrograms) + 1;
+  for Row := 1 to sgPrograms.RowCount - 1 do
+    if ProgramAtRow(Row, Entry) then
+    begin
+      sgPrograms.Cells[PROGRAM_COL_NAME, Row] := Entry.DisplayName;
+      sgPrograms.Cells[PROGRAM_COL_EXE, Row] := Entry.ExeName;
+      if SameText(Entry.ExeName, Selected) then
+        sgPrograms.Row := Row;
+    end
+    else
+    begin
+      sgPrograms.Cells[PROGRAM_COL_NAME, Row] := '';
+      sgPrograms.Cells[PROGRAM_COL_EXE, Row] := '';
+    end;
+  sgPrograms.Invalidate;
+  UpdateProgramButtons;
+end;
+
+procedure TFormMain.UpdateProgramButtons;
+var
+  Entry: TProgramEntry;
+begin
+  // Programs found on the computer stay in the table; only names added by
+  // hand or coming from the settings can be removed.
+  btnRemoveProgram.Enabled := ProgramAtRow(sgPrograms.Row, Entry) and not Entry.Installed;
+end;
+
+procedure TFormMain.sgProgramsDrawCell(Sender: TObject; ACol, ARow: Integer; Rect: TRect;
+  State: TGridDrawState);
+var
+  Entry: TProgramEntry;
+  Checked, Enabled: Boolean;
+  Element: TThemedButton;
+  Size: Integer;
+  Box: TRect;
+begin
+  if (ARow = 0) or (ACol < PROGRAM_COL_OFF) or not ProgramAtRow(ARow, Entry) then
+    Exit;
+  if ACol = PROGRAM_COL_OFF then
+  begin
+    Checked := FSettings.IsProcessExcluded(Entry.ExeName);
+    Enabled := True;
+  end
+  else
+  begin
+    Checked := FSettings.IsAutoCorrectDisabledFor(Entry.ExeName);
+    // Nothing works in a program that is turned off completely.
+    Enabled := not FSettings.IsProcessExcluded(Entry.ExeName);
+  end;
+  if Checked and Enabled then
+    Element := tbCheckBoxCheckedNormal
+  else if Checked then
+    Element := tbCheckBoxCheckedDisabled
+  else if Enabled then
+    Element := tbCheckBoxUncheckedNormal
+  else
+    Element := tbCheckBoxUncheckedDisabled;
+  Size := MulDiv(13, CurrentPPI, 96);
+  Box := Bounds(Rect.Left + (Rect.Width - Size) div 2, Rect.Top + (Rect.Height - Size) div 2,
+    Size, Size);
+  StyleServices.DrawElement(sgPrograms.Canvas.Handle,
+    StyleServices.GetElementDetails(Element), Box);
+end;
+
+procedure TFormMain.ToggleProgram(Row, Col: Integer);
+var
+  Entry: TProgramEntry;
+begin
+  if not ProgramAtRow(Row, Entry) then
+    Exit;
+  if Col = PROGRAM_COL_OFF then
+  begin
+    if FSettings.IsProcessExcluded(Entry.ExeName) then
+      FSettings.ExcludedProcesses := RemoveWord(FSettings.ExcludedProcesses, Entry.ExeName)
+    else
+      FSettings.ExcludedProcesses := FSettings.ExcludedProcesses + [Entry.ExeName];
+  end
+  else if Col = PROGRAM_COL_NO_AUTO then
+  begin
+    if FSettings.IsAutoCorrectDisabledFor(Entry.ExeName) then
+      FSettings.NoAutoCorrectProcesses :=
+        RemoveWord(FSettings.NoAutoCorrectProcesses, Entry.ExeName)
+    else
+      FSettings.NoAutoCorrectProcesses := FSettings.NoAutoCorrectProcesses + [Entry.ExeName];
+  end
+  else
+    Exit;
+  ApplySettings;
+  // The row stays visible even with "only checked": it disappears when the
+  // filter is applied again, not under the mouse.
+  sgPrograms.Invalidate;
+end;
+
+procedure TFormMain.sgProgramsMouseUp(Sender: TObject; Button: TMouseButton;
+  Shift: TShiftState; X, Y: Integer);
+var
+  Col, Row: Integer;
+begin
+  if Button <> mbLeft then
+    Exit;
+  sgPrograms.MouseToCell(X, Y, Col, Row);
+  if (Row > 0) and (Col >= PROGRAM_COL_OFF) then
+    ToggleProgram(Row, Col);
+end;
+
+procedure TFormMain.sgProgramsKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
+begin
+  if (Key = VK_SPACE) and (sgPrograms.Col >= PROGRAM_COL_OFF) then
+  begin
+    ToggleProgram(sgPrograms.Row, sgPrograms.Col);
+    Key := 0;
+  end;
+end;
+
+procedure TFormMain.sgProgramsSelectCell(Sender: TObject; ACol, ARow: Integer;
+  var CanSelect: Boolean);
+var
+  Entry: TProgramEntry;
+begin
+  btnRemoveProgram.Enabled := ProgramAtRow(ARow, Entry) and not Entry.Installed;
+end;
+
+procedure TFormMain.edProgramFilterChange(Sender: TObject);
+begin
+  RefreshProgramGrid;
+end;
+
+procedure TFormMain.chkProgramsCheckedOnlyClick(Sender: TObject);
+begin
+  RefreshProgramGrid;
+end;
+
+procedure TFormMain.btnAddProgramClick(Sender: TObject);
+var
+  Dialog: TOpenDialog;
+  Exe: string;
+  Entry: TProgramEntry;
+  Row: Integer;
+begin
+  EnsureProgramsLoaded;
+  Dialog := TOpenDialog.Create(nil);
+  try
+    Dialog.Title := T('Выберите программу или введите имя её exe-файла',
+      'Choose a program or type the name of its exe file');
+    Dialog.Filter := T('Программы', 'Programs') + ' (*.exe)|*.exe|' +
+      T('Все файлы', 'All files') + ' (*.*)|*.*';
+    // A name typed for a program that is not on this computer is accepted.
+    Dialog.Options := [ofHideReadOnly, ofEnableSizing, ofNoValidate];
+    if not Dialog.Execute(Handle) then
+      Exit;
+    Exe := Trim(ExtractFileName(Dialog.FileName));
+  finally
+    Dialog.Free;
+  end;
+  if Exe = '' then
+    Exit;
+  if ExtractFileExt(Exe) = '' then
+    Exe := Exe + '.exe';
+  if not SameText(ExtractFileExt(Exe), '.exe') then
+  begin
+    MessageBox(Handle, PChar(T('Укажите exe-файл программы.', 'Choose the exe file of a program.')),
+      'LayoutSwitcher', MB_OK or MB_ICONWARNING);
+    Exit;
+  end;
+  if not (FSettings.IsProcessExcluded(Exe) or FSettings.IsAutoCorrectDisabledFor(Exe)) then
+  begin
+    FSettings.CustomPrograms := RemoveWord(FSettings.CustomPrograms, Exe) + [Exe];
     ApplySettings;
   end;
-  LoadControlsFromSettings;
+  DiagnosticsLogFmt('programs.added process="%s"', [Exe]);
+  edProgramFilter.Text := '';
+  chkProgramsCheckedOnly.Checked := False;
+  RefreshProgramGrid;
+  for Row := 1 to sgPrograms.RowCount - 1 do
+    if ProgramAtRow(Row, Entry) and SameText(Entry.ExeName, Exe) then
+    begin
+      sgPrograms.Row := Row;
+      sgPrograms.Col := PROGRAM_COL_OFF;
+      Break;
+    end;
+  UpdateProgramButtons;
+  sgPrograms.SetFocus;
 end;
 
-procedure TFormMain.btnDefaultNoAutoCorrectClick(Sender: TObject);
+procedure TFormMain.btnRemoveProgramClick(Sender: TObject);
+var
+  Entry: TProgramEntry;
 begin
-  FSettings.NoAutoCorrectProcesses := TLSSettings.Defaults.NoAutoCorrectProcesses;
-  LoadControlsFromSettings;
+  if not ProgramAtRow(sgPrograms.Row, Entry) or Entry.Installed then
+    Exit;
+  FSettings.CustomPrograms := RemoveWord(FSettings.CustomPrograms, Entry.ExeName);
+  FSettings.ExcludedProcesses := RemoveWord(FSettings.ExcludedProcesses, Entry.ExeName);
+  FSettings.NoAutoCorrectProcesses := RemoveWord(FSettings.NoAutoCorrectProcesses,
+    Entry.ExeName);
+  DiagnosticsLogFmt('programs.removed process="%s"', [Entry.ExeName]);
   ApplySettings;
+  RefreshProgramGrid;
 end;
 
-procedure TFormMain.edExcludedExit(Sender: TObject);
+procedure TFormMain.btnDefaultProgramsClick(Sender: TObject);
 begin
-  ApplyExcludedFromEdit;
-end;
-
-procedure TFormMain.btnDefaultExcludedClick(Sender: TObject);
-begin
+  if MessageBox(Handle, PChar(T(
+       'Вернуть исходные отметки «Отключить» и «Без автоисправлений»? Отметки, сделанные вручную, будут сброшены.',
+       'Restore the default "Turn off" and "No automatic corrections" marks? Marks made by hand are reset.')),
+       'LayoutSwitcher', MB_YESNO or MB_ICONQUESTION) <> IDYES then
+    Exit;
   FSettings.ExcludedProcesses := TLSSettings.Defaults.ExcludedProcesses;
-  LoadControlsFromSettings;
+  FSettings.NoAutoCorrectProcesses := TLSSettings.Defaults.NoAutoCorrectProcesses;
   ApplySettings;
+  RefreshProgramGrid;
+end;
+
+procedure TFormMain.cbSoundChange(Sender: TObject);
+var
+  Dialog: TOpenDialog;
+begin
+  if FUpdatingControls or (cbSound.ItemIndex < 0) then
+    Exit;
+  if cbSound.ItemIndex = SOUND_FILE then
+  begin
+    Dialog := TOpenDialog.Create(nil);
+    try
+      Dialog.Title := T('Звук при исправлении текста', 'Sound when text is corrected');
+      Dialog.Filter := T('Звуки WAV', 'WAV sounds') + ' (*.wav)|*.wav';
+      Dialog.Options := [ofHideReadOnly, ofEnableSizing, ofFileMustExist];
+      if FSettings.SoundFile <> '' then
+        Dialog.FileName := FSettings.SoundFile
+      else
+        Dialog.InitialDir := GetEnvironmentVariable('WINDIR') + '\Media';
+      if not Dialog.Execute(Handle) then
+      begin
+        // Cancelled: back to the previous choice.
+        if FSettings.SoundFile = '' then
+          cbSound.ItemIndex := SOUND_CLICK
+        else if FSettings.SoundKind <> SOUND_FILE then
+          cbSound.ItemIndex := FSettings.SoundKind;
+        Exit;
+      end;
+      FSettings.SoundFile := Dialog.FileName;
+    finally
+      Dialog.Free;
+    end;
+  end;
+  FSettings.SoundKind := cbSound.ItemIndex;
+  ApplySettings;
+  // The combo shows the file name of the own sound.
+  ApplyLanguage;
+  LoadControlsFromSettings;
+  PlayFeedbackSound(FSettings.SoundKind, FSettings.SoundFile);
+end;
+
+procedure TFormMain.btnSoundTestClick(Sender: TObject);
+begin
+  PlayFeedbackSound(FSettings.SoundKind, FSettings.SoundFile);
 end;
 
 procedure TFormMain.btnCloseClick(Sender: TObject);
@@ -1712,6 +2448,8 @@ end;
 procedure TFormMain.ShowSettingsWindow;
 begin
   DiagnosticsLog('ui.settings_open');
+  if pcMain.ActivePage = tsExclusions then
+    EnsureProgramsLoaded;
   LoadControlsFromSettings;
   Show;
   WindowState := wsNormal;
@@ -1761,6 +2499,8 @@ begin
     laInvertCase: Result := T('иНВЕРСИЯ', 'iNVERT');
     laTranslate: Result := T('Перевод', 'Translate');
     laWebSearch: Result := T('Поиск', 'Search');
+    laTranslateReplace: Result := T('Замена переводом', 'Translate in place');
+    laExplain: Result := T('ИИ', 'AI');
     laTransliterate: Result := T('Транслит', 'Translit');
     laUndo: Result := T('Отмена', 'Undo');
   else
@@ -1771,7 +2511,7 @@ end;
 function TFormMain.GestureCombos: TArray<TComboBox>;
 begin
   Result := [cbConvert, cbUpper, cbLower, cbInvert, cbTranslit, cbUndo, cbTranslate,
-    cbWebSearch];
+    cbWebSearch, cbTranslateReplace, cbExplain];
 end;
 
 procedure TFormMain.ApplyLanguage;
@@ -1799,7 +2539,9 @@ begin
       'LayoutSwitcher - Keyboard layout switcher');
     tsGeneral.Caption := T('Основные', 'General');
     tsHotkeys.Caption := T('Сочетания', 'Shortcuts');
+    tsLayout.Caption := T('Раскладка', 'Layout');
     tsCorrections.Caption := T('Исправления', 'Corrections');
+    tsSnippets.Caption := T('Замены', 'Replacements');
     tsExclusions.Caption := T('Исключения', 'Exclusions');
 
     chkAutorun.Caption := T('Автозапуск при старте системы', 'Start with Windows');
@@ -1818,8 +2560,15 @@ begin
       'Turn off the Sticky Keys prompt on pressing Shift five times');
     chkLayoutIndicator.Caption := T('Показывать раскладку рядом с курсором при переключении',
       'Show the layout next to the caret when it changes');
-    chkSound.Caption := T('Звуковой сигнал при исправлении текста',
-      'Play a sound when text is corrected');
+    chkSound.Caption := T('Звук при исправлении текста:', 'Sound when text is corrected:');
+    if FSettings.SoundFile <> '' then
+      FillCombo(cbSound, [T('Щелчок', 'Click'), T('Тук', 'Knock'), T('Капля', 'Drop'),
+        T('Колокольчик', 'Bell'), T('Пузырёк', 'Bubble'),
+        T('Свой: ', 'Own: ') + ExtractFileName(FSettings.SoundFile)])
+    else
+      FillCombo(cbSound, [T('Щелчок', 'Click'), T('Тук', 'Knock'), T('Капля', 'Drop'),
+        T('Колокольчик', 'Bell'), T('Пузырёк', 'Bubble'), T('Свой WAV-файл...', 'Own WAV file...')]);
+    btnSoundTest.Hint := T('Прослушать', 'Listen');
     lblLanguage.Caption := T('Язык интерфейса / Language:', 'Language / Язык интерфейса:');
     FillCombo(cbLanguage, [T('Как в Windows', 'As in Windows'), 'Русский', 'English']);
     if IsPortableMode then
@@ -1839,6 +2588,22 @@ begin
     lblUndo.Caption := ActionName(laUndo);
     lblTranslate.Caption := ActionName(laTranslate);
     lblWebSearch.Caption := ActionName(laWebSearch);
+    lblTranslateReplace.Caption := ActionName(laTranslateReplace);
+    lblExplain.Caption := ActionName(laExplain);
+    tsServices.Caption := T('Сервисы', 'Services');
+    lblAiHeader.Caption := T('Объяснение выделенного текста с помощью ИИ', 'Explaining the selection with AI');
+    lblAiService.Caption := T('Сервис ИИ:', 'AI service:');
+    FillCombo(cbAiService, [T('Pollinations.ai — бесплатно, без регистрации',
+      'Pollinations.ai - free, no registration'), T('Anthropic Claude (ключ API)',
+      'Anthropic Claude (API key)'), T('Совместимый с OpenAI (OpenAI, OpenRouter, Ollama...)',
+      'OpenAI-compatible (OpenAI, OpenRouter, Ollama...)')]);
+    lblAiKey.Caption := T('Ключ API:', 'API key:');
+    lblAiUrl.Caption := T('Адрес API:', 'API address:');
+    lblAiModel.Caption := T('Модель:', 'Model:');
+    btnAiTest.Caption := T('Проверить', 'Test');
+    lblDeepLKey.Caption := T('Ключ DeepL API для замены переводом:', 'DeepL API key for translating in place:');
+    edDeepLKey.TextHint := T('необязательно; без ключа — Google Переводчик',
+      'optional; Google Translate without a key');
     lblInterval.Caption := T('Интервал двойного нажатия:', 'Double-tap interval:');
     lblIntervalUnit.Caption := T('мс', 'ms');
     for Combo in GestureCombos do
@@ -1865,33 +2630,88 @@ begin
       'Automatically fix words typed in the wrong keyboard layout');
     lblAutoSwitchHint.Caption := T('Решает проверка орфографии Windows.',
       'The Windows spell checker decides.');
-    lblAutoSwitchExceptions.Caption := T('Не переключать:', 'Never switch:');
+    chkInWordSwitch.Caption := T(
+      'Переключать уже во время набора — по невозможному началу слова (ghb → при)',
+      'Switch while typing - when the start of a word is impossible (рудд → hell)');
+    chkLearnManual.Caption := T(
+      'Запоминать слова, дважды исправленные вручную, и дальше переключать их сами',
+      'Remember words fixed manually twice and switch them automatically');
+    lblAutoSwitchLearned.Caption := T('Всегда переключать (слово в строке):',
+      'Always switch (one word per line):');
+    lblAutoSwitchExceptions.Caption := T('Не исправлять (слово в строке):',
+      'Never change (one word per line):');
+    lblLayoutNote.Caption := T(
+      'Ошибочное переключение отменяется двойным Shift или двойным Caps Lock — слово' +
+      sLineBreak + 'попадает в список «Не исправлять». «Не исправлять» действует и на опечатки.',
+      'Undo a wrong switch with a double Shift or a double Caps Lock: the word is added' +
+      sLineBreak + 'to "Never change". "Never change" also applies to typo fixes.');
+    chkFixTypos.Caption := T(
+      'Исправлять опечатки: переставленные соседние буквы (пирвет → привет)',
+      'Fix typos: swapped neighbouring letters (teh → the)');
+    chkFixTyposExtended.Caption := T(
+      'А также пропущенную, лишнюю или заменённую букву (превет → привет)',
+      'Also a missing, extra or replaced letter (wrold → world)');
+    chkCapitalize.Caption := T('Заглавная буква в начале предложения (. привет → . Привет)',
+      'Capital letter at the start of a sentence (. hello → . Hello)');
+    chkDoubleSpace.Caption := T('Убирать случайный двойной пробел',
+      'Remove an accidental double space');
     chkFixCapsLock.Caption := T(
       'Исправлять слова, набранные с включённым Caps Lock (пРИВЕТ → Привет)',
       'Fix words typed with Caps Lock on (hELLO → Hello)');
     chkFixTwoCapitals.Caption := T(
       'Исправлять две заглавные буквы в начале слова (ПРивет → Привет)',
       'Fix two capitals at the start of a word (HEllo → Hello)');
-    lblTwoCapsExceptions.Caption := T('Исключения:', 'Exceptions:');
+    lblTwoCapsExceptions.Caption := T('Исключения для двух заглавных (слово в строке):',
+      'Exceptions for two capitals (one word per line):');
+    chkAutoReplace.Caption := T(
+      'Автоцензура: заменять слова по справочнику (грубые — на мягкие или на смайлики)',
+      'Auto-censor: replace words from a list (rude ones with milder words or emoji)');
+    lblAutoReplaceHint.Caption := T(
+      'Каждая строка: слово=замена. * в конце слова — любое окончание (чёрт*=ой).' + sLineBreak +
+      'Регистр не важен и сохраняется: Чёрт! → Ой!',
+      'One per line: word=replacement. * at the end - any ending (heck*=oh).' + sLineBreak +
+      'Case does not matter and is kept: Heck! -> Oh!');
     chkSnippets.Caption := T('Заменять шаблоны: сокращение и пробел',
       'Expand templates: abbreviation followed by a space');
     lblSnippetsHint.Caption := T(
-      'Каждая строка: сокращение=текст. Подстановки: {date}, {time}, {datetime}.',
-      'One per line: abbreviation=text. Placeholders: {date}, {time}, {datetime}.');
+      'Каждая строка: сокращение=текст. Подстановки: {date}, {time}, {datetime},' + sLineBreak +
+      '{clipboard} — текст из буфера обмена, {cursor} — где оставить курсор.' + sLineBreak +
+      '\n — новая строка, \t — табуляция, \\ — обратная косая черта.',
+      'One per line: abbreviation=text. Placeholders: {date}, {time}, {datetime},' + sLineBreak +
+      '{clipboard} - the clipboard text, {cursor} - where to leave the caret.' + sLineBreak +
+      '\n - new line, \t - tab, \\ - backslash.');
     lblCorrectionsNote.Caption := T(
-      'Исправления выполняются после пробела. Отменить последнее — двойной Caps Lock.',
-      'Corrections are made after a space. Undo the last one with a double Caps Lock.');
+      'Исправления выполняются после пробела. Отменить последнее — двойной Caps Lock.' +
+      sLineBreak + 'Не работают в программах из списка «Без автоисправлений» на вкладке «Исключения».',
+      'Corrections are made after a space. Undo the last one with a double Caps Lock.' +
+      sLineBreak + 'They are off in the programs listed on the Exclusions tab.');
 
-    lblExcluded.Caption := T('Полностью отключить в программах (имя exe в строке):',
-      'Turn off completely in these programs (one exe name per line):');
-    btnDefaultExcluded.Caption := T('По умолчанию', 'Defaults');
-    lblNoAutoCorrect.Caption := T(
-      'Без автоисправлений и автопереключения (ручные действия работают):',
-      'No automatic corrections here (manual actions still work):');
-    btnDefaultNoAutoCorrect.Caption := T('По умолчанию', 'Defaults');
+    lblPrograms.Caption := T(
+      '«Отключить» — LayoutSwitcher не делает в программе ничего. «Без автоисправлений» —' +
+      sLineBreak + 'работают только ручные действия (двойной Shift и другие жесты).',
+      '"Turn off": LayoutSwitcher does nothing in the program. "No auto": only the' +
+      sLineBreak + 'manual actions (double Shift and the other gestures) work.');
+    if not Assigned(FProgramScan) or FProgramScan.Finished then
+      edProgramFilter.TextHint := T('Поиск программы', 'Find a program');
+    chkProgramsCheckedOnly.Caption := T('Только отмеченные', 'Only checked');
+    sgPrograms.Cells[PROGRAM_COL_NAME, 0] := T('Программа', 'Program');
+    sgPrograms.Cells[PROGRAM_COL_EXE, 0] := T('Файл', 'File');
+    sgPrograms.Cells[PROGRAM_COL_OFF, 0] := T('Отключить', 'Turn off');
+    sgPrograms.Cells[PROGRAM_COL_NO_AUTO, 0] := T('Без автоиспр.', 'No auto');
+    btnAddProgram.Caption := T('Добавить программу...', 'Add a program...');
+    btnRemoveProgram.Caption := T('Убрать из списка', 'Remove');
+    btnDefaultPrograms.Caption := T('По умолчанию', 'Defaults');
     btnReport.Caption := T('Собрать отчёт...', 'Create report...');
     btnClose.Caption := T('Закрыть', 'Close');
     lblVersion.Caption := T('Версия ', 'Version ') + FVersion;
+    if Assigned(FNav) then
+    begin
+      FNav.Subtitle := T('Версия ', 'Version ') + FVersion + ' · len-a-r';
+      FNav.Invalidate;
+      FFlatReport.Caption := btnReport.Caption;
+      FFlatClose.Caption := btnClose.Caption;
+      FPageTitle.Caption := pcMain.ActivePage.Caption;
+    end;
     lblAuthor.Left := lblVersion.Left + lblVersion.Width + 12;
 
     mniSettings.Caption := T('Настройки...', 'Settings...');
@@ -2129,31 +2949,96 @@ end;
 
 { Automatic corrections }
 
+function TFormMain.AutoCorrectionsPaused: Boolean;
+begin
+  Result := (FAutoCorrectPausedUntil <> 0) and (Now < FAutoCorrectPausedUntil);
+end;
+
 procedure TFormMain.CheckAutoCorrections;
 var
-  WordStart, WordLength: Integer;
-  Word, Template, Replacement, Fixed: string;
-  ToggleCaps: Boolean;
+  WordStart, WordLength, CaretBack: Integer;
+  Word, Template, Replacement, Fixed, Clip: string;
+  ToggleCaps, Capital, IsTemplate, IsAutoReplace: Boolean;
 begin
+  // The word before this space was typed partly before the buffer was
+  // dropped: only its end is known.
+  if FPartialWord then
+  begin
+    FPartialWord := False;
+    Exit;
+  end;
   if FPaused or FBufferOverflowed or FFocusIsPassword or FOperationBusy then
     Exit;
+  if AutoCorrectionsPaused then
+    Exit;
   if not (FSettings.FixCapsLock or FSettings.FixTwoCapitals or FSettings.AutoSwitchEnabled or
-          (FSettings.SnippetsEnabled and (Length(FSnippets) > 0))) then
+          FSettings.FixTypos or FSettings.CapitalizeSentences or FSettings.FixDoubleSpace or
+          (FSettings.SnippetsEnabled and (Length(FSnippets) > 0)) or
+          (FSettings.AutoReplaceEnabled and (Length(FAutoReplace) > 0))) then
     Exit;
   // Code editors, terminals, password managers: manual actions only.
   if FSettings.IsAutoCorrectDisabledFor(FLastProcessName) then
+  begin
+    // Logged once per program, so that "nothing happens" can be explained.
+    if not SameText(FAutoCorrectSkipLogged, FLastProcessName) then
+    begin
+      FAutoCorrectSkipLogged := FLastProcessName;
+      DiagnosticsLogFmt('autocorrect.skipped reason=program_rule process="%s"',
+        [FLastProcessName]);
+    end;
     Exit;
+  end;
+
+  // "word  ": the second space was typed by accident.
+  if FSettings.FixDoubleSpace and EndsWithDoubleSpace(FBuffer) then
+  begin
+    // A space typed again right after the fix: the spaces are wanted.
+    if (FDoubleSpaceFixed <> '') and (FBuffer = FDoubleSpaceFixed + ' ') then
+    begin
+      FDoubleSpaceFixed := '';
+      Exit;
+    end;
+    DiagnosticsLog('autocorrect.queue kind=double_space');
+    FDoubleSpaceNext := True;
+    try
+      QueueRequest(laNone, TConversionChain.PlanReplacement(FBuffer, Length(FBuffer) - 1,
+        2, ' '), True, False);
+    finally
+      FDoubleSpaceNext := False;
+    end;
+    Exit;
+  end;
+
   // Exactly one space has just been typed after the word.
   if not FindLastWord(FBuffer, WordStart, WordLength) or
      (WordStart + WordLength <> Length(FBuffer)) then
     Exit;
   Word := Copy(FBuffer, WordStart, WordLength);
+  Capital := FSettings.CapitalizeSentences and
+    IsSentenceStart(Copy(FBuffer, 1, WordStart - 1));
 
   Replacement := '';
   Template := '';
   ToggleCaps := False;
-  if FSettings.SnippetsEnabled and FindSnippet(FSnippets, Word, Template) then
-    Replacement := ExpandSnippet(Template, Now)
+  CaretBack := 0;
+  IsAutoReplace := False;
+  IsTemplate := FSettings.SnippetsEnabled and FindSnippet(FSnippets, Word, Template);
+  if IsTemplate then
+  begin
+    Clip := '';
+    if SnippetUsesClipboard(Template) then
+      Clip := ReadClipboardText(Handle);
+    Replacement := ExpandSnippet(Template, Now, Clip, CaretBack);
+    if Replacement = '' then
+      Exit;
+    // A template is inserted exactly as written.
+    Capital := False;
+  end
+  else if FSettings.AutoReplaceEnabled and ApplyAutoReplace(FAutoReplace, Word, Fixed) then
+  begin
+    Replacement := Fixed;
+    IsAutoReplace := True;
+  end
   else if FSettings.FixCapsLock and FCapsOn and IsCapsLockMistake(Word) then
   begin
     Replacement := FixCapsLockMistake(Word);
@@ -2162,22 +3047,160 @@ begin
   else if FSettings.FixTwoCapitals and
      FixTwoCapitals(Word, FSettings.TwoCapitalsExceptions, Fixed) then
     Replacement := Fixed;
+
   if Replacement = '' then
   begin
-    // Nothing else to fix: let the spell checker decide about the layout.
-    if FSettings.AutoSwitchEnabled and not ContainsDigit(Word) then
-      QueueRequest(laAutoSwitch, TConversionChain.PlanWord(FBuffer, WordStart,
-        WordLength), True, False);
+    // Nothing else to fix: the spell checker decides about the layout and
+    // typos; the worker also capitalises the first word of a sentence.
+    if (FSettings.AutoSwitchEnabled or FSettings.FixTypos) and not ContainsDigit(Word) then
+    begin
+      FCapitalizeNext := Capital;
+      try
+        QueueRequest(laAutoSwitch, TConversionChain.PlanWord(FBuffer, WordStart,
+          WordLength), True, False);
+      finally
+        FCapitalizeNext := False;
+      end;
+    end
+    else if Capital and CanCapitalize(Word) then
+    begin
+      DiagnosticsLog('autocorrect.queue kind=capital');
+      QueueRequest(laNone, TConversionChain.PlanReplacement(FBuffer, WordStart,
+        WordLength, CapitalizeFirst(Word)), True, False);
+    end;
     Exit;
   end;
+  if Capital and CanCapitalize(Replacement) then
+    Replacement := CapitalizeFirst(Replacement);
   if Replacement = Word then
     Exit;
 
-  DiagnosticsLogFmt('autocorrect.queue kind=%s length=%d',
-    [IfThen(ToggleCaps, 'caps_lock', IfThen(Template <> '', 'template', 'two_capitals')),
-     Length(Word)]);
-  QueueRequest(laNone, TConversionChain.PlanReplacement(FBuffer, WordStart,
-    WordLength, Replacement), True, ToggleCaps);
+  DiagnosticsLogFmt('autocorrect.queue kind=%s length=%d caret_back=%d',
+    [IfThen(ToggleCaps, 'caps_lock', IfThen(IsTemplate, 'template',
+       IfThen(IsAutoReplace, 'auto_replace', 'two_capitals'))),
+     Length(Word), CaretBack]);
+  FCaretBackNext := CaretBack;
+  try
+    QueueRequest(laNone, TConversionChain.PlanReplacement(FBuffer, WordStart,
+      WordLength, Replacement), True, ToggleCaps);
+  finally
+    FCaretBackNext := 0;
+  end;
+end;
+
+procedure TFormMain.CheckInWordSwitch;
+var
+  WordStart, Len: Integer;
+  Typed, Converted, Item: string;
+  Focus: HWND;
+  Layout: HKL;
+  Pair: TLayoutPair;
+  Plan: TBufferPlan;
+begin
+  if not (FSettings.AutoSwitchEnabled and FSettings.InWordSwitch) then
+    Exit;
+  if FPaused or FBufferOverflowed or FFocusIsPassword or FOperationBusy or FPartialWord or
+     AutoCorrectionsPaused or FSettings.IsAutoCorrectDisabledFor(FLastProcessName) then
+    Exit;
+  // The word being typed: from the last space to the end of the buffer.
+  WordStart := Length(FBuffer);
+  while (WordStart > 1) and not CharInSet(FBuffer[WordStart - 1], [' ', #9, #$00A0]) do
+    Dec(WordStart);
+  Len := Length(FBuffer) - WordStart + 1;
+  if (Len < 3) or (Len > 4) then
+    Exit;
+  Typed := Copy(FBuffer, WordStart, Len);
+
+  Focus := GetFocusedWindow;
+  if Focus = 0 then
+    Exit;
+  Layout := GetKeyboardLayout(GetWindowThreadProcessId(Focus, nil));
+  if not FCatalog.ChoosePair(Typed, Layout, FPreviousLayout, Pair) or
+     (Pair.Source <> Layout) then
+    Exit;
+  Converted := ConvertTextBetweenLayouts(Typed, FCatalog.KeyChars(Pair.Source),
+    FCatalog.KeyChars(Pair.Target));
+  if not ShouldSwitchInWord(WordStartLanguage(LayoutLanguageTag(Pair.Source)),
+       WordStartLanguage(LayoutLanguageTag(Pair.Target)), Typed, Converted) then
+    Exit;
+  // "ghbdtn" in "Never change" keeps every word typed as "ghb..." intact;
+  // an undone in-word switch adds the prefix itself.
+  for Item in FSettings.AutoSwitchExceptions do
+    if StartsText(Typed, Item) or StartsText(Item, Typed) then
+      Exit;
+
+  Plan := TConversionChain.PlanWord(FBuffer, WordStart, Len);
+  Plan.ForcedSource := Pair.Source;
+  Plan.ForcedTarget := Pair.Target;
+  DiagnosticsLogFmt('autoswitch.in_word_queue length=%d', [Len]);
+  FInWordNext := True;
+  try
+    QueueRequest(laAutoSwitch, Plan, True, False);
+  finally
+    FInWordNext := False;
+  end;
+end;
+
+procedure TFormMain.TrackManualConversion(Res: TOperationResult);
+var
+  Word: string;
+  Count: Integer;
+begin
+  // Reverting or undoing right after a counted conversion: it was not what
+  // the user wanted.  Widening to the phrase keeps it (the word was right).
+  if (FLastLearnWord <> '') and (FPendingPlan.Mode in [bmRevert, bmUndo]) then
+  begin
+    if FLastLearnPromoted then
+    begin
+      CommitPendingEdits;
+      FSettings.AutoSwitchLearned := RemoveWord(FSettings.AutoSwitchLearned, FLastLearnWord);
+      // Back to the count before the conversion that taught it.
+      BumpLearnCount(FSettings.AutoSwitchLearnCounts, FLastLearnWord,
+        LEARN_AFTER_CONVERSIONS - 1);
+    end
+    else
+      BumpLearnCount(FSettings.AutoSwitchLearnCounts, FLastLearnWord, -1);
+    DiagnosticsLog('learn.rolled_back');
+    ApplySettings;
+    if FLastLearnPromoted then
+      LoadControlsFromSettings;
+    FLastLearnWord := '';
+    FLastLearnPromoted := False;
+    Exit;
+  end;
+  if FPendingPlan.Mode = bmPhrase then
+    Exit;
+  FLastLearnWord := '';
+  FLastLearnPromoted := False;
+  if (Res.Action <> laConvert) or (FPendingPlan.Mode <> bmWord) or
+     not FSettings.AutoSwitchEnabled or not FSettings.LearnManualConversions then
+    Exit;
+  // The word as it reads now ("привет"), the same length as the typed one.
+  Word := Copy(FBuffer, FPendingPlan.RegionStart, FPendingPlan.RegionLength);
+  if not IsAutoSwitchCandidate(Word) or FSettings.IsAutoSwitchException(Word) or
+     FSettings.IsAutoSwitchLearned(Word) then
+    Exit;
+  Count := BumpLearnCount(FSettings.AutoSwitchLearnCounts, Word, 1);
+  FLastLearnWord := Word;
+  if Count >= LEARN_AFTER_CONVERSIONS then
+  begin
+    CommitPendingEdits;
+    BumpLearnCount(FSettings.AutoSwitchLearnCounts, Word, -Count);
+    FSettings.AutoSwitchLearned := FSettings.AutoSwitchLearned + [AnsiLowerCase(Word)];
+    FLastLearnPromoted := True;
+    DiagnosticsLog('learn.word_learned');
+    FBalloonUrl := '';
+    FBalloonInstall := False;
+    FNotificationTimes.Remove('learned');
+    ShowNotification('learned', Format(T(
+      'Слово «%s» теперь будет переключаться автоматически. Список — «Всегда переключать» на вкладке «Раскладка».',
+      'The word "%s" will now be switched automatically. See "Always switch" on the Layout tab.'),
+      [AnsiLowerCase(Word)]));
+  end;
+  ApplySettings;
+  // Only the "Always switch" list is visible; the counts are not.
+  if FLastLearnPromoted then
+    LoadControlsFromSettings;
 end;
 
 function ContainsDigit(const Text: string): Boolean;
@@ -2190,11 +3213,35 @@ begin
   Result := False;
 end;
 
-procedure TFormMain.LearnAutoSwitchException(const Word: string);
+function RemoveWord(const List: TArray<string>; const Word: string): TArray<string>;
+var
+  Item: string;
 begin
-  if (Word = '') or FSettings.IsAutoSwitchException(Word) then
+  Result := nil;
+  for Item in List do
+    if not AnsiSameText(Item, Word) then
+      Result := Result + [Item];
+end;
+
+procedure TFormMain.CommitPendingEdits;
+begin
+  // Edits are saved on leaving the field; switching to another program does
+  // not leave it.  Save them before the lists are reloaded from FSettings.
+  if not Visible then
     Exit;
-  FSettings.AutoSwitchExceptions := FSettings.AutoSwitchExceptions + [Word];
+  ApplyCorrectionsFromEdit;
+end;
+
+procedure TFormMain.LearnAutoSwitchException(const Word, Converted: string);
+begin
+  if Word = '' then
+    Exit;
+  CommitPendingEdits;
+  // A learned word that turns out unwanted is forgotten as well.
+  if (Converted <> '') and FSettings.IsAutoSwitchLearned(Converted) then
+    FSettings.AutoSwitchLearned := RemoveWord(FSettings.AutoSwitchLearned, Converted);
+  if not FSettings.IsAutoSwitchException(Word) then
+    FSettings.AutoSwitchExceptions := FSettings.AutoSwitchExceptions + [Word];
   ApplySettings;
   LoadControlsFromSettings;
   DiagnosticsLog('autoswitch.exception_learned');
@@ -2202,8 +3249,102 @@ begin
   FBalloonInstall := False;
   FNotificationTimes.Remove('autoswitch_learned');
   ShowNotification('autoswitch_learned', Format(T(
-    'Слово «%s» больше не будет переключаться автоматически.',
-    'The word "%s" will no longer be switched automatically.'), [Word]));
+    'Слово «%s» больше не будет исправляться автоматически.',
+    'The word "%s" will no longer be changed automatically.'), [Word]));
+end;
+
+{ Quick actions in the tray menu }
+
+procedure TFormMain.CreateQuickMenu;
+var
+  Index: Integer;
+
+  function AddItem(Handler: TNotifyEvent): TMenuItem;
+  begin
+    Result := TMenuItem.Create(PopupMenu);
+    Result.OnClick := Handler;
+    PopupMenu.Items.Insert(Index, Result);
+    Inc(Index);
+  end;
+
+begin
+  // After the pause items, before the update items.
+  Index := PopupMenu.Items.IndexOf(mniSeparator2);
+  if Index < 0 then
+    Index := PopupMenu.Items.Count;
+  FMenuQuickSeparator := AddItem(nil);
+  FMenuQuickSeparator.Caption := '-';
+  FMenuAutoCorrectOff := AddItem(QuickAutoCorrectOffClick);
+  FMenuNeverFixLast := AddItem(QuickNeverFixLastClick);
+  FMenuProgramRule := AddItem(QuickProgramRuleClick);
+  PopupMenu.OnPopup := PopupMenuPopup;
+end;
+
+procedure TFormMain.PopupMenuPopup(Sender: TObject);
+var
+  Program_: string;
+begin
+  if AutoCorrectionsPaused then
+    FMenuAutoCorrectOff.Caption := Format(T('Включить автоисправления (выключены до %s)',
+      'Turn automatic corrections on (off until %s)'),
+      [FormatDateTime('hh:nn', FAutoCorrectPausedUntil)])
+  else
+    FMenuAutoCorrectOff.Caption := T('Выключить автоисправления на 1 час',
+      'Turn automatic corrections off for 1 hour');
+
+  FMenuNeverFixLast.Visible := FLastAutoWord <> '';
+  if FLastAutoResult <> '' then
+    FMenuNeverFixLast.Caption := Format(T('Не исправлять «%s» (→ %s)',
+      'Never change "%s" (-> %s)'), [FLastAutoWord, FLastAutoResult])
+  else
+    FMenuNeverFixLast.Caption := Format(T('Не исправлять «%s»', 'Never change "%s"'),
+      [FLastAutoWord]);
+
+  // The program the user typed in last; the tray itself has the focus now.
+  Program_ := FLastProcessName;
+  FMenuProgramRule.Visible := (Program_ <> '') and
+    not SameText(Program_, ExtractFileName(ParamStr(0)));
+  FMenuProgramRule.Checked := FSettings.IsAutoCorrectDisabledFor(Program_);
+  FMenuProgramRule.Caption := Format(T('Без автоисправлений в %s',
+    'No automatic corrections in %s'), [Program_]);
+end;
+
+procedure TFormMain.QuickAutoCorrectOffClick(Sender: TObject);
+begin
+  if AutoCorrectionsPaused then
+    FAutoCorrectPausedUntil := 0
+  else
+    FAutoCorrectPausedUntil := IncMinute(Now, AUTO_CORRECT_OFF_MINUTES);
+  DiagnosticsLogFmt('autocorrect.paused until=%s',
+    [IfThen(FAutoCorrectPausedUntil = 0, 'none',
+      FormatDateTime('hh:nn', FAutoCorrectPausedUntil))]);
+end;
+
+procedure TFormMain.QuickNeverFixLastClick(Sender: TObject);
+begin
+  if FLastAutoWord = '' then
+    Exit;
+  LearnAutoSwitchException(FLastAutoWord, FLastAutoResult);
+  FLastAutoWord := '';
+  FLastAutoResult := '';
+end;
+
+procedure TFormMain.QuickProgramRuleClick(Sender: TObject);
+var
+  Program_: string;
+begin
+  Program_ := FLastProcessName;
+  if Program_ = '' then
+    Exit;
+  CommitPendingEdits;
+  if FSettings.IsAutoCorrectDisabledFor(Program_) then
+    FSettings.NoAutoCorrectProcesses := RemoveWord(FSettings.NoAutoCorrectProcesses, Program_)
+  else
+    FSettings.NoAutoCorrectProcesses := FSettings.NoAutoCorrectProcesses + [Program_];
+  DiagnosticsLogFmt('program_rule.toggled process="%s" no_autocorrect=%s',
+    [Program_, BoolToStr(FSettings.IsAutoCorrectDisabledFor(Program_), True)]);
+  ApplySettings;
+  LoadControlsFromSettings;
 end;
 
 procedure TFormMain.edCorrectionsExit(Sender: TObject);
@@ -2213,21 +3354,253 @@ end;
 
 procedure TFormMain.ApplyCorrectionsFromEdit;
 var
-  Exceptions, SwitchExceptions: TArray<string>;
+  Exceptions, SwitchExceptions, Learned: TArray<string>;
   Snippets: string;
 begin
-  Exceptions := ParseWordList(edTwoCapsExceptions.Text);
-  SwitchExceptions := ParseWordList(edAutoSwitchExceptions.Text);
+  ApplyAiFromEdit;
+  if Trim(edDeepLKey.Text) <> FSettings.DeepLApiKey then
+  begin
+    FSettings.DeepLApiKey := Trim(edDeepLKey.Text);
+    DiagnosticsLogFmt('settings.deepl_key set=%s',
+      [BoolToStr(FSettings.DeepLApiKey <> '', True)]);
+    ApplySettings;
+  end;
+  Exceptions := ParseWordList(memTwoCapsExceptions.Text);
+  SwitchExceptions := ParseWordList(memAutoSwitchExceptions.Text);
+  Learned := ParseWordList(memAutoSwitchLearned.Text);
   Snippets := TrimRight(memSnippets.Text);
+  if TrimRight(memAutoReplace.Text) <> FSettings.AutoReplace then
+  begin
+    FSettings.AutoReplace := TrimRight(memAutoReplace.Text);
+    ApplySettings;
+  end;
   if (string.Join('; ', Exceptions) <> string.Join('; ', FSettings.TwoCapitalsExceptions)) or
      (string.Join('; ', SwitchExceptions) <> string.Join('; ', FSettings.AutoSwitchExceptions)) or
+     (string.Join('; ', Learned) <> string.Join('; ', FSettings.AutoSwitchLearned)) or
      (Snippets <> FSettings.Snippets) then
   begin
     FSettings.TwoCapitalsExceptions := Exceptions;
     FSettings.AutoSwitchExceptions := SwitchExceptions;
+    FSettings.AutoSwitchLearned := Learned;
     FSettings.Snippets := Snippets;
     ApplySettings;
   end;
+end;
+
+{ AI explanation }
+
+function TFormMain.CurrentAiConfig: TAiConfig;
+begin
+  Result.Provider := AiProviderFromInteger(FSettings.AiProvider);
+  case Result.Provider of
+    apClaude:
+      begin
+        Result.ApiKey := FSettings.AiClaudeKey;
+        Result.Model := FSettings.AiClaudeModel;
+      end;
+    apOpenAI:
+      begin
+        Result.ApiKey := FSettings.AiOpenAIKey;
+        Result.BaseUrl := FSettings.AiOpenAIUrl;
+        Result.Model := FSettings.AiOpenAIModel;
+      end;
+  else
+    Result.ApiKey := '';
+    Result.Model := '';
+  end;
+end;
+
+procedure TFormMain.LoadAiControls;
+var
+  Provider: TAiProvider;
+begin
+  FUpdatingControls := True;
+  try
+    Provider := AiProviderFromInteger(FSettings.AiProvider);
+    cbAiService.ItemIndex := Ord(Provider);
+    edAiKey.Enabled := Provider <> apFree;
+    lblAiKey.Enabled := edAiKey.Enabled;
+    edAiUrl.Enabled := Provider = apOpenAI;
+    lblAiUrl.Enabled := edAiUrl.Enabled;
+    edAiModel.Enabled := Provider <> apFree;
+    lblAiModel.Enabled := edAiModel.Enabled;
+    edAiModel.TextHint := DefaultAiModel(Provider);
+    case Provider of
+      apClaude:
+        begin
+          edAiKey.Text := FSettings.AiClaudeKey;
+          edAiUrl.Text := 'https://api.anthropic.com';
+          edAiModel.Text := FSettings.AiClaudeModel;
+          lblAiNote.Caption := T(
+            'Ключ API создаётся в консоли Anthropic (platform.claude.com). По умолчанию ' +
+            'модель claude-opus-5-5; дешевле — claude-sonnet-5-5 или claude-haiku-5-5.',
+            'Create the API key in the Anthropic Console (platform.claude.com). The default ' +
+            'model is claude-opus-5-5; cheaper: claude-sonnet-5-5 or claude-haiku-5-5.');
+        end;
+      apOpenAI:
+        begin
+          edAiKey.Text := FSettings.AiOpenAIKey;
+          edAiUrl.Text := FSettings.AiOpenAIUrl;
+          edAiModel.Text := FSettings.AiOpenAIModel;
+          lblAiNote.Caption := T(
+            'Адрес — до /chat/completions: https://api.openai.com/v1, https://openrouter.ai/api/v1, ' +
+            'https://api.deepseek.com/v1; локально Ollama — http://localhost:11434/v1 (ключ не нужен, ' +
+            'текст не уходит в интернет).',
+            'The address up to /chat/completions: https://api.openai.com/v1, ' +
+            'https://openrouter.ai/api/v1, https://api.deepseek.com/v1; a local Ollama - ' +
+            'http://localhost:11434/v1 (no key, the text stays on the computer).');
+        end;
+    else
+      edAiKey.Text := '';
+      edAiUrl.Text := POLLINATIONS_URL;
+      edAiModel.Text := '';
+      lblAiNote.Caption := T(
+        'Бесплатный открытый сервис без регистрации: не чаще одного ответа в 45 секунд, ' +
+        'качество скромнее платных моделей. Для лучших ответов подключите Claude или другой ИИ.',
+        'A free open service without registration: at most one answer every 45 seconds, ' +
+        'more modest quality than paid models. Connect Claude or another AI for better answers.');
+    end;
+    lblAiNote.Caption := lblAiNote.Caption + sLineBreak + T(
+      'Выделенный текст отправляется выбранному сервису только по жесту.',
+      'The selected text is sent to the chosen service only on the gesture.');
+  finally
+    FUpdatingControls := False;
+  end;
+end;
+
+procedure TFormMain.ApplyAiFromEdit;
+var
+  Changed: Boolean;
+
+  procedure Put(var Field: string; const Value: string);
+  begin
+    if Trim(Value) <> Field then
+    begin
+      Field := Trim(Value);
+      Changed := True;
+    end;
+  end;
+
+begin
+  Changed := False;
+  case AiProviderFromInteger(FSettings.AiProvider) of
+    apClaude:
+      begin
+        Put(FSettings.AiClaudeKey, edAiKey.Text);
+        Put(FSettings.AiClaudeModel, edAiModel.Text);
+      end;
+    apOpenAI:
+      begin
+        Put(FSettings.AiOpenAIKey, edAiKey.Text);
+        Put(FSettings.AiOpenAIUrl, edAiUrl.Text);
+        Put(FSettings.AiOpenAIModel, edAiModel.Text);
+      end;
+  end;
+  if Changed then
+  begin
+    DiagnosticsLogFmt('settings.ai provider=%d key_set=%s', [FSettings.AiProvider,
+      BoolToStr(CurrentAiConfig.ApiKey <> '', True)]);
+    ApplySettings;
+  end;
+end;
+
+procedure TFormMain.cbAiServiceChange(Sender: TObject);
+begin
+  if FUpdatingControls or (cbAiService.ItemIndex < 0) then
+    Exit;
+  // Fields of the previous service first.
+  ApplyAiFromEdit;
+  FSettings.AiProvider := cbAiService.ItemIndex;
+  ApplySettings;
+  LoadAiControls;
+end;
+
+procedure TFormMain.btnAiTestClick(Sender: TObject);
+var
+  Answer, Code, Error: string;
+begin
+  ApplyAiFromEdit;
+  Screen.Cursor := crHourGlass;
+  try
+    // A tiny request: is the service reachable and does it accept the key?
+    if AskAi(CurrentAiConfig, 'Answer with one word.', 'Say "OK".', Answer, Code, Error) then
+      MessageBox(Handle, PChar(T('Сервис ИИ отвечает: ', 'The AI service answers: ') + Answer),
+        'LayoutSwitcher', MB_OK or MB_ICONINFORMATION)
+    else
+      MessageBox(Handle, PChar(Error), 'LayoutSwitcher', MB_OK or MB_ICONWARNING);
+  finally
+    Screen.Cursor := crDefault;
+  end;
+  DiagnosticsLogFmt('ai.test provider=%d ok=%s error=%s',
+    [FSettings.AiProvider, BoolToStr(Code = '', True), Code]);
+end;
+
+procedure TFormMain.StartExplain(const Text: string);
+const
+  Services: array[TAiProvider] of string = ('Pollinations.ai', 'Anthropic Claude', '');
+var
+  Config: TAiConfig;
+  Thread: TAiExplainThread;
+  Service, Host: string;
+begin
+  Config := CurrentAiConfig;
+  Service := Services[Config.Provider];
+  if Config.Provider = apOpenAI then
+  begin
+    Host := Config.BaseUrl;
+    if Pos('://', Host) > 0 then
+      Host := Copy(Host, Pos('://', Host) + 3, MaxInt);
+    if Pos('/', Host) > 0 then
+      Host := Copy(Host, 1, Pos('/', Host) - 1);
+    Service := Host;
+  end;
+  // Once: the selected text leaves the computer.
+  if not FSettings.AiConsent and (Pos('localhost', LowerCase(Service)) = 0) and
+     (Pos('127.0.0.1', Service) = 0) then
+  begin
+    if MessageBox(0, PChar(Format(T(
+         'Выделенный текст будет отправлен сервису ИИ «%s», чтобы получить объяснение. ' +
+         'Он передаётся только когда вы сами вызываете объяснение. Сервис выбирается на ' +
+         'вкладке «Сервисы».' + sLineBreak + sLineBreak + 'Продолжить?',
+         'The selected text will be sent to the AI service "%s" to get an explanation. ' +
+         'It is sent only when you ask for an explanation. The service is chosen on the ' +
+         'Services tab.' + sLineBreak + sLineBreak + 'Continue?'), [Service])),
+         'LayoutSwitcher', MB_YESNO or MB_ICONQUESTION or MB_TOPMOST or MB_SETFOREGROUND) <> IDYES then
+      Exit;
+    FSettings.AiConsent := True;
+    ApplySettings;
+  end;
+  if FExplainWindow = nil then
+    FExplainWindow := TExplainWindow.Create(Self);
+  FExplainWindow.StartQuestion(Text, Service + ' · ' + EffectiveAiModel(Config));
+  Inc(FExplainSequence);
+  if FExplainSequence = 0 then
+    FExplainSequence := 1;
+  Thread := TAiExplainThread.Create(Config, ExplainSystemPrompt(T('ru', 'en') = 'ru'),
+    ExplainUserMessage(Text), FExplainSequence);
+  Thread.FreeOnTerminate := True;
+  Thread.OnTerminate := ExplainDone;
+  Thread.Start;
+  DiagnosticsLogFmt('ai.explain_start provider=%d length=%d', [Ord(Config.Provider),
+    Length(Text)]);
+end;
+
+procedure TFormMain.ExplainDone(Sender: TObject);
+var
+  Thread: TAiExplainThread;
+begin
+  // OnTerminate runs in the main thread.  A newer question or a closed
+  // window makes the answer obsolete.
+  Thread := TAiExplainThread(Sender);
+  DiagnosticsLogFmt('ai.explain_done ok=%s ms=%d error=%s',
+    [BoolToStr(Thread.Success, True), Thread.ElapsedMS, Thread.ErrorCode]);
+  if (Thread.Sequence <> FExplainSequence) or (FExplainWindow = nil) or
+     not FExplainWindow.Visible then
+    Exit;
+  if Thread.Success then
+    FExplainWindow.ShowAnswer(Thread.Answer, Thread.ElapsedMS)
+  else
+    FExplainWindow.ShowError(Thread.ErrorText);
 end;
 
 procedure TFormMain.cbServiceChange(Sender: TObject);
@@ -2293,7 +3666,6 @@ procedure TFormMain.btnExportClick(Sender: TObject);
 var
   Dialog: TSaveDialog;
 begin
-  ApplyExcludedFromEdit;
   ApplyCorrectionsFromEdit;
   Dialog := TSaveDialog.Create(nil);
   try
@@ -2342,6 +3714,13 @@ begin
   end;
 
   // Autorun and the elevated task belong to this computer and stay as they are.
+  // Exported files carry no API key: keep the current one.
+  if Imported.DeepLApiKey = '' then
+    Imported.DeepLApiKey := FSettings.DeepLApiKey;
+  if Imported.AiClaudeKey = '' then
+    Imported.AiClaudeKey := FSettings.AiClaudeKey;
+  if Imported.AiOpenAIKey = '' then
+    Imported.AiOpenAIKey := FSettings.AiOpenAIKey;
   FSettings := Imported;
   SetUILanguage(FSettings.Language);
   ApplySettings;

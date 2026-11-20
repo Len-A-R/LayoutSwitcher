@@ -10,15 +10,17 @@ uses
   uLocale, uSettingsStore;
 
 type
-  // New values are only ever appended: the ordinal values are stored in the
-  // registry.
+  // Actions are stored by their ActionKeys name; the gestures by ordinal,
+  // so new gestures are only ever appended.  Actions bound to gestures stay
+  // in front of laAutoSwitch (the TLSActionGestures range).
   TLSAction = (laNone, laConvert, laUpperCase, laLowerCase, laInvertCase,
-    laTransliterate, laUndo, laTranslate, laWebSearch,
+    laTransliterate, laUndo, laTranslate, laWebSearch, laTranslateReplace,
+    laExplain,
     // Not bound to a gesture: started automatically after a space.
     laAutoSwitch);
   TLSGesture = (lgNone, lgDoubleShift, lgDoubleLCtrl, lgDoubleRCtrl, lgBothCtrl,
-    lgBothShift, lgDoubleCapsLock, lgDoubleRAlt, lgDoubleLAlt);
-  TLSActionGestures = array[laConvert..laWebSearch] of TLSGesture;
+    lgBothShift, lgDoubleCapsLock, lgDoubleRAlt, lgDoubleLAlt, lgRCtrlRAlt, lgPause);
+  TLSActionGestures = array[laConvert..laExplain] of TLSGesture;
 
   TLSSettings = record
     ActionGestures: TLSActionGestures;
@@ -38,14 +40,49 @@ type
     FixTwoCapitals: Boolean;
     TwoCapitalsExceptions: TArray<string>;
     SnippetsEnabled: Boolean;
+    // Auto-censor: word replacement list ("word=replacement" lines), off by default.
+    AutoReplaceEnabled: Boolean;
+    AutoReplace: string;
     Snippets: string;        // "abbreviation=text" lines
     Translator: Integer;     // TRANSLATOR_* in uTextTools
     // Automatic layout switching (Windows spell checker decides).
     AutoSwitchEnabled: Boolean;
+    // Swapped neighbouring letters ("teh" -> "the") after a space.
+    FixTypos: Boolean;
+    // Also one missing, extra or replaced letter, words of 5+ letters.
+    FixTyposExtended: Boolean;
+    // Switch the layout after 3-4 letters of an impossible word start.
+    InWordSwitch: Boolean;
+    // Words converted manually (double Shift) twice are switched automatically.
+    LearnManualConversions: Boolean;
+    // Correct forms of the learned words ("привет"), always switched.
+    AutoSwitchLearned: TArray<string>;
+    // Manual conversions not yet learned: "word=count".
+    AutoSwitchLearnCounts: TArray<string>;
+    CapitalizeSentences: Boolean;
+    FixDoubleSpace: Boolean;
+    // DeepL API key for "replace with translation"; empty = Google Translate.
+    // Not written to exported settings files.
+    DeepLApiKey: string;
+    // "Explain the selection": TAiProvider in uAiExplain (0 = free service),
+    // keys per service (not exported), base URL and models.
+    AiProvider: Integer;
+    AiClaudeKey: string;
+    AiClaudeModel: string;
+    AiOpenAIKey: string;
+    AiOpenAIUrl: string;
+    AiOpenAIModel: string;
+    // The user agreed that selected text is sent to the AI service.
+    AiConsent: Boolean;
     AutoSwitchExceptions: TArray<string>;
     // Programs where only the manual actions work (code editors, terminals).
     NoAutoCorrectProcesses: TArray<string>;
+    // Programs added to the Exclusions table by hand (not found on the
+    // computer); kept even when neither box is checked.
+    CustomPrograms: TArray<string>;
     SoundEnabled: Boolean;
+    SoundKind: Integer;      // SOUND_* in uSounds
+    SoundFile: string;       // WAV file for SOUND_FILE
     SearchEngine: Integer;   // SEARCH_* in uTextTools
     class function Defaults: TLSSettings; static;
     function ActionForGesture(Gesture: TLSGesture): TLSAction;
@@ -55,6 +92,7 @@ type
     function IsProcessExcluded(const ProcessName: string): Boolean;
     function IsAutoCorrectDisabledFor(const ProcessName: string): Boolean;
     function IsAutoSwitchException(const Word: string): Boolean;
+    function IsAutoSwitchLearned(const Word: string): Boolean;
   end;
 
 const
@@ -63,21 +101,25 @@ const
   DEFAULT_DOUBLE_TAP_INTERVAL = 500;
   // 2: transliteration and undo got default gestures.
   // 3: translation and web search got default gestures.
-  CURRENT_SETTINGS_VERSION = 3;
+  // 4: notepad++.exe left the default "no automatic corrections" list.
+  // 5: "replace with translation" got the Right Ctrl + Right Alt gesture.
+  // 6: "explain the selection (AI)" got Pause/Break.
+  CURRENT_SETTINGS_VERSION = 6;
   STARTUP_VALUE_NAME = 'LayoutSwitcher';
 
   ActionKeys: array[TLSAction] of string = (
     'none', 'convert_layout', 'uppercase', 'lowercase', 'invert_case',
-    'transliterate', 'undo', 'translate', 'web_search', 'auto_switch');
+    'transliterate', 'undo', 'translate', 'web_search', 'translate_replace',
+    'explain', 'auto_switch');
 
   // Screenshot tools own full-screen overlays, use Shift/Ctrl themselves and
   // monitor the clipboard.  LayoutSwitcher must not inject input into them.
   // Automatic corrections are off here by default: code, commands,
   // passwords and remote sessions.
-  DefaultNoAutoCorrectProcesses: array[0..23] of string = (
+  DefaultNoAutoCorrectProcesses: array[0..22] of string = (
     'Code.exe', 'devenv.exe', 'bds.exe', 'idea64.exe', 'pycharm64.exe',
     'webstorm64.exe', 'rider64.exe', 'clion64.exe', 'goland64.exe',
-    'sublime_text.exe', 'notepad++.exe', 'WindowsTerminal.exe', 'cmd.exe',
+    'sublime_text.exe', 'WindowsTerminal.exe', 'cmd.exe',
     'powershell.exe', 'pwsh.exe', 'conhost.exe', 'OpenConsole.exe', 'mintty.exe',
     'putty.exe', 'mstsc.exe', 'KeePass.exe', 'KeePassXC.exe', '1Password.exe',
     'Bitwarden.exe');
@@ -145,13 +187,34 @@ const
   VALUE_TWO_CAPITALS_EXCEPTIONS = 'TwoCapitalsExceptions';
   VALUE_SNIPPETS_ENABLED = 'SnippetsEnabled';
   VALUE_SNIPPETS = 'Snippets';
+  VALUE_AUTO_REPLACE_ENABLED = 'AutoReplaceEnabled';
+  VALUE_AUTO_REPLACE = 'AutoReplace';
   VALUE_TRANSLATOR = 'Translator';
   VALUE_SEARCH_ENGINE = 'SearchEngine';
   VALUE_DIAGNOSTICS = 'EnableDiagnostics';
   VALUE_AUTO_SWITCH = 'AutoSwitchEnabled';
+  VALUE_FIX_TYPOS = 'FixTypos';
+  VALUE_FIX_TYPOS_EXTENDED = 'FixTyposExtended';
+  VALUE_IN_WORD_SWITCH = 'InWordSwitch';
+  VALUE_LEARN_MANUAL = 'LearnManualConversions';
+  VALUE_AUTO_SWITCH_LEARNED = 'AutoSwitchLearned';
+  VALUE_AUTO_SWITCH_LEARN_COUNTS = 'AutoSwitchLearnCounts';
+  VALUE_CAPITALIZE = 'CapitalizeSentences';
+  VALUE_DOUBLE_SPACE = 'FixDoubleSpace';
+  VALUE_DEEPL_KEY = 'DeepLApiKey';
+  VALUE_AI_PROVIDER = 'AiProvider';
+  VALUE_AI_CLAUDE_KEY = 'AiClaudeKey';
+  VALUE_AI_CLAUDE_MODEL = 'AiClaudeModel';
+  VALUE_AI_OPENAI_KEY = 'AiOpenAIKey';
+  VALUE_AI_OPENAI_URL = 'AiOpenAIUrl';
+  VALUE_AI_OPENAI_MODEL = 'AiOpenAIModel';
+  VALUE_AI_CONSENT = 'AiConsent';
+  VALUE_CUSTOM_PROGRAMS = 'CustomPrograms';
   VALUE_AUTO_SWITCH_EXCEPTIONS = 'AutoSwitchExceptions';
   VALUE_NO_AUTOCORRECT = 'NoAutoCorrectProcesses';
   VALUE_SOUND = 'SoundEnabled';
+  VALUE_SOUND_KIND = 'SoundKind';
+  VALUE_SOUND_FILE = 'SoundFile';
 
 { TLSSettings }
 
@@ -183,16 +246,39 @@ begin
     Result.TwoCapitalsExceptions[I] := DefaultTwoCapitalsExceptions[I];
   Result.SnippetsEnabled := True;
   Result.Snippets := DEFAULT_SNIPPETS;
+  Result.AutoReplaceEnabled := False;
+  Result.AutoReplace := DEFAULT_AUTO_REPLACE;
   Result.Translator := TRANSLATOR_YANDEX;
   Result.SearchEngine := SEARCH_YANDEX;
   Result.AutoSwitchEnabled := False;
+  Result.FixTypos := False;
+  Result.FixTyposExtended := False;
+  Result.InWordSwitch := False;
+  Result.LearnManualConversions := True;
+  Result.AutoSwitchLearned := nil;
+  Result.AutoSwitchLearnCounts := nil;
+  Result.CapitalizeSentences := False;
+  Result.FixDoubleSpace := False;
+  Result.DeepLApiKey := '';
+  Result.AiProvider := 0;
+  Result.AiClaudeKey := '';
+  Result.AiClaudeModel := '';
+  Result.AiOpenAIKey := '';
+  Result.AiOpenAIUrl := 'https://api.openai.com/v1';
+  Result.AiOpenAIModel := '';
+  Result.AiConsent := False;
+  Result.CustomPrograms := nil;
   Result.AutoSwitchExceptions := nil;
   SetLength(Result.NoAutoCorrectProcesses, Length(DefaultNoAutoCorrectProcesses));
   for I := 0 to High(DefaultNoAutoCorrectProcesses) do
     Result.NoAutoCorrectProcesses[I] := DefaultNoAutoCorrectProcesses[I];
   Result.SoundEnabled := False;
+  Result.SoundKind := 0;
+  Result.SoundFile := '';
   Result.ActionGestures[laTranslate] := lgDoubleRAlt;
   Result.ActionGestures[laWebSearch] := lgDoubleLAlt;
+  Result.ActionGestures[laTranslateReplace] := lgRCtrlRAlt;
+  Result.ActionGestures[laExplain] := lgPause;
 end;
 
 function ActionName(Action: TLSAction): string;
@@ -206,6 +292,8 @@ begin
     laUndo: Result := T('Отменить последнее исправление', 'Undo last correction');
     laTranslate: Result := T('Перевести выделенное', 'Translate selection');
     laWebSearch: Result := T('Найти выделенное в интернете', 'Search the web for selection');
+    laTranslateReplace: Result := T('Заменить текст переводом', 'Replace text with translation');
+    laExplain: Result := T('Объяснить выделенное (ИИ)', 'Explain selection (AI)');
   else
     Result := T('Нет', 'None');
   end;
@@ -222,6 +310,8 @@ begin
     lgDoubleCapsLock: Result := T('Двойной Caps Lock', 'Double Caps Lock');
     lgDoubleRAlt: Result := T('Двойной правый Alt', 'Double right Alt');
     lgDoubleLAlt: Result := T('Двойной левый Alt', 'Double left Alt');
+    lgRCtrlRAlt: Result := T('Правый Ctrl + правый Alt', 'Right Ctrl + right Alt');
+    lgPause: Result := 'Pause/Break';
   else
     Result := T('Отключено', 'Disabled');
   end;
@@ -270,6 +360,16 @@ begin
   for Name in NoAutoCorrectProcesses do
     if SameText(Name, ProcessName) then
       Exit(True);
+end;
+
+function TLSSettings.IsAutoSwitchLearned(const Word: string): Boolean;
+var
+  Item: string;
+begin
+  for Item in AutoSwitchLearned do
+    if AnsiSameText(Item, Word) then
+      Exit(True);
+  Result := False;
 end;
 
 function TLSSettings.IsAutoSwitchException(const Word: string): Boolean;
@@ -344,9 +444,9 @@ procedure MigrateActionGestures(var Gestures: TLSActionGestures;
   FromVersion: Integer);
 const
   // Actions that received a default gesture in the given settings version.
-  NewActions: array[0..3] of TLSAction = (laTransliterate, laUndo, laTranslate,
-    laWebSearch);
-  IntroducedIn: array[0..3] of Integer = (2, 2, 3, 3);
+  NewActions: array[0..5] of TLSAction = (laTransliterate, laUndo, laTranslate,
+    laWebSearch, laTranslateReplace, laExplain);
+  IntroducedIn: array[0..5] of Integer = (2, 2, 3, 3, 5, 6);
 var
   Defaults: TLSActionGestures;
   NewAction, Other: TLSAction;
@@ -388,6 +488,25 @@ begin
     Result := TLSGesture(Value)
   else
     Result := Default;
+end;
+
+function EnsureSoundKind(Value: Integer): Integer;
+begin
+  // 0..5: the built-in sounds and "own file" (uSounds).
+  if (Value >= 0) and (Value <= 5) then
+    Result := Value
+  else
+    Result := 0;
+end;
+
+function RemoveProcess(const List: TArray<string>; const Name: string): TArray<string>;
+var
+  Item: string;
+begin
+  Result := nil;
+  for Item in List do
+    if not SameText(Item, Name) then
+      Result := Result + [Item];
 end;
 
 function LoadSettingsFrom(Store: TSettingsStore): TLSSettings;
@@ -456,16 +575,51 @@ begin
     Result.SnippetsEnabled := Store.ReadBool(VALUE_SNIPPETS_ENABLED,
       Result.SnippetsEnabled);
     Result.Snippets := Store.ReadString(VALUE_SNIPPETS, Result.Snippets);
+    Result.AutoReplaceEnabled := Store.ReadBool(VALUE_AUTO_REPLACE_ENABLED,
+      Result.AutoReplaceEnabled);
+    Result.AutoReplace := Store.ReadString(VALUE_AUTO_REPLACE, Result.AutoReplace);
     Result.Translator := Store.ReadInteger(VALUE_TRANSLATOR, Result.Translator);
     Result.SearchEngine := Store.ReadInteger(VALUE_SEARCH_ENGINE, Result.SearchEngine);
     Result.AutoSwitchEnabled := Store.ReadBool(VALUE_AUTO_SWITCH, Result.AutoSwitchEnabled);
+    Result.FixTypos := Store.ReadBool(VALUE_FIX_TYPOS, Result.FixTypos);
+    Result.FixTyposExtended := Store.ReadBool(VALUE_FIX_TYPOS_EXTENDED,
+      Result.FixTyposExtended);
+    Result.InWordSwitch := Store.ReadBool(VALUE_IN_WORD_SWITCH, Result.InWordSwitch);
+    Result.LearnManualConversions := Store.ReadBool(VALUE_LEARN_MANUAL,
+      Result.LearnManualConversions);
+    Result.AutoSwitchLearned := ParseWordList(
+      Store.ReadString(VALUE_AUTO_SWITCH_LEARNED, ''));
+    Result.AutoSwitchLearnCounts := ParseWordList(
+      Store.ReadString(VALUE_AUTO_SWITCH_LEARN_COUNTS, ''));
+    Result.CapitalizeSentences := Store.ReadBool(VALUE_CAPITALIZE,
+      Result.CapitalizeSentences);
+    Result.FixDoubleSpace := Store.ReadBool(VALUE_DOUBLE_SPACE, Result.FixDoubleSpace);
+    Result.DeepLApiKey := Trim(Store.ReadString(VALUE_DEEPL_KEY, ''));
+    Result.AiProvider := Store.ReadInteger(VALUE_AI_PROVIDER, Result.AiProvider);
+    if (Result.AiProvider < 0) or (Result.AiProvider > 2) then
+      Result.AiProvider := 0;
+    Result.AiClaudeKey := Trim(Store.ReadString(VALUE_AI_CLAUDE_KEY, ''));
+    Result.AiClaudeModel := Trim(Store.ReadString(VALUE_AI_CLAUDE_MODEL, ''));
+    Result.AiOpenAIKey := Trim(Store.ReadString(VALUE_AI_OPENAI_KEY, ''));
+    Result.AiOpenAIUrl := Trim(Store.ReadString(VALUE_AI_OPENAI_URL, Result.AiOpenAIUrl));
+    Result.AiOpenAIModel := Trim(Store.ReadString(VALUE_AI_OPENAI_MODEL, ''));
+    Result.AiConsent := Store.ReadBool(VALUE_AI_CONSENT, Result.AiConsent);
+    Result.CustomPrograms := ParseProcessList(Store.ReadString(VALUE_CUSTOM_PROGRAMS, ''));
     if Store.ValueExists(VALUE_AUTO_SWITCH_EXCEPTIONS) then
       Result.AutoSwitchExceptions := ParseWordList(
         Store.ReadString(VALUE_AUTO_SWITCH_EXCEPTIONS, ''));
     if Store.ValueExists(VALUE_NO_AUTOCORRECT) then
+    begin
       Result.NoAutoCorrectProcesses := ParseProcessList(
         Store.ReadString(VALUE_NO_AUTOCORRECT, ''));
+      // 2.3.0 listed Notepad++ by default, but it is a plain text editor too.
+      if Store.ReadInteger(VALUE_SETTINGS_VERSION, 0) < 4 then
+        Result.NoAutoCorrectProcesses := RemoveProcess(
+          Result.NoAutoCorrectProcesses, 'notepad++.exe');
+    end;
     Result.SoundEnabled := Store.ReadBool(VALUE_SOUND, Result.SoundEnabled);
+    Result.SoundKind := EnsureSoundKind(Store.ReadInteger(VALUE_SOUND_KIND, Result.SoundKind));
+    Result.SoundFile := Store.ReadString(VALUE_SOUND_FILE, Result.SoundFile);
   except
     // A damaged value must not prevent the application from starting.
     Result := TLSSettings.Defaults;
@@ -495,14 +649,37 @@ begin
       string.Join('; ', Settings.TwoCapitalsExceptions));
     Store.WriteBool(VALUE_SNIPPETS_ENABLED, Settings.SnippetsEnabled);
     Store.WriteString(VALUE_SNIPPETS, Settings.Snippets);
+    Store.WriteBool(VALUE_AUTO_REPLACE_ENABLED, Settings.AutoReplaceEnabled);
+    Store.WriteString(VALUE_AUTO_REPLACE, Settings.AutoReplace);
     Store.WriteInteger(VALUE_TRANSLATOR, Settings.Translator);
     Store.WriteInteger(VALUE_SEARCH_ENGINE, Settings.SearchEngine);
     Store.WriteBool(VALUE_AUTO_SWITCH, Settings.AutoSwitchEnabled);
+    Store.WriteBool(VALUE_FIX_TYPOS, Settings.FixTypos);
+    Store.WriteBool(VALUE_FIX_TYPOS_EXTENDED, Settings.FixTyposExtended);
+    Store.WriteBool(VALUE_IN_WORD_SWITCH, Settings.InWordSwitch);
+    Store.WriteBool(VALUE_LEARN_MANUAL, Settings.LearnManualConversions);
+    Store.WriteString(VALUE_AUTO_SWITCH_LEARNED,
+      string.Join('; ', Settings.AutoSwitchLearned));
+    Store.WriteString(VALUE_AUTO_SWITCH_LEARN_COUNTS,
+      string.Join('; ', Settings.AutoSwitchLearnCounts));
+    Store.WriteBool(VALUE_CAPITALIZE, Settings.CapitalizeSentences);
+    Store.WriteBool(VALUE_DOUBLE_SPACE, Settings.FixDoubleSpace);
+    Store.WriteString(VALUE_DEEPL_KEY, Settings.DeepLApiKey);
+    Store.WriteInteger(VALUE_AI_PROVIDER, Settings.AiProvider);
+    Store.WriteString(VALUE_AI_CLAUDE_KEY, Settings.AiClaudeKey);
+    Store.WriteString(VALUE_AI_CLAUDE_MODEL, Settings.AiClaudeModel);
+    Store.WriteString(VALUE_AI_OPENAI_KEY, Settings.AiOpenAIKey);
+    Store.WriteString(VALUE_AI_OPENAI_URL, Settings.AiOpenAIUrl);
+    Store.WriteString(VALUE_AI_OPENAI_MODEL, Settings.AiOpenAIModel);
+    Store.WriteBool(VALUE_AI_CONSENT, Settings.AiConsent);
+    Store.WriteString(VALUE_CUSTOM_PROGRAMS, ProcessListToText(Settings.CustomPrograms));
     Store.WriteString(VALUE_AUTO_SWITCH_EXCEPTIONS,
       string.Join('; ', Settings.AutoSwitchExceptions));
     Store.WriteString(VALUE_NO_AUTOCORRECT,
       ProcessListToText(Settings.NoAutoCorrectProcesses));
     Store.WriteBool(VALUE_SOUND, Settings.SoundEnabled);
+    Store.WriteInteger(VALUE_SOUND_KIND, Settings.SoundKind);
+    Store.WriteString(VALUE_SOUND_FILE, Settings.SoundFile);
     Store.WriteInteger(VALUE_SETTINGS_VERSION, CURRENT_SETTINGS_VERSION);
     Result := Store.Flush;
   except
@@ -538,13 +715,19 @@ function ExportSettings(const Settings: TLSSettings; const FileName: string;
   DiagnosticsEnabled: Boolean): Boolean;
 var
   Store: TIniSettingsStore;
+  Exported: TLSSettings;
 begin
+  // An exported file is shared or copied around: no API keys in it.
+  Exported := Settings;
+  Exported.DeepLApiKey := '';
+  Exported.AiClaudeKey := '';
+  Exported.AiOpenAIKey := '';
   if FileExists(FileName) then
     System.SysUtils.DeleteFile(FileName);
   Store := TIniSettingsStore.Create(FileName);
   try
     Store.WriteBool(VALUE_DIAGNOSTICS, DiagnosticsEnabled);
-    Result := SaveSettingsTo(Settings, Store);
+    Result := SaveSettingsTo(Exported, Store);
   finally
     Store.Free;
   end;

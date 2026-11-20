@@ -127,11 +127,31 @@ object FormMain: TFormMain
       object chkSound: TCheckBox
         Left = 12
         Top = 196
-        Width = 480
+        Width = 230
         Height = 17
         Caption = #1047#1074#1091#1082#1086#1074#1086#1081' '#1089#1080#1075#1085#1072#1083' '#1087#1088#1080' '#1080#1089#1087#1088#1072#1074#1083#1077#1085#1080#1080' '#1090#1077#1082#1089#1090#1072
         TabOrder = 8
         OnClick = chkBehaviorClick
+      end
+      object cbSound: TComboBox
+        Left = 248
+        Top = 194
+        Width = 180
+        Height = 21
+        Style = csDropDownList
+        TabOrder = 12
+        OnChange = cbSoundChange
+      end
+      object btnSoundTest: TButton
+        Left = 434
+        Top = 193
+        Width = 58
+        Height = 23
+        Caption = #9654
+        ParentShowHint = False
+        ShowHint = True
+        TabOrder = 13
+        OnClick = btnSoundTestClick
       end
       object lblLanguage: TLabel
         Left = 12
@@ -313,27 +333,61 @@ object FormMain: TFormMain
         TabOrder = 7
         OnChange = cbGestureChange
       end
-      object lblInterval: TLabel
+      object lblTranslateReplace: TLabel
         Left = 12
         Top = 239
+        Width = 8
+        Height = 13
+        Caption = #1053#1072#1081#1090#1080' '#1074#1099#1076#1077#1083#1077#1085#1085#1086#1077' '#1074' '#1080#1085#1090#1077#1088#1085#1077#1090#1077
+      end
+      object cbTranslateReplace: TComboBox
+        Left = 240
+        Top = 236
+        Width = 252
+        Height = 21
+        Style = csDropDownList
+        Tag = 9
+        TabOrder = 8
+        OnChange = cbGestureChange
+      end
+      object lblExplain: TLabel
+        Left = 12
+        Top = 267
+        Width = 8
+        Height = 13
+        Caption = #1053#1072#1081#1090#1080' '#1074#1099#1076#1077#1083#1077#1085#1085#1086#1077' '#1074' '#1080#1085#1090#1077#1088#1085#1077#1090#1077
+      end
+      object cbExplain: TComboBox
+        Left = 240
+        Top = 264
+        Width = 252
+        Height = 21
+        Style = csDropDownList
+        Tag = 10
+        TabOrder = 9
+        OnChange = cbGestureChange
+      end
+      object lblInterval: TLabel
+        Left = 12
+        Top = 295
         Width = 8
         Height = 13
         Caption = #1048#1085#1090#1077#1088#1074#1072#1083' '#1076#1074#1086#1081#1085#1086#1075#1086' '#1085#1072#1078#1072#1090#1080#1103':'
       end
       object edInterval: TEdit
         Left = 240
-        Top = 236
+        Top = 292
         Width = 57
         Height = 21
         NumbersOnly = True
-        TabOrder = 8
+        TabOrder = 10
         Text = '500'
         OnChange = edIntervalChange
         OnExit = edIntervalExit
       end
       object udInterval: TUpDown
         Left = 297
-        Top = 236
+        Top = 292
         Width = 16
         Height = 21
         Associate = edInterval
@@ -341,51 +395,19 @@ object FormMain: TFormMain
         Max = 1000
         Increment = 50
         Position = 500
-        TabOrder = 9
+        TabOrder = 11
         Thousands = False
       end
       object lblIntervalUnit: TLabel
         Left = 320
-        Top = 239
+        Top = 295
         Width = 8
         Height = 13
         Caption = #1084#1089
       end
-      object lblTranslator: TLabel
-        Left = 12
-        Top = 275
-        Width = 8
-        Height = 13
-        Caption = #1055#1077#1088#1077#1074#1086#1076#1095#1080#1082':'
-      end
-      object cbTranslator: TComboBox
-        Left = 240
-        Top = 272
-        Width = 252
-        Height = 21
-        Style = csDropDownList
-        TabOrder = 10
-        OnChange = cbServiceChange
-      end
-      object lblSearchEngine: TLabel
-        Left = 12
-        Top = 303
-        Width = 8
-        Height = 13
-        Caption = #1055#1086#1080#1089#1082':'
-      end
-      object cbSearchEngine: TComboBox
-        Left = 240
-        Top = 300
-        Width = 252
-        Height = 21
-        Style = csDropDownList
-        TabOrder = 11
-        OnChange = cbServiceChange
-      end
     end
-    object tsCorrections: TTabSheet
-      Caption = #1048#1089#1087#1088#1072#1074#1083#1077#1085#1080#1103
+    object tsLayout: TTabSheet
+      Caption = #1056#1072#1089#1082#1083#1072#1076#1082#1072
       object chkAutoSwitch: TCheckBox
         Left = 12
         Top = 12
@@ -400,77 +422,136 @@ object FormMain: TFormMain
         Top = 32
         Width = 8
         Height = 13
-        Caption = #1057#1083#1086#1074#1086' '#1080#1089#1087#1088#1072#1074#1083#1103#1077#1090#1089#1103', '#1077#1089#1083#1080' '#1087#1088#1086#1074#1077#1088#1082#1072' '#1086#1088#1092#1086#1075#1088#1072#1092#1080#1080' Windows '#1089#1095#1080#1090#1072#1077#1090' '#1077#1075#1086' '#1086#1096#1080#1073#1082#1086#1081', '#1072' '#1087#1086#1089#1083#1077' '#1082#1086#1085#1074#1077#1088#1090#1072#1094#1080#1080' '#8212' '#1074#1077#1088#1085#1099#1084'.'
+        Caption = #1056#1077#1096#1072#1077#1090' '#1087#1088#1086#1074#1077#1088#1082#1072' '#1086#1088#1092#1086#1075#1088#1072#1092#1080#1080' Windows.'
       end
-      object lblAutoSwitchExceptions: TLabel
+      object chkInWordSwitch: TCheckBox
         Left = 30
-        Top = 55
+        Top = 54
+        Width = 470
+        Height = 17
+        Caption = #1055#1077#1088#1077#1082#1083#1102#1095#1072#1090#1100' '#1091#1078#1077' '#1074#1086' '#1074#1088#1077#1084#1103' '#1085#1072#1073#1086#1088#1072' '#8212' '#1087#1086' '#1085#1077#1074#1086#1079#1084#1086#1078#1085#1086#1084#1091' '#1085#1072#1095#1072#1083#1091' '#1089#1083#1086#1074#1072' (ghb '#8594' '#1087#1088#1080')'
+        TabOrder = 1
+        OnClick = chkBehaviorClick
+      end
+      object chkLearnManual: TCheckBox
+        Left = 30
+        Top = 78
+        Width = 470
+        Height = 17
+        Caption = #1047#1072#1087#1086#1084#1080#1085#1072#1090#1100' '#1089#1083#1086#1074#1072', '#1076#1074#1072#1078#1076#1099' '#1080#1089#1087#1088#1072#1074#1083#1077#1085#1085#1099#1077' '#1074#1088#1091#1095#1085#1091#1102', '#1080' '#1076#1072#1083#1100#1096#1077' '#1087#1077#1088#1077#1082#1083#1102#1095#1072#1090#1100' '#1080#1093' '#1089#1072#1084#1080
+        TabOrder = 2
+        OnClick = chkBehaviorClick
+      end
+      object lblAutoSwitchLearned: TLabel
+        Left = 30
+        Top = 108
         Width = 8
         Height = 13
-        Caption = #1053#1077' '#1087#1077#1088#1077#1082#1083#1102#1095#1072#1090#1100':'
+        Caption = #1042#1089#1077#1075#1076#1072' '#1087#1077#1088#1077#1082#1083#1102#1095#1072#1090#1100' ('#1089#1083#1086#1074#1086' '#1074' '#1089#1090#1088#1086#1082#1077'):'
       end
-      object edAutoSwitchExceptions: TEdit
-        Left = 130
-        Top = 52
-        Width = 362
-        Height = 21
-        TabOrder = 1
+      object memAutoSwitchLearned: TMemo
+        Left = 30
+        Top = 126
+        Width = 230
+        Height = 150
+        ScrollBars = ssVertical
+        TabOrder = 3
+        WordWrap = False
         OnExit = edCorrectionsExit
+      end
+      object lblAutoSwitchExceptions: TLabel
+        Left = 270
+        Top = 108
+        Width = 8
+        Height = 13
+        Caption = #1053#1077' '#1080#1089#1087#1088#1072#1074#1083#1103#1090#1100' ('#1089#1083#1086#1074#1086' '#1074' '#1089#1090#1088#1086#1082#1077'):'
+      end
+      object memAutoSwitchExceptions: TMemo
+        Left = 270
+        Top = 126
+        Width = 230
+        Height = 150
+        ScrollBars = ssVertical
+        TabOrder = 4
+        WordWrap = False
+        OnExit = edCorrectionsExit
+      end
+      object lblLayoutNote: TLabel
+        Left = 12
+        Top = 290
+        Width = 8
+        Height = 13
+        Caption = #1054#1096#1080#1073#1086#1095#1085#1086#1077' '#1087#1077#1088#1077#1082#1083#1102#1095#1077#1085#1080#1077' '#1086#1090#1084#1077#1085#1103#1077#1090#1089#1103' '#1076#1074#1086#1081#1085#1099#1084' Shift '#1080#1083#1080' '#1076#1074#1086#1081#1085#1099#1084' Caps Lock.'
+      end
+    end
+    object tsCorrections: TTabSheet
+      Caption = #1048#1089#1087#1088#1072#1074#1083#1077#1085#1080#1103
+      object chkFixTypos: TCheckBox
+        Left = 12
+        Top = 12
+        Width = 480
+        Height = 17
+        Caption = #1048#1089#1087#1088#1072#1074#1083#1103#1090#1100' '#1086#1087#1077#1095#1072#1090#1082#1080': '#1087#1077#1088#1077#1089#1090#1072#1074#1083#1077#1085#1085#1099#1077' '#1089#1086#1089#1077#1076#1085#1080#1077' '#1073#1091#1082#1074#1099' ('#1087#1080#1088#1074#1077#1090' '#8594' '#1087#1088#1080#1074#1077#1090')'
+        TabOrder = 0
+        OnClick = chkBehaviorClick
+      end
+      object chkFixTyposExtended: TCheckBox
+        Left = 30
+        Top = 36
+        Width = 470
+        Height = 17
+        Caption = #1040' '#1090#1072#1082#1078#1077' '#1087#1088#1086#1087#1091#1097#1077#1085#1085#1091#1102', '#1083#1080#1096#1085#1102#1102' '#1080#1083#1080' '#1079#1072#1084#1077#1085#1105#1085#1085#1091#1102' '#1073#1091#1082#1074#1091' ('#1087#1088#1077#1074#1077#1090' '#8594' '#1087#1088#1080#1074#1077#1090')'
+        TabOrder = 1
+        OnClick = chkBehaviorClick
+      end
+      object chkCapitalize: TCheckBox
+        Left = 12
+        Top = 66
+        Width = 480
+        Height = 17
+        Caption = #1047#1072#1075#1083#1072#1074#1085#1072#1103' '#1073#1091#1082#1074#1072' '#1074' '#1085#1072#1095#1072#1083#1077' '#1087#1088#1077#1076#1083#1086#1078#1077#1085#1080#1103' (. '#1087#1088#1080#1074#1077#1090' '#8594' . '#1055#1088#1080#1074#1077#1090')'
+        TabOrder = 2
+        OnClick = chkBehaviorClick
+      end
+      object chkDoubleSpace: TCheckBox
+        Left = 12
+        Top = 90
+        Width = 480
+        Height = 17
+        Caption = #1059#1073#1080#1088#1072#1090#1100' '#1089#1083#1091#1095#1072#1081#1085#1099#1081' '#1076#1074#1086#1081#1085#1086#1081' '#1087#1088#1086#1073#1077#1083
+        TabOrder = 3
+        OnClick = chkBehaviorClick
       end
       object chkFixCapsLock: TCheckBox
         Left = 12
-        Top = 88
+        Top = 114
         Width = 480
         Height = 17
         Caption = #1048#1089#1087#1088#1072#1074#1083#1103#1090#1100' '#1089#1083#1086#1074#1072', '#1085#1072#1073#1088#1072#1085#1085#1099#1077' '#1089' '#1074#1082#1083#1102#1095#1105#1085#1085#1099#1084' Caps Lock ('#1087#1056#1048#1042#1045#1058' '#8594' '#1055#1088#1080#1074#1077#1090')'
-        TabOrder = 2
+        TabOrder = 4
         OnClick = chkBehaviorClick
       end
       object chkFixTwoCapitals: TCheckBox
         Left = 12
-        Top = 112
+        Top = 138
         Width = 480
         Height = 17
         Caption = #1048#1089#1087#1088#1072#1074#1083#1103#1090#1100' '#1076#1074#1077' '#1079#1072#1075#1083#1072#1074#1085#1099#1077' '#1073#1091#1082#1074#1099' '#1074' '#1085#1072#1095#1072#1083#1077' '#1089#1083#1086#1074#1072' ('#1055#1056#1080#1074#1077#1090' '#8594' '#1055#1088#1080#1074#1077#1090')'
-        TabOrder = 3
+        TabOrder = 5
         OnClick = chkBehaviorClick
       end
       object lblTwoCapsExceptions: TLabel
         Left = 30
-        Top = 139
+        Top = 164
         Width = 8
         Height = 13
-        Caption = #1048#1089#1082#1083#1102#1095#1077#1085#1080#1103':'
+        Caption = #1048#1089#1082#1083#1102#1095#1077#1085#1080#1103' '#1076#1083#1103' '#1076#1074#1091#1093' '#1079#1072#1075#1083#1072#1074#1085#1099#1093' ('#1089#1083#1086#1074#1086' '#1074' '#1089#1090#1088#1086#1082#1077'):'
       end
-      object edTwoCapsExceptions: TEdit
-        Left = 130
-        Top = 136
-        Width = 362
-        Height = 21
-        TabOrder = 4
-        OnExit = edCorrectionsExit
-      end
-      object chkSnippets: TCheckBox
-        Left = 12
-        Top = 170
-        Width = 480
-        Height = 17
-        Caption = #1047#1072#1084#1077#1085#1103#1090#1100' '#1096#1072#1073#1083#1086#1085#1099': '#1089#1086#1082#1088#1072#1097#1077#1085#1080#1077' '#1080' '#1087#1088#1086#1073#1077#1083
-        TabOrder = 5
-        OnClick = chkBehaviorClick
-      end
-      object lblSnippetsHint: TLabel
+      object memTwoCapsExceptions: TMemo
         Left = 30
-        Top = 192
-        Width = 8
-        Height = 13
-        Caption = #1050#1072#1078#1076#1072#1103' '#1089#1090#1088#1086#1082#1072': '#1089#1086#1082#1088#1072#1097#1077#1085#1080#1077'='#1090#1077#1082#1089#1090'. '#1055#1086#1076#1089#1090#1072#1085#1086#1074#1082#1080': {date}, {time}, {datetime}.'
-      end
-      object memSnippets: TMemo
-        Left = 30
-        Top = 210
-        Width = 462
-        Height = 110
+        Top = 182
+        Width = 470
+        Height = 100
         ScrollBars = ssVertical
         TabOrder = 6
         WordWrap = False
@@ -478,65 +559,276 @@ object FormMain: TFormMain
       end
       object lblCorrectionsNote: TLabel
         Left = 12
-        Top = 330
+        Top = 296
         Width = 8
         Height = 13
         Caption = #1048#1089#1087#1088#1072#1074#1083#1077#1085#1080#1103' '#1074#1099#1087#1086#1083#1085#1103#1102#1090#1089#1103' '#1087#1086#1089#1083#1077' '#1087#1088#1086#1073#1077#1083#1072'. '#1054#1090#1084#1077#1085#1080#1090#1100' '#1087#1086#1089#1083#1077#1076#1085#1077#1077' '#8212' '#1076#1074#1086#1081#1085#1086#1081' Caps Lock.'
       end
     end
-    object tsExclusions: TTabSheet
-      Caption = #1048#1089#1082#1083#1102#1095#1077#1085#1080#1103
-      object lblExcluded: TLabel
+    object tsSnippets: TTabSheet
+      Caption = #1047#1072#1084#1077#1085#1099
+      object chkSnippets: TCheckBox
         Left = 12
         Top = 12
-        Width = 8
-        Height = 13
-        Caption = #1055#1086#1083#1085#1086#1089#1090#1100#1102' '#1086#1090#1082#1083#1102#1095#1080#1090#1100' '#1074' '#1087#1088#1086#1075#1088#1072#1084#1084#1072#1093' ('#1080#1084#1103' exe '#1074' '#1089#1090#1088#1086#1082#1077'):'
-      end
-      object edExcluded: TMemo
-        Left = 12
-        Top = 30
         Width = 480
-        Height = 110
-        ScrollBars = ssVertical
+        Height = 17
+        Caption = #1047#1072#1084#1077#1085#1103#1090#1100' '#1096#1072#1073#1083#1086#1085#1099': '#1089#1086#1082#1088#1072#1097#1077#1085#1080#1077' '#1080' '#1087#1088#1086#1073#1077#1083
         TabOrder = 0
-        WordWrap = False
-        OnExit = edExcludedExit
+        OnClick = chkBehaviorClick
       end
-      object btnDefaultExcluded: TButton
-        Left = 12
-        Top = 146
-        Width = 120
-        Height = 25
-        Caption = #1055#1086' '#1091#1084#1086#1083#1095#1072#1085#1080#1102
-        TabOrder = 1
-        OnClick = btnDefaultExcludedClick
-      end
-      object lblNoAutoCorrect: TLabel
-        Left = 12
-        Top = 184
+      object lblSnippetsHint: TLabel
+        Left = 30
+        Top = 34
         Width = 8
         Height = 13
-        Caption = #1041#1077#1079' '#1072#1074#1090#1086#1080#1089#1087#1088#1072#1074#1083#1077#1085#1080#1081' '#1080' '#1072#1074#1090#1086#1087#1077#1088#1077#1082#1083#1102#1095#1077#1085#1080#1103' ('#1088#1091#1095#1085#1099#1077' '#1076#1077#1081#1089#1090#1074#1080#1103' '#1088#1072#1073#1086#1090#1072#1102#1090'):'
+        Caption = #1050#1072#1078#1076#1072#1103' '#1089#1090#1088#1086#1082#1072': '#1089#1086#1082#1088#1072#1097#1077#1085#1080#1077'='#1090#1077#1082#1089#1090'.'
       end
-      object memNoAutoCorrect: TMemo
-        Left = 12
-        Top = 202
-        Width = 480
-        Height = 110
+      object memSnippets: TMemo
+        Left = 30
+        Top = 84
+        Width = 470
+        Height = 112
         ScrollBars = ssVertical
-        TabOrder = 2
+        TabOrder = 1
         WordWrap = False
-        OnExit = edExcludedExit
+        OnExit = edCorrectionsExit
       end
-      object btnDefaultNoAutoCorrect: TButton
+      object chkAutoReplace: TCheckBox
         Left = 12
-        Top = 318
+        Top = 206
+        Width = 490
+        Height = 17
+        Caption = #1040#1074#1090#1086#1094#1077#1085#1079#1091#1088#1072': '#1079#1072#1084#1077#1085#1103#1090#1100' '#1089#1083#1086#1074#1072' '#1087#1086' '#1089#1087#1088#1072#1074#1086#1095#1085#1080#1082#1091
+        TabOrder = 2
+        OnClick = chkBehaviorClick
+      end
+      object lblAutoReplaceHint: TLabel
+        Left = 30
+        Top = 226
+        Width = 8
+        Height = 13
+        Caption = #1050#1072#1078#1076#1072#1103' '#1089#1090#1088#1086#1082#1072': '#1089#1083#1086#1074#1086'='#1079#1072#1084#1077#1085#1072'.'
+      end
+      object memAutoReplace: TMemo
+        Left = 30
+        Top = 256
+        Width = 470
+        Height = 108
+        ScrollBars = ssVertical
+        TabOrder = 3
+        WordWrap = False
+        OnExit = edCorrectionsExit
+      end
+    end
+    object tsServices: TTabSheet
+      Caption = #1057#1077#1088#1074#1080#1089#1099
+      object lblTranslator: TLabel
+        Left = 12
+        Top = 15
+        Width = 8
+        Height = 13
+        Caption = #1055#1077#1088#1077#1074#1086#1076#1095#1080#1082':'
+      end
+      object cbTranslator: TComboBox
+        Left = 240
+        Top = 12
+        Width = 252
+        Height = 21
+        Style = csDropDownList
+        TabOrder = 0
+        OnChange = cbServiceChange
+      end
+      object lblSearchEngine: TLabel
+        Left = 12
+        Top = 43
+        Width = 8
+        Height = 13
+        Caption = #1055#1086#1080#1089#1082':'
+      end
+      object cbSearchEngine: TComboBox
+        Left = 240
+        Top = 40
+        Width = 252
+        Height = 21
+        Style = csDropDownList
+        TabOrder = 1
+        OnChange = cbServiceChange
+      end
+      object lblDeepLKey: TLabel
+        Left = 12
+        Top = 71
+        Width = 8
+        Height = 13
+        Caption = #1050#1083#1102#1095' DeepL API '#1076#1083#1103' '#1079#1072#1084#1077#1085#1099' '#1087#1077#1088#1077#1074#1086#1076#1086#1084':'
+      end
+      object edDeepLKey: TEdit
+        Left = 240
+        Top = 68
+        Width = 252
+        Height = 21
+        PasswordChar = '*'
+        TabOrder = 2
+        OnExit = edCorrectionsExit
+      end
+      object lblAiHeader: TLabel
+        Left = 12
+        Top = 108
+        Width = 8
+        Height = 13
+        Caption = #1054#1073#1098#1103#1089#1085#1077#1085#1080#1077' '#1074#1099#1076#1077#1083#1077#1085#1085#1086#1075#1086' '#1090#1077#1082#1089#1090#1072' '#1089' '#1087#1086#1084#1086#1097#1100#1102' '#1048#1048
+        Font.Style = [fsBold]
+        ParentFont = False
+      end
+      object lblAiService: TLabel
+        Left = 12
+        Top = 135
+        Width = 8
+        Height = 13
+        Caption = #1057#1077#1088#1074#1080#1089' '#1048#1048':'
+      end
+      object cbAiService: TComboBox
+        Left = 240
+        Top = 132
+        Width = 252
+        Height = 21
+        Style = csDropDownList
+        TabOrder = 3
+        OnChange = cbAiServiceChange
+      end
+      object lblAiKey: TLabel
+        Left = 12
+        Top = 163
+        Width = 8
+        Height = 13
+        Caption = #1050#1083#1102#1095' API:'
+      end
+      object edAiKey: TEdit
+        Left = 240
+        Top = 160
+        Width = 252
+        Height = 21
+        PasswordChar = '*'
+        TabOrder = 4
+        OnExit = edCorrectionsExit
+      end
+      object lblAiUrl: TLabel
+        Left = 12
+        Top = 191
+        Width = 8
+        Height = 13
+        Caption = #1040#1076#1088#1077#1089' API:'
+      end
+      object edAiUrl: TEdit
+        Left = 240
+        Top = 188
+        Width = 252
+        Height = 21
+        TabOrder = 5
+        OnExit = edCorrectionsExit
+      end
+      object lblAiModel: TLabel
+        Left = 12
+        Top = 219
+        Width = 8
+        Height = 13
+        Caption = #1052#1086#1076#1077#1083#1100':'
+      end
+      object edAiModel: TEdit
+        Left = 240
+        Top = 216
+        Width = 252
+        Height = 21
+        TabOrder = 6
+        OnExit = edCorrectionsExit
+      end
+      object lblAiNote: TLabel
+        Left = 12
+        Top = 250
+        Width = 480
+        Height = 70
+        AutoSize = False
+        Caption = #1057#1077#1088#1074#1080#1089' '#1048#1048
+        WordWrap = True
+      end
+      object btnAiTest: TButton
+        Left = 12
+        Top = 330
+        Width = 120
+        Height = 25
+        Caption = #1055#1088#1086#1074#1077#1088#1080#1090#1100
+        TabOrder = 7
+        OnClick = btnAiTestClick
+      end
+    end
+    object tsExclusions: TTabSheet
+      Caption = #1048#1089#1082#1083#1102#1095#1077#1085#1080#1103
+      object lblPrograms: TLabel
+        Left = 12
+        Top = 10
+        Width = 8
+        Height = 13
+        Caption = #1055#1088#1086#1075#1088#1072#1084#1084#1099
+      end
+      object edProgramFilter: TEdit
+        Left = 12
+        Top = 44
+        Width = 200
+        Height = 21
+        TabOrder = 0
+        OnChange = edProgramFilterChange
+      end
+      object chkProgramsCheckedOnly: TCheckBox
+        Left = 226
+        Top = 46
+        Width = 200
+        Height = 17
+        Caption = #1058#1086#1083#1100#1082#1086' '#1086#1090#1084#1077#1095#1077#1085#1085#1099#1077
+        TabOrder = 1
+        OnClick = chkProgramsCheckedOnlyClick
+      end
+      object sgPrograms: TStringGrid
+        Left = 12
+        Top = 72
+        Width = 492
+        Height = 262
+        ColCount = 4
+        DefaultRowHeight = 20
+        FixedCols = 0
+        RowCount = 2
+        Options = [goFixedVertLine, goFixedHorzLine, goVertLine, goHorzLine, goColSizing, goThumbTracking]
+        TabOrder = 2
+        OnDrawCell = sgProgramsDrawCell
+        OnKeyDown = sgProgramsKeyDown
+        OnMouseUp = sgProgramsMouseUp
+        OnSelectCell = sgProgramsSelectCell
+      end
+      object btnAddProgram: TButton
+        Left = 12
+        Top = 342
+        Width = 150
+        Height = 25
+        Caption = #1044#1086#1073#1072#1074#1080#1090#1100' '#1087#1088#1086#1075#1088#1072#1084#1084#1091'...'
+        TabOrder = 3
+        OnClick = btnAddProgramClick
+      end
+      object btnRemoveProgram: TButton
+        Left = 170
+        Top = 342
+        Width = 130
+        Height = 25
+        Caption = #1059#1073#1088#1072#1090#1100' '#1080#1079' '#1089#1087#1080#1089#1082#1072
+        Enabled = False
+        TabOrder = 4
+        OnClick = btnRemoveProgramClick
+      end
+      object btnDefaultPrograms: TButton
+        Left = 384
+        Top = 342
         Width = 120
         Height = 25
         Caption = #1055#1086' '#1091#1084#1086#1083#1095#1072#1085#1080#1102
-        TabOrder = 3
-        OnClick = btnDefaultNoAutoCorrectClick
+        TabOrder = 5
+        OnClick = btnDefaultProgramsClick
       end
     end
   end
@@ -653,164 +945,6 @@ object FormMain: TFormMain
       OnClick = mniExitClick
       Caption = #1042#1099#1093#1086#1076
     end
-  end
-  object TrayIcons: TPngImageList
-    Height = 32
-    Width = 32
-    PngImages = <
-      item
-        Background = clWindow
-        Name = 'en'
-        PngImage.Data = {
-          89504E470D0A1A0A0000000D4948445200000020000000200806000000737A7A
-          F4000000017352474200AECE1CE9000000097048597300000EC300000EC301C7
-          6FA8640000001974455874536F667477617265005061696E742E4E455420352E
-          312E313213014774000000B86558496649492A000800000005001A0105000100
-          00004A0000001B01050001000000520000002801030001000000020000003101
-          0200110000005A00000069870400010000006C00000000000000600000000100
-          000060000000010000005061696E742E4E455420352E312E3132000003000090
-          0700040000003032333001A00300010000000100000005A00400010000009600
-          0000000000000200010002000400000052393800020007000400000030313030
-          00000000D9A79A95C9B70B5F000002A74944415478DACD975B48145118C7FFA3
-          AE2B24156AA14594D045F34AF550A474350C2C2282AD34098216C3EA2548A2A7
-          22628520AC8C821E6A4D7BB22B41C15610640FE20565B50B21D1560F527491B2
-          95B6FFF1EC36E3AEB36CBBD38C7FF838DF9CB37BBEDF7C73AE0A340A1C400E8B
-          7ADA56DA625A2A8CD12FDA4BDA1DDA79A5191F420D8A26F84E169768D30D0AAA
-          A76F342721DAFE020483B76A81FEB302B46A01A104D33E68C29B4F96893C0170
-          8ACE31938387E412007D740A2D02F00A80511837DAFF557E0110B028F8B8A626
-          80F713D0FE46FF4F550B80D22CE9DF7805F84680144EE0F239C0B259137FFBF8
-          1DE0F10169C9C0F11531021CED001ABBF501CE9573B92C0286BE02B92D6A7D86
-          1DE8E78A92334DAD3BD3031C7926017E38E30028CB069293003B3B480D96CE02
-          A0625E2480501DDB9AD71808D0B903583E7BF24C6801C4121AEAA8CFC1799D69
-          32C0FEA5C065AFF46BB88DB9371A04E0E1BE5892A5B6A5DBE4670807B859099C
-          E804BA87E573C7766065B60100E1DAB590BBD6A64800F7068E1106713C94CFDB
-          7209B5394E800602B87400762F02AE5744025C23C09E25C0BA5BC093F7B2EE11
-          B3D7359C2080E8A454F3096670AA2529910057D703B579C083B740E53D595735
-          1F583B37418058076108603CFDF781DB43D2DF970F5C193019E0F9476055BBF4
-          6D5C3BFCBF130068E5F72ECC98D85E94191D4068AF87752FD467C306A1D0D9D5
-          C0E192E800839F81FCB638012EF08852FF541FA0A90C38581C1D40C8D5059CE4
-          DA30320614336BBD8E1801847E8EE903A4A5A8FE9751B904CFB4232E4D89F380
-          E547B27E3A0516010C0880D3741A2C026814003C4841CCD87493837F87B89808
-          8F10D52CDC30F76A56CBAB598BF6725AC3E2A20999106F5E278223FC8D09C1BD
-          0B87685B68DCF9613328A89FF69A7697D6C4E0BE50C31F3D9329AD04291C0400
-          00000049454E44AE426082}
-      end
-      item
-        Background = clWindow
-        Name = 'ru'
-        PngImage.Data = {
-          89504E470D0A1A0A0000000D4948445200000020000000200806000000737A7A
-          F4000000017352474200AECE1CE9000000097048597300000EC300000EC301C7
-          6FA8640000001974455874536F667477617265005061696E742E4E455420352E
-          312E313213014774000000B86558496649492A000800000005001A0105000100
-          00004A0000001B01050001000000520000002801030001000000020000003101
-          0200110000005A00000069870400010000006C00000000000000600000000100
-          000060000000010000005061696E742E4E455420352E312E3132000003000090
-          0700040000003032333001A00300010000000100000005A00400010000009600
-          0000000000000200010002000400000052393800020007000400000030313030
-          00000000D9A79A95C9B70B5F000002CF4944415478DACD975B48544118C7FF9B
-          59D2CD2E106B8A98B58B903D24992B8595B9DDC8DD2E2FA212F41446443DB515
-          5842A6EE5349583D15E4E64345B14A12A9111865D0D5B00B9676237CA8A82DBA
-          586DFF69CE76CEEEBAD591DDB37EF031DF999933DF6F66BEF39D191334E2DF82
-          14165BA90EAA953A06D1916FD4C7542FF5B0A901AF030D268DF31216C7A893A2
-          E43492F8A89B09D1F40740717E4A0B1463F153CB04844959F68706CC7CA895C8
-          1200D534761BEC3C207502A09B46769C007A04C057442FDAF5CAA000F0C7C9F9
-          6F1999003D6F81734FC33B67F03B599D0E4C490AAEBFF81C687B29ED5D39C0D4
-          90761FD3D0FE9BC04FBF7C7F69DA3F00765E03DCB7235357CE07AA160CDDFFCA
-          5AA0604670FFAE01C07656DAFB7281BDB93A00169981B9D380171F8196676A1F
-          4F11506AD50F5045E7957A005AD7002BD3C3EBCB2C40A3DD6080DEF780C523ED
-          65A9DC77A7C1002798B03775287DE601B5F90600143162B32603FD3E35062CC9
-          40E73A60FA38F9EC62FFBA5801848A9D4047170399C96A5D4C01D6670269E381
-          FA6EF93C7614D0CEBD5F98F2FF00370890375C80CB74B68401D7DCC76352ABBA
-          2D971C6A7FF72DBE735DDAE75701CE99C1E3B5F403C517A4DD50005464EB00D0
-          CEC8EE55335E3B010A958CE6259C53817331386BF283C7DBD1091CBC27ED0E87
-          CE4CA805F0F05457DE26ED92D940D37269F77D909FE70F65A4EA3C2629E60993
-          49BEB3A74BD6674CE4C9A794DB98304C0021E6E3C0C067693F295383F1D05D60
-          FB55FC55CEAC0036CC0AAED30DA00DB85A1BFBE6A86DA77B8103FCE9DC79133C
-          5E61AA5C159B391C2AE2EFF8CB7759268DD6D726E4D32097FA9D6CB772851213
-          105146C47920EE47B2FB34E6C409E08100A8A1E18A13805B0088187F449D60B0
-          731E717831111621F845E3248CBD9A6DE4D5AC517B392D6771C480951033AF10
-          CE113A63423065601BB598CA648BC42839656600D3149AA9F574FE2AD0F00B33
-          E63FAD0D72BEFA0000000049454E44AE426082}
-      end
-      item
-        Background = clWindow
-        Name = 'white_En'
-        PngImage.Data = {
-          89504E470D0A1A0A0000000D4948445200000020000000200806000000737A7A
-          F4000000017352474200AECE1CE9000000097048597300000EC300000EC301C7
-          6FA8640000001974455874536F667477617265005061696E742E4E455420352E
-          312E313213014774000000B86558496649492A000800000005001A0105000100
-          00004A0000001B01050001000000520000002801030001000000020000003101
-          0200110000005A00000069870400010000006C00000000000000600000000100
-          000060000000010000005061696E742E4E455420352E312E3132000003000090
-          0700040000003032333001A00300010000000100000005A00400010000009600
-          0000000000000200010002000400000052393800020007000400000030313030
-          00000000D9A79A95C9B70B5F000002AD4944415478DACD975B6C8B6118C7FF5F
-          181382B8710AD90532A7CCE9624404CB0809B3DD10B3ED62C9C49C9688432476
-          A3D8706134962D111D0BD9DC082E96B830340821A68D0D1312B6DE8963745BAB
-          FE8FB7F5756DBFA6DACFD7FD9327EFF3BD6FDBE7F73E7DBEF7A0214C814A4C66
-          B38BB691368B3602E6A89FF69A768366D7CEC3131AD0C2826F61D3401B6B5250
-          237DA36D27C4D5BF00C1E057C281FEB302B46281D08269EFB260E6B132912D00
-          C7E81CB6387848B502E0A2332F4D002F05A00FE655FBBF6A400002690AFE4743
-          1460D21C604191F1B7DCB7808FCF95BF986FF0F8A980DF07BCBD0F7C7836F8B3
-          3357B1D6F3986C2FD0664B1060532D907FC018A0753770D70E4CC8028EBED3FB
-          7F7C026CACE7AF1EBD2F6F1F50745A01548D4A02A0DBC965C30FF858ABBE7ED5
-          3AB96076DD8E0610DDAB075A2A4D04A859C2B43E8D9D897080007F460B2EA4B6
-          F980C76D3180B311585EA1FCC7CD4053894900752CA09E0E7DACEFBBFA1B2201
-          1A0A81F5D5C0B485EAF9D452E0FD23130022F5849B98636B34808333F6B346CA
-          5BD473C775A0B1304980821A60CD4103006E9A8EE26880A652A6FE32B0F70E4F
-          122B55DF99D5C0F4452902C88F84DE7991F70B0BEE570C8032025C0266AFE591
-          A64DF5B9B85EBC694F1120D1220C01882A98FE9C02E53FB8002C2BB718202B17
-          D8FF50F9FE016058460A00175970BDEEC1E3BDAEF800A21207905BA63F9B5684
-          A26B55407B5D7C8089D940756792002B76029BEDC600AD7BB8179C8B0F20CAE7
-          24D61D01468EE65AF202389E9320806878A63180CFABFB99E3D412FCF33392D1
-          90380FA4FD4826253E374D009D027082CEA134019C148029745ED1C6581C9CDB
-          2A2F26E211427617EE24965ECD4A79356B0EBF9C6E63536F412664E63B243822
-          674C081E6FC155061B683368192605E586806EDA4DDA5906EF090DFC0626E43F
-          AD296AE7840000000049454E44AE426082}
-      end
-      item
-        Background = clWindow
-        Name = 'White_Ru'
-        PngImage.Data = {
-          89504E470D0A1A0A0000000D4948445200000020000000200806000000737A7A
-          F4000000017352474200AECE1CE9000000097048597300000EC300000EC301C7
-          6FA8640000001974455874536F667477617265005061696E742E4E455420352E
-          312E313213014774000000B86558496649492A000800000005001A0105000100
-          00004A0000001B01050001000000520000002801030001000000020000003101
-          0200110000005A00000069870400010000006C00000000000000600000000100
-          000060000000010000005061696E742E4E455420352E312E3132000003000090
-          0700040000003032333001A00300010000000100000005A00400010000009600
-          0000000000000200010002000400000052393800020007000400000030313030
-          00000000D9A79A95C9B70B5F000002D94944415478DACD975D48145114C7FF6B
-          65411F1012F6816414B195523DF4F11094B6264299524261856FB9D2D74B661F
-          942D886D109A56223D4864EA4B915B5ABA65D10758F91025B9EA22FBD08709EA
-          435299D2F6BFDDDD6646DD6A6477D603873973EF9D39BF7BE6CEB9E79AA0126F
-          0EE6F172809A4A5D4A8D4470E407B583EAA05E325DC1277F8749E57C172FE5D4
-          5941721A48BE50F713A2FA0F80CF79951A28C4E2A5660A08932FEC2E03663E56
-          24CC02A080C609839DFBC52E00DED2880B13C03B013088E0AD76BD322400BC61
-          72FE5B2628C0DCE5C0CAF4D1A3FB3C406B3DF0AD5FDBBE2C99EBD922ED8642E0
-          6B9FB67FEA4C20E514BD45C8E73B1FFD0320CD0E24E506C6AEB7017567C61E5F
-          B411703FD18E8F5D071C6D96765D3E9F3FAB03C0FD0CF8C81F65760C10BF5519
-          539109B454E907B84BF07B361D009753F8B3DC1FDDFEF206706D8FC100739600
-          F99DD2763D044A2D0603ACCF02F65648BB91636AF30C00703D00BAB95544C52A
-          6BA08751B8B00118E891F7DBCF015B8E850860A4B43981EA6CA0B74B690B29C0
-          EB5B40FF7B20E190BC1F62E62ED90C743DFF7F80856B81DC17E304284E60E278
-          CCED6A1B6075289FA53449196FE1D874BBB4CBD38037B5DAF7C5F1D359EF48BB
-          2607785AA603403DA3834E25E35D64143A9AA41DCF0A2EDBE7B481D1701CD7BE
-          6F47119078C437A1449D99500DB086C927AB52DA2D354C46BBA51DB548FE9E11
-          93E4BDE324F04A2429AF7C26B540B6F77A009B19181E1C278090C26ED64ED1D2
-          3EBD58598C9B0E0319C5F8AB5CDDC9357553D3A41F40BDE06E330F38ED4ADFEA
-          0C2099C555CC2AEDFBDA9B64543CCDA35C05DE8E274F93D7E1EFFAFA84444E07
-          A2CDB2FF33ABF19F4301833221EA81B09764AD34568409A04D00B084415E9800
-          CE0B80F934DAA9330C763E007130111621982D701DC61ECDF6F16856A93E9C8A
-          F2A6CC804888995B85738C9C312116F022B63DEE3C60F9832941722A12819B2A
-          76A4123AFFE0EFF805A1D74AAD923D35BB0000000049454E44AE426082}
-      end>
-    Left = 352
-    Top = 64
-    Bitmap = {}
   end
   object TimerLayout: TTimer
     Interval = 250

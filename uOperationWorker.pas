@@ -39,7 +39,21 @@ type
     // Triggered by a double Alt: wait until the application leaves its menu
     // mode and take the focused window again.
     SettleFocus: Boolean;
+    // laAutoSwitch: words never changed automatically, and what may be done
+    // with a misspelled word (switch its layout, fix swapped letters).
     AutoSwitchExceptions: TArray<string>;
+    AllowLayoutSwitch: Boolean;
+    AllowTypoFix: Boolean;
+    TypoExtended: Boolean;      // Also missing/extra/replaced letters.
+    AutoSwitchLearned: TArray<string>;  // Correct forms always switched.
+    // Switch decided by the main thread from the start of a word being typed.
+    InWord: Boolean;
+    // The word starts a sentence: capitalise the result (or only that).
+    Capitalize: Boolean;
+    // Template with {cursor}: Left key presses after typing.
+    CaretBack: Integer;
+    // laTranslateReplace: DeepL key (empty = Google Translate).
+    DeepLApiKey: string;
     FocusWnd: HWND;
     WindowLayout: HKL;
     PreviousLayout: HKL;
@@ -52,6 +66,10 @@ type
     Action: TLSAction;
     Success: Boolean;
     UsedBuffer: Boolean;   // The request plan was applied.
+    TypoFixed: Boolean;    // laAutoSwitch fixed a typo, no layout change.
+    CapitalOnly: Boolean;  // laAutoSwitch only capitalised the word.
+    LearnedSwitch: Boolean; // Switched because the word was learned.
+    FixedWord: string;     // laAutoSwitch: the word as written by the correction.
     OriginalText: string;  // Text before a selection/caret replacement.
     LookupText: string;    // laTranslate / laWebSearch: text to look up.
     BufferAction: TBufferAction;
@@ -78,6 +96,10 @@ type
     FSpell: TSpellCheck;
     function ApproveAutoSwitch(Request: TOperationRequest;
       const Original, Converted: string; Res: TOperationResult): Boolean;
+    function FindTypoFix(Request: TOperationRequest; const Word: string;
+      Layout: HKL; out Fixed: string): Boolean;
+    function TranslateText(Request: TOperationRequest; const Text: string;
+      Res: TOperationResult; out Translated: string): Boolean;
     procedure HandleRequest(Request: TOperationRequest);
     procedure Process(Request: TOperationRequest; Res: TOperationResult);
     function ReadNativeEdit(Target: HWND; out Text: string;
@@ -94,7 +116,9 @@ type
     function ReplaceSelection(const Value: string): Boolean;
     function TransformText(Request: TOperationRequest; const Text: string;
       Res: TOperationResult; out Converted: string): Boolean;
-    procedure SwitchLayout(FocusWnd: HWND; Target: HKL);
+    procedure DoSwitchLayout(FocusWnd: HWND; Target: HKL);
+    // True when the window has the Target layout afterwards.
+    function SwitchLayout(FocusWnd: HWND; Target: HKL): Boolean;
     function WaitForModifiersReleased(TimeoutMS: DWORD): Boolean;
     procedure Notify(Res: TOperationResult; const Key, Text: string);
   protected
@@ -116,7 +140,7 @@ implementation
 
 uses
   Winapi.ActiveX,
-  uDiagnostics, uWinUtils, uLocale, uTextTools;
+  uDiagnostics, uWinUtils, uLocale, uTextTools, uTranslate;
 
 const
   WM_LS_EXECUTE = WM_APP + 100;
@@ -518,6 +542,9 @@ begin
         else if not FCatalog.ChoosePair(Text, Request.WindowLayout,
              Request.PreviousLayout, Pair) then
         begin
+          // A single layout still allows fixing typos in it.
+          if Request.Action = laAutoSwitch then
+            Exit(True);
           DiagnosticsLog('convert.no_layout_pair');
           Notify(Res, 'single_layout',
             T('В Windows установлена только одна раскладка клавиатуры.',
@@ -540,10 +567,60 @@ begin
       Converted := InvertTextCase(Text);
     laTransliterate:
       Converted := TransliterateText(Text);
+    laTranslateReplace:
+      if not TranslateText(Request, Text, Res, Converted) then
+        Exit;
   else
     Exit;
   end;
   Result := True;
+end;
+
+function LayoutForLanguage(const Tag: string): HKL;
+var
+  Layout: HKL;
+  Primary: Word;
+begin
+  // The first installed layout of the language ("en" -> US English...).
+  if Tag = 'en' then
+    Primary := LANG_ENGLISH
+  else if Tag = 'ru' then
+    Primary := LANG_RUSSIAN
+  else
+    Exit(0);
+  for Layout in TKeyboardLayoutCatalog.InstalledLayouts do
+    if (LoWord(NativeUInt(Layout)) and $3FF) = Primary then
+      Exit(Layout);
+  Result := 0;
+end;
+
+function TOperationWorker.TranslateText(Request: TOperationRequest; const Text: string;
+  Res: TOperationResult; out Translated: string): Boolean;
+var
+  Target, Service, Error: string;
+  Started: DWORD;
+begin
+  // Only the length and the outcome are logged, never the text.
+  Target := ChooseTranslationTarget(Text);
+  Started := GetTickCount;
+  Result := TranslateOnline(Text, Target, Request.DeepLApiKey, Translated, Service, Error);
+  DiagnosticsLogFmt('translate.result service=%s target=%s length=%d ms=%d ok=%s error=%s',
+    [Service, Target, Length(Text), GetTickCount - Started, BoolToStr(Result, True), Error]);
+  if not Result then
+  begin
+    if Error = 'too_long' then
+      Notify(Res, 'translate_failed', Format(T(
+        'Слишком длинный текст для перевода (больше %d символов).',
+        'The text is too long to translate (more than %d characters).'),
+        [MAX_TRANSLATE_LENGTH]))
+    else if Error <> 'empty' then
+      Notify(Res, 'translate_failed', T(
+        'Не удалось перевести текст: переводчик недоступен. Проверьте подключение к интернету.',
+        'Could not translate the text: the translator is not available. Check the Internet connection.'));
+    Exit;
+  end;
+  // Continue typing in the language of the translation.
+  Res.TargetLayout := LayoutForLanguage(Target);
 end;
 
 function IsConsoleWindowClass(const ClassName: string): Boolean;
@@ -553,7 +630,15 @@ begin
     SameText(ClassName, 'PseudoConsoleWindow');
 end;
 
-procedure TOperationWorker.SwitchLayout(FocusWnd: HWND; Target: HKL);
+function TOperationWorker.SwitchLayout(FocusWnd: HWND; Target: HKL): Boolean;
+begin
+  if (FocusWnd = 0) or (Target = 0) then
+    Exit(True);
+  DoSwitchLayout(FocusWnd, Target);
+  Result := GetKeyboardLayout(GetWindowThreadProcessId(FocusWnd, nil)) = Target;
+end;
+
+procedure TOperationWorker.DoSwitchLayout(FocusWnd: HWND; Target: HKL);
 
   function CurrentLayout: HKL;
   begin
@@ -643,6 +728,18 @@ begin
       DiagnosticsLog('autoswitch.skipped reason=exception');
       Exit;
     end;
+  if Request.InWord then
+  begin
+    DiagnosticsLogFmt('autoswitch.in_word length=%d', [Length(Original)]);
+    Exit(True);
+  end;
+  for Item in Request.AutoSwitchLearned do
+    if AnsiSameText(Item, Converted) then
+    begin
+      DiagnosticsLogFmt('autoswitch.check learned=True length=%d', [Length(Original)]);
+      Res.LearnedSwitch := True;
+      Exit(True);
+    end;
   SourceTag := LayoutLanguageTag(Res.SourceLayout);
   TargetTag := LayoutLanguageTag(Res.TargetLayout);
   SourceResult := FSpell.CheckWord(SourceTag, Original);
@@ -654,6 +751,31 @@ begin
   DiagnosticsLogFmt('autoswitch.check source=%s:%s target=%s:%s length=%d switch=%s',
     [SourceTag, ResultNames[SourceResult], TargetTag, ResultNames[TargetResult],
      Length(Original), BoolToStr(Result, True)]);
+end;
+
+function TOperationWorker.FindTypoFix(Request: TOperationRequest;
+  const Word: string; Layout: HKL; out Fixed: string): Boolean;
+var
+  Tag, Item: string;
+  Suggestions: TArray<string>;
+begin
+  // Words are not written to the log, only the language and the decision.
+  Result := False;
+  Fixed := '';
+  for Item in Request.AutoSwitchExceptions do
+    if AnsiSameText(Item, Word) then
+    begin
+      DiagnosticsLog('typo.skipped reason=exception');
+      Exit;
+    end;
+  Tag := LayoutLanguageTag(Layout);
+  if FSpell.CheckWord(Tag, Word) <> scMisspelled then
+    Exit;
+  Suggestions := FSpell.Suggest(Tag, Word);
+  Result := ChooseTypoFix(Word, Suggestions, Fixed, Request.TypoExtended);
+  DiagnosticsLogFmt('typo.check lang=%s suggestions=%d length=%d extended=%s fix=%s',
+    [Tag, Length(Suggestions), Length(Word), BoolToStr(Request.TypoExtended, True),
+     BoolToStr(Result, True)]);
 end;
 
 function TOperationWorker.TypingContinued(Request: TOperationRequest): Boolean;
@@ -668,6 +790,7 @@ procedure TOperationWorker.ProcessLookup(Request: TOperationRequest;
   Res: TOperationResult; const Focus: TUIAFocusInfo);
 const
   MAX_LOOKUP_LEN = 1000;
+  MAX_EXPLAIN_LEN = 6000;
 var
   Text, Source: string;
   CaretText: WideString;
@@ -699,14 +822,28 @@ begin
   else
   begin
     DiagnosticsLog('lookup.no_text');
-    Notify(Res, 'lookup_empty', T('Выделите текст, который нужно перевести или найти.',
-      'Select the text to translate or search for.'));
+    if Request.Action = laExplain then
+      Notify(Res, 'lookup_empty', T('Выделите текст, который нужно объяснить.',
+        'Select the text to explain.'))
+    else
+      Notify(Res, 'lookup_empty', T('Выделите текст, который нужно перевести или найти.',
+        'Select the text to translate or search for.'));
     Exit;
   end;
-  Text := Trim(StringReplace(StringReplace(Text, #13, ' ', [rfReplaceAll]), #10, ' ',
-    [rfReplaceAll]));
-  if Length(Text) > MAX_LOOKUP_LEN then
-    SetLength(Text, MAX_LOOKUP_LEN);
+  if Request.Action = laExplain then
+  begin
+    // Code and lists keep their lines; the AI request takes more text.
+    Text := Trim(Text);
+    if Length(Text) > MAX_EXPLAIN_LEN then
+      SetLength(Text, MAX_EXPLAIN_LEN);
+  end
+  else
+  begin
+    Text := Trim(StringReplace(StringReplace(Text, #13, ' ', [rfReplaceAll]), #10, ' ',
+      [rfReplaceAll]));
+    if Length(Text) > MAX_LOOKUP_LEN then
+      SetLength(Text, MAX_LOOKUP_LEN);
+  end;
   DiagnosticsLogFmt('lookup.text source=%s length=%d', [Source, Length(Text)]);
   Res.LookupText := Text;
   Res.Success := Text <> '';
@@ -717,7 +854,8 @@ procedure TOperationWorker.Process(Request: TOperationRequest;
   Res: TOperationResult);
 var
   Focus: TUIAFocusInfo;
-  Text, Region, Converted, Typed, Source: string;
+  Text, Region, Converted, Typed, Source, Fixed: string;
+  TypedLayout: HKL;
   CaretText: WideString;
   CaretRange: IUnknown;
 begin
@@ -768,7 +906,7 @@ begin
     Exit;
   end;
 
-  if Request.Action in [laTranslate, laWebSearch] then
+  if Request.Action in [laTranslate, laWebSearch, laExplain] then
   begin
     ProcessLookup(Request, Res, Focus);
     Exit;
@@ -783,11 +921,59 @@ begin
       [Ord(Request.Plan.Mode), Length(Region), Request.Plan.DeleteCount]);
     if not TransformText(Request, Region, Res, Converted) then
       Exit;
-    if (Request.Action = laAutoSwitch) and
-       not ApproveAutoSwitch(Request, Region, Converted, Res) then
+    if Request.Action = laAutoSwitch then
     begin
-      Res.BufferAction := baKeep;
-      Exit;
+      TypedLayout := Res.SourceLayout;
+      if TypedLayout = 0 then
+        TypedLayout := Request.WindowLayout;
+      if Request.AllowLayoutSwitch and (Res.TargetLayout <> 0) and
+         ApproveAutoSwitch(Request, Region, Converted, Res) then
+        // Converted is the word in the other layout.
+      else if Request.AllowTypoFix and
+         FindTypoFix(Request, Region, TypedLayout, Fixed) then
+      begin
+        // Same layout, letters put in order.
+        Converted := Fixed;
+        Res.TypoFixed := True;
+        Res.SourceLayout := 0;
+        Res.TargetLayout := 0;
+      end
+      else if Request.Capitalize and CanCapitalize(Region) then
+      begin
+        Converted := Region;
+        Res.CapitalOnly := True;
+        Res.SourceLayout := 0;
+        Res.TargetLayout := 0;
+      end
+      else
+      begin
+        Res.BufferAction := baKeep;
+        Exit;
+      end;
+      // First word of a sentence.
+      if Request.Capitalize and CanCapitalize(Converted) then
+        Converted := CapitalizeFirst(Converted);
+      Res.FixedWord := Converted;
+    end;
+    if Request.InWord and (Res.TargetLayout <> 0) then
+    begin
+      // The rest of the word is typed right after this: switch first, so
+      // that it never lands in the old layout, and leave the text alone in
+      // a window that ignores layout requests.
+      if not SwitchLayout(Request.FocusWnd, Res.TargetLayout) then
+      begin
+        DiagnosticsLog('autoswitch.in_word_skipped reason=layout_not_switched');
+        Res.BufferAction := baKeep;
+        Exit;
+      end;
+      Res.TargetLayout := 0;
+      if TypingContinued(Request) then
+      begin
+        // A key typed while switching is already in the new layout: the
+        // start stays as typed, the rest of the word follows in the target.
+        Res.BufferAction := baKeep;
+        Exit;
+      end;
     end;
     Res.UsedBuffer := True;
     Typed := Converted + Request.Plan.Tail;
@@ -814,7 +1000,16 @@ begin
       SendKeyTap(Request.CapsOffKey);
       DiagnosticsLog('autocorrect.caps_lock_turned_off');
     end;
-    if Res.Success then
+    if Res.Success and (Request.CaretBack > 0) then
+    begin
+      // Template with {cursor}: the caret leaves the tracked text.  The
+      // space typed after the abbreviation (the tail) is passed too.
+      SendKeyRepeat(VK_LEFT, Request.CaretBack + Length(Request.Plan.Tail));
+      Res.BufferAction := baClear;
+      DiagnosticsLogFmt('template.caret_back count=%d',
+        [Request.CaretBack + Length(Request.Plan.Tail)]);
+    end
+    else if Res.Success then
     begin
       Res.BufferAction := baSet;
       Res.NewBufferText := Request.Plan.Head + Typed;

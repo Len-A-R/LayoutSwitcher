@@ -80,6 +80,9 @@ type
     // Plan that converts one word (used by the automatic layout switch).
     class function PlanWord(const Buffer: string; WordStart,
       WordLength: Integer): TBufferPlan; static;
+    // The whole phrase without the spaces around it (Mode bmPhrase), or
+    // Mode bmNone when the buffer holds only spaces.
+    class function PlanPhrase(const Buffer: string): TBufferPlan; static;
   end;
 
 // Last run of non-space characters, ignoring trailing spaces.
@@ -312,6 +315,27 @@ class function TConversionChain.PlanWord(const Buffer: string; WordStart,
 begin
   Result := PlanReplacement(Buffer, WordStart, WordLength, '');
   Result.Mode := bmWord;
+end;
+
+class function TConversionChain.PlanPhrase(const Buffer: string): TBufferPlan;
+var
+  First, Last: Integer;
+begin
+  First := 1;
+  while (First <= Length(Buffer)) and IsSpace(Buffer[First]) do
+    Inc(First);
+  Last := Length(Buffer);
+  while (Last >= First) and IsSpace(Buffer[Last]) do
+    Dec(Last);
+  Result := PlanReplacement(Buffer, First, Last - First + 1, '');
+  if Last < First then
+  begin
+    Result.Mode := bmNone;
+    Result.RegionStart := 1;
+    Result.RegionLength := 0;
+  end
+  else
+    Result.Mode := bmPhrase;
 end;
 
 procedure TConversionChain.CompletedWhole(Action: TLSAction; const NewBuffer,

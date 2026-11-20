@@ -22,6 +22,15 @@ uses
   uUpdateProgress in 'uUpdateProgress.pas',
   uSignature in 'uSignature.pas',
   uSpellCheck in 'uSpellCheck.pas',
+  uWordStarts in 'uWordStarts.pas',
+  uInWordSwitch in 'uInWordSwitch.pas',
+  uTrayIconData in 'uTrayIconData.pas',
+  uTranslate in 'uTranslate.pas',
+  uProgramList in 'uProgramList.pas',
+  uSounds in 'uSounds.pas',
+  uModernUI in 'uModernUI.pas',
+  uAiExplain in 'uAiExplain.pas',
+  uExplainWindow in 'uExplainWindow.pas',
   uOperationWorker in 'uOperationWorker.pas',
   uMain in 'uMain.pas' {FormMain};
 

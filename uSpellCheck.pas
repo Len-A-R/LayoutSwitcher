@@ -27,6 +27,9 @@ type
     destructor Destroy; override;
     // scUnknown when the language has no spelling dictionary.
     function CheckWord(const LanguageTag, Word: string): TSpellCheckResult;
+    // Spelling suggestions for a misspelled word (at most MaxCount); empty
+    // when the language has no dictionary.
+    function Suggest(const LanguageTag, Word: string; MaxCount: Integer = 10): TArray<string>;
   end;
 
 // "ru-RU" for a keyboard layout of the Russian language.
@@ -56,6 +59,7 @@ type
   ['{B6FD0B71-E2BC-4653-8D05-F197E412770B}']
     function GetLanguageTag(out Value: PWideChar): HRESULT; stdcall;
     function Check(Text: PWideChar; out Errors: ILSEnumSpellingError): HRESULT; stdcall;
+    function Suggest(Word: PWideChar; out Suggestions: IEnumString): HRESULT; stdcall;
   end;
 
   ILSSpellCheckerFactory = interface(IUnknown)
@@ -147,6 +151,36 @@ begin
       Result := scCorrect;
   except
     Result := scUnknown;
+  end;
+end;
+
+function TSpellCheck.Suggest(const LanguageTag, Word: string;
+  MaxCount: Integer): TArray<string>;
+var
+  Instance: IUnknown;
+  Items: IEnumString;
+  Item: POleStr;
+  Fetched: Longint;
+begin
+  Result := nil;
+  if Word = '' then
+    Exit;
+  Instance := Checker(LanguageTag);
+  if not Assigned(Instance) then
+    Exit;
+  try
+    // S_FALSE: the word is correct, no suggestions.
+    if ((Instance as ILSSpellChecker).Suggest(PWideChar(Word), Items) <> S_OK) or
+       not Assigned(Items) then
+      Exit;
+    while (Length(Result) < MaxCount) and (Items.Next(1, Item, @Fetched) = S_OK) and
+          (Fetched = 1) do
+    begin
+      Result := Result + [string(Item)];
+      CoTaskMemFree(Item);
+    end;
+  except
+    Result := nil;
   end;
 end;
 
