@@ -14,6 +14,14 @@ type
     Template: string;
   end;
 
+  // Automatic replacement of a word ("word=replacement"); with a trailing
+  // * the pattern matches any word starting with it.
+  TAutoReplace = record
+    Pattern: string;      // lower case, ё as е, without the *
+    AnyEnding: Boolean;
+    Replacement: string;
+  end;
+
 const
   TRANSLATOR_YANDEX = 0;
   TRANSLATOR_GOOGLE = 1;
@@ -28,6 +36,20 @@ const
     'МБайт', 'КБайт', 'ГБайт', 'ТБайт');
 
   DEFAULT_SNIPPETS = ';дата={date}'#13#10';время={time}';
+
+  // Auto-censor list; the feature is off by default.
+  DEFAULT_AUTO_REPLACE =
+    '# слово=замена; * в конце слова — любое окончание'#13#10 +
+    'пиздец=офигеть'#13#10 +
+    'бля=блин'#13#10 +
+    'блять=блин'#13#10 +
+    'блядь=блин'#13#10 +
+    'охуеть=офигеть'#13#10 +
+    'охуенно=офигенно'#13#10 +
+    'хуйня=фигня'#13#10 +
+    'нахуй=нафиг'#13#10 +
+    'пиздат*=круто'#13#10 +
+    'ура=🎉';
 
 // "пРИВЕТ" -> "Привет": typed with Caps Lock on while holding Shift for the
 // first letter.  Requires at least three letters.
@@ -53,6 +75,16 @@ function ExpandSnippet(const Template: string; Moment: TDateTime): string; overl
 function ExpandSnippet(const Template: string; Moment: TDateTime;
   const ClipboardText: string; out CaretBack: Integer): string; overload;
 function SnippetUsesClipboard(const Template: string): Boolean;
+
+// "word=replacement" per line, # starts a comment.  The word cannot
+// contain spaces; a trailing * means "any ending".
+function ParseAutoReplace(const Text: string): TArray<TAutoReplace>;
+// Word as typed (punctuation around it allowed): the replacement with the
+// punctuation kept and the case of the word applied ("Чёрт!" -> "Ой!",
+// "ЧЁРТ" -> "ОЙ").  An exact pattern wins over an
+// "any ending" one, a longer "any ending" pattern over a shorter one.
+function ApplyAutoReplace(const Items: TArray<TAutoReplace>; const Word: string;
+  out Replaced: string): Boolean;
 
 // The converted word is a plain word worth checking with the spell checker:
 // at least three letters, only letters inside (hyphens and apostrophes
@@ -327,6 +359,84 @@ begin
     end;
     Delete(Result, Mark, 1);
   end;
+end;
+
+function NormalizeReplaceWord(const Text: string): string;
+begin
+  Result := AnsiLowerCase(Text).Replace('ё', 'е');
+end;
+
+function ParseAutoReplace(const Text: string): TArray<TAutoReplace>;
+var
+  Line, Pattern: string;
+  Separator: Integer;
+  Item: TAutoReplace;
+begin
+  Result := nil;
+  for Line in Text.Split([#13#10, #10, #13]) do
+  begin
+    if (Trim(Line) = '') or Line.TrimLeft.StartsWith('#') then
+      Continue;
+    Separator := Pos('=', Line);
+    if Separator <= 1 then
+      Continue;
+    Pattern := Trim(Copy(Line, 1, Separator - 1));
+    Item.AnyEnding := Pattern.EndsWith('*');
+    if Item.AnyEnding then
+      Pattern := Copy(Pattern, 1, Length(Pattern) - 1);
+    if (Pattern = '') or (Pos(' ', Pattern) > 0) or (Pos('*', Pattern) > 0) then
+      Continue;
+    Item.Pattern := NormalizeReplaceWord(Pattern);
+    Item.Replacement := Trim(Copy(Line, Separator + 1, MaxInt));
+    Result := Result + [Item];
+  end;
+end;
+
+function ApplyAutoReplace(const Items: TArray<TAutoReplace>; const Word: string;
+  out Replaced: string): Boolean;
+var
+  First, Last, Best, BestLength, I, Upper, Lower: Integer;
+  Core, Key, Replacement: string;
+begin
+  Result := False;
+  Replaced := '';
+  // The word itself without the punctuation around it.
+  First := 1;
+  while (First <= Length(Word)) and not Word[First].IsLetterOrDigit do
+    Inc(First);
+  Last := Length(Word);
+  while (Last >= First) and not Word[Last].IsLetterOrDigit do
+    Dec(Last);
+  if Last < First then
+    Exit;
+  Core := Copy(Word, First, Last - First + 1);
+  Key := NormalizeReplaceWord(Core);
+  Best := -1;
+  BestLength := -1;
+  for I := 0 to High(Items) do
+    if not Items[I].AnyEnding and (Items[I].Pattern = Key) then
+    begin
+      Best := I;
+      Break;
+    end
+    else if Items[I].AnyEnding and Key.StartsWith(Items[I].Pattern) and
+       (Length(Items[I].Pattern) > BestLength) then
+    begin
+      Best := I;
+      BestLength := Length(Items[I].Pattern);
+    end;
+  if Best < 0 then
+    Exit;
+  Replacement := Items[Best].Replacement;
+  if Replacement = '' then
+    Exit;
+  LetterCount(Core, Upper, Lower);
+  if (Lower = 0) and (Upper > 1) then
+    Replacement := AnsiUpperCase(Replacement)
+  else if (Upper > 0) and Core[1].IsUpper then
+    Replacement := AnsiUpperCase(Copy(Replacement, 1, 1)) + Copy(Replacement, 2, MaxInt);
+  Replaced := Copy(Word, 1, First - 1) + Replacement + Copy(Word, Last + 1, MaxInt);
+  Result := Replaced <> Word;
 end;
 
 function IsAutoSwitchCandidate(const Converted: string): Boolean;

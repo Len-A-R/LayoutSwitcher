@@ -101,6 +101,9 @@ type
     chkSnippets: TCheckBox;
     lblSnippetsHint: TLabel;
     memSnippets: TMemo;
+    chkAutoReplace: TCheckBox;
+    lblAutoReplaceHint: TLabel;
+    memAutoReplace: TMemo;
     lblCorrectionsNote: TLabel;
     chkSound: TCheckBox;
     chkAutoSwitch: TCheckBox;
@@ -213,6 +216,7 @@ type
     FProgress: TUpdateProgressWindow;
     FCatalog: TKeyboardLayoutCatalog;
     FSnippets: TArray<TSnippet>;
+    FAutoReplace: TArray<TAutoReplace>;
     // Caps Lock state tracked from Raw Input: GetKeyState in this thread does
     // not see key messages of other applications.
     FCapsOn: Boolean;
@@ -513,6 +517,7 @@ begin
   FIndicator := TLayoutIndicator.Create;
   FCatalog := TKeyboardLayoutCatalog.Create;
   FSnippets := ParseSnippets(FSettings.Snippets);
+  FAutoReplace := ParseAutoReplace(FSettings.AutoReplace);
   FCapsShiftLock := IsCapsLockOffByShift;
   FCapsOn := (GetKeyState(VK_CAPITAL) and 1) <> 0;
   ApplyLanguage;
@@ -1620,6 +1625,8 @@ begin
     chkFixTwoCapitals.Checked := FSettings.FixTwoCapitals;
     memTwoCapsExceptions.Text := string.Join(sLineBreak, FSettings.TwoCapitalsExceptions);
     chkSnippets.Checked := FSettings.SnippetsEnabled;
+    chkAutoReplace.Checked := FSettings.AutoReplaceEnabled;
+    memAutoReplace.Text := FSettings.AutoReplace;
     chkSound.Checked := FSettings.SoundEnabled;
     chkAutoSwitch.Checked := FSettings.AutoSwitchEnabled;
     chkFixTypos.Checked := FSettings.FixTypos;
@@ -1648,6 +1655,7 @@ procedure TFormMain.ApplySettings;
 begin
   FDetector.Interval := FSettings.DoubleTapInterval;
   FSnippets := ParseSnippets(FSettings.Snippets);
+  FAutoReplace := ParseAutoReplace(FSettings.AutoReplace);
   if not SaveSettings(FSettings) then
     DiagnosticsLog('settings.save_failed');
   UpdateTrayHint;
@@ -1709,6 +1717,7 @@ begin
   FSettings.FixCapsLock := chkFixCapsLock.Checked;
   FSettings.FixTwoCapitals := chkFixTwoCapitals.Checked;
   FSettings.SnippetsEnabled := chkSnippets.Checked;
+  FSettings.AutoReplaceEnabled := chkAutoReplace.Checked;
   FSettings.SoundEnabled := chkSound.Checked;
   FSettings.AutoSwitchEnabled := chkAutoSwitch.Checked;
   FSettings.FixTypos := chkFixTypos.Checked;
@@ -2292,7 +2301,7 @@ begin
     tsHotkeys.Caption := T('Сочетания', 'Shortcuts');
     tsLayout.Caption := T('Раскладка', 'Layout');
     tsCorrections.Caption := T('Исправления', 'Corrections');
-    tsSnippets.Caption := T('Шаблоны', 'Templates');
+    tsSnippets.Caption := T('Замены', 'Replacements');
     tsExclusions.Caption := T('Исключения', 'Exclusions');
 
     chkAutorun.Caption := T('Автозапуск при старте системы', 'Start with Windows');
@@ -2395,6 +2404,14 @@ begin
       'Fix two capitals at the start of a word (HEllo → Hello)');
     lblTwoCapsExceptions.Caption := T('Исключения для двух заглавных (слово в строке):',
       'Exceptions for two capitals (one word per line):');
+    chkAutoReplace.Caption := T(
+      'Автоцензура: заменять слова по справочнику (грубые — на мягкие или на смайлики)',
+      'Auto-censor: replace words from a list (rude ones with milder words or emoji)');
+    lblAutoReplaceHint.Caption := T(
+      'Каждая строка: слово=замена. * в конце слова — любое окончание (чёрт*=ой).' + sLineBreak +
+      'Регистр не важен и сохраняется: Чёрт! → Ой!',
+      'One per line: word=replacement. * at the end - any ending (heck*=oh).' + sLineBreak +
+      'Case does not matter and is kept: Heck! -> Oh!');
     chkSnippets.Caption := T('Заменять шаблоны: сокращение и пробел',
       'Expand templates: abbreviation followed by a space');
     lblSnippetsHint.Caption := T(
@@ -2674,7 +2691,7 @@ procedure TFormMain.CheckAutoCorrections;
 var
   WordStart, WordLength, CaretBack: Integer;
   Word, Template, Replacement, Fixed, Clip: string;
-  ToggleCaps, Capital, IsTemplate: Boolean;
+  ToggleCaps, Capital, IsTemplate, IsAutoReplace: Boolean;
 begin
   // The word before this space was typed partly before the buffer was
   // dropped: only its end is known.
@@ -2689,7 +2706,8 @@ begin
     Exit;
   if not (FSettings.FixCapsLock or FSettings.FixTwoCapitals or FSettings.AutoSwitchEnabled or
           FSettings.FixTypos or FSettings.CapitalizeSentences or FSettings.FixDoubleSpace or
-          (FSettings.SnippetsEnabled and (Length(FSnippets) > 0))) then
+          (FSettings.SnippetsEnabled and (Length(FSnippets) > 0)) or
+          (FSettings.AutoReplaceEnabled and (Length(FAutoReplace) > 0))) then
     Exit;
   // Code editors, terminals, password managers: manual actions only.
   if FSettings.IsAutoCorrectDisabledFor(FLastProcessName) then
@@ -2736,6 +2754,7 @@ begin
   Template := '';
   ToggleCaps := False;
   CaretBack := 0;
+  IsAutoReplace := False;
   IsTemplate := FSettings.SnippetsEnabled and FindSnippet(FSnippets, Word, Template);
   if IsTemplate then
   begin
@@ -2747,6 +2766,11 @@ begin
       Exit;
     // A template is inserted exactly as written.
     Capital := False;
+  end
+  else if FSettings.AutoReplaceEnabled and ApplyAutoReplace(FAutoReplace, Word, Fixed) then
+  begin
+    Replacement := Fixed;
+    IsAutoReplace := True;
   end
   else if FSettings.FixCapsLock and FCapsOn and IsCapsLockMistake(Word) then
   begin
@@ -2785,7 +2809,8 @@ begin
     Exit;
 
   DiagnosticsLogFmt('autocorrect.queue kind=%s length=%d caret_back=%d',
-    [IfThen(ToggleCaps, 'caps_lock', IfThen(IsTemplate, 'template', 'two_capitals')),
+    [IfThen(ToggleCaps, 'caps_lock', IfThen(IsTemplate, 'template',
+       IfThen(IsAutoReplace, 'auto_replace', 'two_capitals'))),
      Length(Word), CaretBack]);
   FCaretBackNext := CaretBack;
   try
@@ -3076,6 +3101,11 @@ begin
   SwitchExceptions := ParseWordList(memAutoSwitchExceptions.Text);
   Learned := ParseWordList(memAutoSwitchLearned.Text);
   Snippets := TrimRight(memSnippets.Text);
+  if TrimRight(memAutoReplace.Text) <> FSettings.AutoReplace then
+  begin
+    FSettings.AutoReplace := TrimRight(memAutoReplace.Text);
+    ApplySettings;
+  end;
   if (string.Join('; ', Exceptions) <> string.Join('; ', FSettings.TwoCapitalsExceptions)) or
      (string.Join('; ', SwitchExceptions) <> string.Join('; ', FSettings.AutoSwitchExceptions)) or
      (string.Join('; ', Learned) <> string.Join('; ', FSettings.AutoSwitchLearned)) or

@@ -577,7 +577,7 @@ object FormMain: TFormMain
       end
     end
     object tsSnippets: TTabSheet
-      Caption = #1064#1072#1073#1083#1086#1085#1099
+      Caption = #1047#1072#1084#1077#1085#1099
       object chkSnippets: TCheckBox
         Left = 12
         Top = 12
@@ -598,9 +598,35 @@ object FormMain: TFormMain
         Left = 30
         Top = 84
         Width = 470
-        Height = 250
+        Height = 112
         ScrollBars = ssVertical
         TabOrder = 1
+        WordWrap = False
+        OnExit = edCorrectionsExit
+      end
+      object chkAutoReplace: TCheckBox
+        Left = 12
+        Top = 206
+        Width = 490
+        Height = 17
+        Caption = #1040#1074#1090#1086#1094#1077#1085#1079#1091#1088#1072': '#1079#1072#1084#1077#1085#1103#1090#1100' '#1089#1083#1086#1074#1072' '#1087#1086' '#1089#1087#1088#1072#1074#1086#1095#1085#1080#1082#1091
+        TabOrder = 2
+        OnClick = chkBehaviorClick
+      end
+      object lblAutoReplaceHint: TLabel
+        Left = 30
+        Top = 226
+        Width = 8
+        Height = 13
+        Caption = #1050#1072#1078#1076#1072#1103' '#1089#1090#1088#1086#1082#1072': '#1089#1083#1086#1074#1086'='#1079#1072#1084#1077#1085#1072'.'
+      end
+      object memAutoReplace: TMemo
+        Left = 30
+        Top = 256
+        Width = 470
+        Height = 108
+        ScrollBars = ssVertical
+        TabOrder = 3
         WordWrap = False
         OnExit = edCorrectionsExit
       end

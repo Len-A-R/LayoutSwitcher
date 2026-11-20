@@ -39,6 +39,9 @@ type
     FixTwoCapitals: Boolean;
     TwoCapitalsExceptions: TArray<string>;
     SnippetsEnabled: Boolean;
+    // Auto-censor: word replacement list ("word=replacement" lines), off by default.
+    AutoReplaceEnabled: Boolean;
+    AutoReplace: string;
     Snippets: string;        // "abbreviation=text" lines
     Translator: Integer;     // TRANSLATOR_* in uTextTools
     // Automatic layout switching (Windows spell checker decides).
@@ -170,6 +173,8 @@ const
   VALUE_TWO_CAPITALS_EXCEPTIONS = 'TwoCapitalsExceptions';
   VALUE_SNIPPETS_ENABLED = 'SnippetsEnabled';
   VALUE_SNIPPETS = 'Snippets';
+  VALUE_AUTO_REPLACE_ENABLED = 'AutoReplaceEnabled';
+  VALUE_AUTO_REPLACE = 'AutoReplace';
   VALUE_TRANSLATOR = 'Translator';
   VALUE_SEARCH_ENGINE = 'SearchEngine';
   VALUE_DIAGNOSTICS = 'EnableDiagnostics';
@@ -218,6 +223,8 @@ begin
     Result.TwoCapitalsExceptions[I] := DefaultTwoCapitalsExceptions[I];
   Result.SnippetsEnabled := True;
   Result.Snippets := DEFAULT_SNIPPETS;
+  Result.AutoReplaceEnabled := False;
+  Result.AutoReplace := DEFAULT_AUTO_REPLACE;
   Result.Translator := TRANSLATOR_YANDEX;
   Result.SearchEngine := SEARCH_YANDEX;
   Result.AutoSwitchEnabled := False;
@@ -525,6 +532,9 @@ begin
     Result.SnippetsEnabled := Store.ReadBool(VALUE_SNIPPETS_ENABLED,
       Result.SnippetsEnabled);
     Result.Snippets := Store.ReadString(VALUE_SNIPPETS, Result.Snippets);
+    Result.AutoReplaceEnabled := Store.ReadBool(VALUE_AUTO_REPLACE_ENABLED,
+      Result.AutoReplaceEnabled);
+    Result.AutoReplace := Store.ReadString(VALUE_AUTO_REPLACE, Result.AutoReplace);
     Result.Translator := Store.ReadInteger(VALUE_TRANSLATOR, Result.Translator);
     Result.SearchEngine := Store.ReadInteger(VALUE_SEARCH_ENGINE, Result.SearchEngine);
     Result.AutoSwitchEnabled := Store.ReadBool(VALUE_AUTO_SWITCH, Result.AutoSwitchEnabled);
@@ -585,6 +595,8 @@ begin
       string.Join('; ', Settings.TwoCapitalsExceptions));
     Store.WriteBool(VALUE_SNIPPETS_ENABLED, Settings.SnippetsEnabled);
     Store.WriteString(VALUE_SNIPPETS, Settings.Snippets);
+    Store.WriteBool(VALUE_AUTO_REPLACE_ENABLED, Settings.AutoReplaceEnabled);
+    Store.WriteString(VALUE_AUTO_REPLACE, Settings.AutoReplace);
     Store.WriteInteger(VALUE_TRANSLATOR, Settings.Translator);
     Store.WriteInteger(VALUE_SEARCH_ENGINE, Settings.SearchEngine);
     Store.WriteBool(VALUE_AUTO_SWITCH, Settings.AutoSwitchEnabled);

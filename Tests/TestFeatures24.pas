@@ -77,6 +77,19 @@ type
   end;
 
   [TestFixture]
+  TAutoReplaceTests = class
+  public
+    [Test]
+    procedure ParsesDictionary;
+    [Test]
+    procedure ReplacesKeepingCaseAndPunctuation;
+    [Test]
+    procedure AnyEnding;
+    [Test]
+    procedure DefaultsAndSettings;
+  end;
+
+  [TestFixture]
   TSettings24Tests = class
   public
     [Test]
@@ -407,6 +420,87 @@ begin
   end;
 end;
 
+{ TAutoReplaceTests }
+
+procedure TAutoReplaceTests.ParsesDictionary;
+var
+  Items: TArray<TAutoReplace>;
+begin
+  Items := ParseAutoReplace('# comment'#13#10'Чёрт = ой'#13#10'блин*=ой'#13#10 +
+    'два слова=x'#13#10'=пусто'#13#10'*=всё'#13#10'ура=🎉 ура');
+  Assert.AreEqual<Integer>(3, Length(Items));
+  Assert.AreEqual('черт', Items[0].Pattern);
+  Assert.AreEqual('ой', Items[0].Replacement);
+  Assert.IsFalse(Items[0].AnyEnding);
+  Assert.AreEqual('блин', Items[1].Pattern);
+  Assert.IsTrue(Items[1].AnyEnding);
+  Assert.AreEqual('🎉 ура', Items[2].Replacement);
+end;
+
+procedure TAutoReplaceTests.ReplacesKeepingCaseAndPunctuation;
+var
+  Items: TArray<TAutoReplace>;
+  R: string;
+begin
+  Items := ParseAutoReplace('кошмар=ужас'#13#10'ёжкин=ёлки'#13#10'ура=🎉');
+  Assert.IsTrue(ApplyAutoReplace(Items, 'кошмар', R));
+  Assert.AreEqual('ужас', R);
+  Assert.IsTrue(ApplyAutoReplace(Items, 'Кошмар!', R));
+  Assert.AreEqual('Ужас!', R);
+  Assert.IsTrue(ApplyAutoReplace(Items, 'КОШМАР,', R));
+  Assert.AreEqual('УЖАС,', R);
+  Assert.IsTrue(ApplyAutoReplace(Items, '«кошмар»', R));
+  Assert.AreEqual('«ужас»', R);
+  Assert.IsTrue(ApplyAutoReplace(Items, 'ежкин', R));      // ё = е
+  Assert.AreEqual('ёлки', R);
+  Assert.IsTrue(ApplyAutoReplace(Items, 'ура!', R));
+  Assert.AreEqual('🎉!', R);
+  Assert.IsFalse(ApplyAutoReplace(Items, 'кошмарный', R)); // exact pattern only
+  Assert.IsFalse(ApplyAutoReplace(Items, 'привет', R));
+  Assert.IsFalse(ApplyAutoReplace(Items, '...', R));
+end;
+
+procedure TAutoReplaceTests.AnyEnding;
+var
+  Items: TArray<TAutoReplace>;
+  R: string;
+begin
+  Items := ParseAutoReplace('чёрт*=ой'#13#10'чертовски=очень'#13#10'чертопол*=куст');
+  Assert.IsTrue(ApplyAutoReplace(Items, 'чёрта', R));
+  Assert.AreEqual('ой', R);
+  Assert.IsTrue(ApplyAutoReplace(Items, 'черт', R));
+  Assert.AreEqual('ой', R);
+  Assert.IsTrue(ApplyAutoReplace(Items, 'чертовски', R));   // exact wins
+  Assert.AreEqual('очень', R);
+  Assert.IsTrue(ApplyAutoReplace(Items, 'чертополох', R));  // longer prefix wins
+  Assert.AreEqual('куст', R);
+end;
+
+procedure TAutoReplaceTests.DefaultsAndSettings;
+var
+  FileName: string;
+  Source, Loaded: TLSSettings;
+  Diagnostics: Boolean;
+  R: string;
+begin
+  Source := TLSSettings.Defaults;
+  Assert.IsFalse(Source.AutoReplaceEnabled);
+  Assert.IsTrue(Length(ParseAutoReplace(Source.AutoReplace)) >= 5);
+  Assert.IsTrue(ApplyAutoReplace(ParseAutoReplace(Source.AutoReplace), 'Ура!', R));
+  Assert.AreEqual('🎉!', R);
+  FileName := TPath.Combine(TPath.GetTempPath, 'ls-settings-replace.ini');
+  try
+    Source.AutoReplaceEnabled := True;
+    Source.AutoReplace := 'чёрт=ой'#13#10'ура=🎉';
+    Assert.IsTrue(ExportSettings(Source, FileName, False));
+    Assert.IsTrue(ImportSettings(FileName, Loaded, Diagnostics));
+    Assert.IsTrue(Loaded.AutoReplaceEnabled);
+    Assert.AreEqual('чёрт=ой'#13#10'ура=🎉', Loaded.AutoReplace);
+  finally
+    System.SysUtils.DeleteFile(FileName);
+  end;
+end;
+
 { TSettings24Tests }
 
 procedure TSettings24Tests.DefaultsAndExport;
@@ -451,6 +545,7 @@ initialization
   TDUnitX.RegisterTestFixture(TSentenceTests);
   TDUnitX.RegisterTestFixture(TTemplateTests);
   TDUnitX.RegisterTestFixture(TProgramListTests);
+  TDUnitX.RegisterTestFixture(TAutoReplaceTests);
   TDUnitX.RegisterTestFixture(TSettings24Tests);
 
 end.
