@@ -31,6 +31,12 @@ uses
   uModernUI in 'uModernUI.pas',
   uAiExplain in 'uAiExplain.pas',
   uExplainWindow in 'uExplainWindow.pas',
+  uSpeechModels in 'uSpeechModels.pas',
+  uSherpaOnnx in 'uSherpaOnnx.pas',
+  uAudioRecorder in 'uAudioRecorder.pas',
+  uSpeechCloud in 'uSpeechCloud.pas',
+  uDictation in 'uDictation.pas',
+  uDictationPage in 'uDictationPage.pas',
   uOperationWorker in 'uOperationWorker.pas',
   uMain in 'uMain.pas' {FormMain};
 

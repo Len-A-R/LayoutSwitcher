@@ -23,7 +23,8 @@ uses
   TestTypos in 'TestTypos.pas',
   TestFeatures24 in 'TestFeatures24.pas',
   TestTranslate in 'TestTranslate.pas',
-  TestAiExplain in 'TestAiExplain.pas';
+  TestAiExplain in 'TestAiExplain.pas',
+  TestSpeech in 'TestSpeech.pas';
 
 var
   Runner: ITestRunner;

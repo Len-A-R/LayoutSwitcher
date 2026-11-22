@@ -166,6 +166,12 @@
         <DCCReference Include="uModernUI.pas"/>
         <DCCReference Include="uAiExplain.pas"/>
         <DCCReference Include="uExplainWindow.pas"/>
+        <DCCReference Include="uSpeechModels.pas"/>
+        <DCCReference Include="uSherpaOnnx.pas"/>
+        <DCCReference Include="uAudioRecorder.pas"/>
+        <DCCReference Include="uSpeechCloud.pas"/>
+        <DCCReference Include="uDictation.pas"/>
+        <DCCReference Include="uDictationPage.pas"/>
         <DCCReference Include="uOperationWorker.pas"/>
         <DCCReference Include="uMain.pas">
             <Form>FormMain</Form>

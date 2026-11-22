@@ -367,27 +367,44 @@ object FormMain: TFormMain
         TabOrder = 9
         OnChange = cbGestureChange
       end
-      object lblInterval: TLabel
+      object lblDictate: TLabel
         Left = 12
         Top = 295
+        Width = 8
+        Height = 13
+        Caption = 'Dictation'
+      end
+      object cbDictate: TComboBox
+        Left = 240
+        Top = 292
+        Width = 252
+        Height = 21
+        Style = csDropDownList
+        Tag = 11
+        TabOrder = 10
+        OnChange = cbGestureChange
+      end
+      object lblInterval: TLabel
+        Left = 12
+        Top = 323
         Width = 8
         Height = 13
         Caption = #1048#1085#1090#1077#1088#1074#1072#1083' '#1076#1074#1086#1081#1085#1086#1075#1086' '#1085#1072#1078#1072#1090#1080#1103':'
       end
       object edInterval: TEdit
         Left = 240
-        Top = 292
+        Top = 320
         Width = 57
         Height = 21
         NumbersOnly = True
-        TabOrder = 10
+        TabOrder = 11
         Text = '500'
         OnChange = edIntervalChange
         OnExit = edIntervalExit
       end
       object udInterval: TUpDown
         Left = 297
-        Top = 292
+        Top = 320
         Width = 16
         Height = 21
         Associate = edInterval
@@ -395,12 +412,12 @@ object FormMain: TFormMain
         Max = 1000
         Increment = 50
         Position = 500
-        TabOrder = 11
+        TabOrder = 12
         Thousands = False
       end
       object lblIntervalUnit: TLabel
         Left = 320
-        Top = 295
+        Top = 323
         Width = 8
         Height = 13
         Caption = #1084#1089

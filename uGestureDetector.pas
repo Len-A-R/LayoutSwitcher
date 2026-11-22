@@ -7,7 +7,7 @@
 // Pure state machine that turns physical key transitions into gestures:
 // double Shift, double Left Ctrl, double Right Ctrl, Left Ctrl + Right Ctrl,
 // Left Shift + Right Shift, double Caps Lock, double left/right Alt,
-// Right Ctrl + Right Alt, Pause/Break.  A double
+// Right Ctrl + Right Alt, Pause/Break, Scroll Lock.  A double
 // Alt opens and closes the menu of classic applications.  A double Caps Lock toggles the
 // Caps Lock state twice and so leaves it unchanged.
 // It has no Win32 calls besides VK_* constants, so it is fully unit-testable.
@@ -470,6 +470,10 @@ begin
   // code sequence (E1 1D 45) can also be reported partly as Num Lock.
   if (VK = VK_PAUSE) and not OtherKeysDown(VK_PAUSE, VK_NUMLOCK, VK_PAUSE) then
     Result := lgPause;
+  // Scroll Lock alone, on the press (dictation); its light toggles twice
+  // per dictation (start and stop), so the state comes back.
+  if (VK = VK_SCROLL) and not OtherKeysDown(VK_SCROLL, VK_SCROLL, VK_SCROLL) then
+    Result := lgScrollLock;
   // Right Ctrl + Right Alt in either order.
   if ((VK = VK_RMENU) and FS.KeyDown[VK_RCONTROL]) or
      ((VK = VK_RCONTROL) and FS.KeyDown[VK_RMENU]) then

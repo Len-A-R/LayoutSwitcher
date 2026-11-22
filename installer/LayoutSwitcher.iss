@@ -131,6 +131,10 @@ begin
         '/Delete /TN "{#AppName}" /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', '{#AppName}');
   end;
+  // Downloaded speech recognition models are a cache of hundreds of MB, not
+  // settings: always removed.
+  if CurUninstallStep = usPostUninstall then
+    DelTree(ExpandConstant('{localappdata}\{#AppName}\Speech'), True, True, True);
   if (CurUninstallStep = usPostUninstall) and not UninstallSilent then
     if MsgBox(CustomMessage('RemoveSettings'), mbConfirmation, MB_YESNO) = IDYES then
     begin

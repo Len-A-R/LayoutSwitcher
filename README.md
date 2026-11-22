@@ -26,6 +26,7 @@
 * Перевод и поиск выделенного текста в браузере
 * Замена набранного или выделенного текста его переводом (русский ↔ английский) прямо в поле ввода
 * Объяснение выделенного текста с помощью ИИ: бесплатный сервис без регистрации, Claude или любой совместимый с OpenAI (в том числе локальная Ollama)
+* Диктовка: голосовой ввод в любое поле по клавише Scroll Lock — распознавание на компьютере без интернета (модели на выбор) или облачным сервисом
 * Исправление раскладки и регистра текста в буфере обмена из меню трея
 * Экспорт и импорт настроек, переносной режим (настройки в ini-файле рядом с программой)
 * Настраиваемые сочетания клавиш и интервал двойного нажатия
@@ -52,6 +53,7 @@
 | `LAlt` + `LAlt` (левый Alt дважды) | Найти выделенное в интернете |
 | `RCtrl` + `RAlt` (правые Ctrl и Alt вместе) | Заменить текст переводом |
 | `Pause/Break` | Объяснить выделенное (ИИ) |
+| `Scroll Lock` | Диктовка: начать / вставить текст |
 
 LayoutSwitcher не может «перехватить» нажатие: его получает и программа в фокусе. Поэтому жестами служат только сочетания, безвредные для других программ. Оба Shift одновременно ничего не делают в Windows; двойной Caps Lock включает и сразу выключает Caps Lock, так что его состояние не меняется. `Ctrl+Shift` и `Alt+Shift` не используются — это системные переключатели языка.
 
@@ -257,6 +259,25 @@ Clipboard fallback не выполняется, если:
 
 Кнопка **«Проверить»** отправляет короткий тестовый запрос. Перед первым объяснением программа один раз спрашивает согласие на отправку выделенного текста выбранному сервису (для локального сервера — нет). Ключи хранятся в настройках и не попадают в файл экспорта. Текст длиннее 6000 символов обрезается. В журнал пишется только сервис, длина текста, время ответа и код ошибки, но не текст и не ответ.
 
+## Диктовка (голосовой ввод)
+
+Поставьте курсор в любое поле, нажмите **Scroll Lock** (сочетание меняется на вкладке «Сочетания») и говорите. Внизу экрана появится индикатор с уровнем звука и временем записи; он не забирает фокус. Нажмите Scroll Lock ещё раз (или щёлкните по индикатору) — запись распознается, и текст будет напечатан там, где стоит курсор. `Esc` или крестик на индикаторе отменяют. Одна запись — до 2 минут. Если перед курсором только что набрано слово, текст отделяется пробелом. В поля пароля и окна администратора текст не вставляется (как и остальные действия). Индикатор Scroll Lock на клавиатуре переключается дважды — при начале и конце диктовки, поэтому его состояние не меняется (кроме отмены по `Esc`).
+
+Модель выбирается на вкладке **«Диктовка»**. Ни движок, ни модели не входят в установщик: они скачиваются по кнопке «Скачать» с GitHub (релизы [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)), проверяются по SHA-256 и распаковываются в `%LOCALAPPDATA%\LayoutSwitcher\Speech`. Движок распознавания (sherpa-onnx и ONNX Runtime, около 22 МБ) скачивается вместе с первой моделью.
+
+| Модель | Загрузка | Языки | Плюсы | Минусы |
+| --- | --- | --- | --- | --- |
+| **GigaAM v3** (по умолчанию) | 164 МБ | русский | Одна из лучших моделей для русской речи, сама ставит знаки препинания и заглавные буквы, быстрая | Английские слова пишет русскими буквами |
+| **Компактная** (Vosk) | 61 МБ | русский | Самая маленькая, меньше всего памяти | Без знаков препинания (ставится только заглавная буква в начале), точность ниже |
+| **Parakeet v3** | 488 МБ | 25 европейских, в том числе русский, английский, украинский | Смешанная речь с английскими терминами, сама определяет язык, пунктуация | Большая, около 1 ГБ памяти во время работы, медленнее |
+| **Облачный сервис** | — | зависит от сервиса | Ничего не скачивается, высокое качество (Whisper large) | Запись уходит в интернет, нужен ключ API |
+
+Локальные модели работают без интернета: запись не покидает компьютер. Модель загружается в память при первой диктовке (1–3 секунды) и выгружается через 5 минут без диктовки; распознавание фразы занимает доли секунды. Кнопка «Удалить» освобождает место на диске; при удалении программы модели удаляются всегда.
+
+Облачный сервис — любой с протоколом OpenAI `/audio/transcriptions`: по умолчанию [Groq](https://console.groq.com) (есть бесплатный тариф, модель `whisper-large-v3-turbo`), подходят OpenAI (`https://api.openai.com/v1`, модель `whisper-1` или `gpt-4o-mini-transcribe`) и локальные серверы. Перед первой отправкой программа один раз спрашивает согласие. Ключ хранится в настройках и не попадает в файл экспорта.
+
+Если доступ к GitHub закрыт (корпоративная сеть), файлы можно разложить на своём сервере с той же структурой путей (`v2.0.3/…`, `asr-models/…`) и указать его адрес в переменной окружения `LS_SPEECH_MIRROR`; контрольные суммы проверяются так же.
+
 ## Буфер обмена
 
 Меню трея **«Текст в буфере обмена»**: исправить раскладку, ВЕРХНИЙ или нижний регистр, транслитерация. Программа читает текст из буфера, исправляет его и кладёт обратно — затем его можно вставить куда угодно, в том числе в окна администратора и удалённый рабочий стол.
@@ -334,7 +355,7 @@ Clipboard fallback не выполняется, если:
 Окно настроек оформлено в стиле Windows 11: разделы переключаются в боковом меню (Основные, Сочетания, Раскладка, Исправления, Замены, Сервисы, Исключения; стрелки вверх/вниз, когда меню в фокусе), справа — заголовок раздела и карточка с настройками, `Esc` закрывает окно. Окно всегда светлое: стандартные элементы Windows без VCL-стилей тёмными не бывают. Окно объяснения ИИ следует теме Windows.
 
 
-Хранятся в `HKCU\Software\LayoutSwitcher`: `Gesture.<действие>`, `DoubleTapInterval`, `ExcludedProcesses`, `PauseInFullscreen`, `ShowNotifications`, `DisableStickyKeysHotkey`, `ShowLayoutIndicator`, `Language`, `CheckForUpdates`, `LastUpdateCheck`, `FixCapsLock`, `FixTwoCapitals`, `TwoCapitalsExceptions`, `SnippetsEnabled`, `Snippets`, `AutoReplaceEnabled`, `AutoReplace`, `Translator`, `SearchEngine`, `AutoSwitchEnabled`, `InWordSwitch`, `LearnManualConversions`, `AutoSwitchLearned`, `AutoSwitchLearnCounts`, `FixTypos`, `FixTyposExtended`, `CapitalizeSentences`, `FixDoubleSpace`, `DeepLApiKey`, `AiProvider`, `AiClaudeKey`, `AiClaudeModel`, `AiOpenAIKey`, `AiOpenAIUrl`, `AiOpenAIModel`, `AiConsent`, `AutoSwitchExceptions`, `NoAutoCorrectProcesses`, `CustomPrograms`, `SoundEnabled`, `SoundKind`, `SoundFile`, `SettingsVersion`, `EnableDiagnostics`. Повреждённые или противоречивые значения заменяются значениями по умолчанию.
+Хранятся в `HKCU\Software\LayoutSwitcher`: `Gesture.<действие>`, `DoubleTapInterval`, `ExcludedProcesses`, `PauseInFullscreen`, `ShowNotifications`, `DisableStickyKeysHotkey`, `ShowLayoutIndicator`, `Language`, `CheckForUpdates`, `LastUpdateCheck`, `FixCapsLock`, `FixTwoCapitals`, `TwoCapitalsExceptions`, `SnippetsEnabled`, `Snippets`, `AutoReplaceEnabled`, `AutoReplace`, `Translator`, `SearchEngine`, `AutoSwitchEnabled`, `InWordSwitch`, `LearnManualConversions`, `AutoSwitchLearned`, `AutoSwitchLearnCounts`, `FixTypos`, `FixTyposExtended`, `CapitalizeSentences`, `FixDoubleSpace`, `DeepLApiKey`, `AiProvider`, `AiClaudeKey`, `AiClaudeModel`, `AiOpenAIKey`, `AiOpenAIUrl`, `AiOpenAIModel`, `AiConsent`, `DictationModel`, `DictationCloudUrl`, `DictationCloudKey`, `DictationCloudModel`, `DictationCloudConsent`, `AutoSwitchExceptions`, `NoAutoCorrectProcesses`, `CustomPrograms`, `SoundEnabled`, `SoundKind`, `SoundFile`, `SettingsVersion`, `EnableDiagnostics`. Повреждённые или противоречивые значения заменяются значениями по умолчанию.
 
 ### Экспорт, импорт и переносной режим
 
@@ -444,6 +465,11 @@ Export-Certificate -Cert $cert -FilePath LayoutSwitcher-codesign.cer
 | `uSounds.pas` | Звуки при исправлении (синтез WAV, свой файл) |
 | `uAiExplain.pas`, `uExplainWindow.pas` | Объяснение выделенного: запросы к сервисам ИИ и окно ответа |
 | `uTranslate.pas` | Замена текста переводом: Google Translate и DeepL API |
+| `uSpeechModels.pas` | Диктовка: каталог моделей, загрузка и установка |
+| `uSherpaOnnx.pas` | Распознавание речи через C API sherpa-onnx (структуры версии 2.0.3) |
+| `uAudioRecorder.pas` | Запись с микрофона (waveIn, 16 кГц) |
+| `uSpeechCloud.pas` | Облачное распознавание (OpenAI-совместимый `/audio/transcriptions`) |
+| `uDictation.pas`, `uDictationPage.pas` | Индикатор и управление диктовкой; вкладка «Диктовка» |
 | `uSignature.pas` | Проверка подписи установщика (`WinVerifyTrust`) |
 | `tools\make-winget.ps1` | Генерация манифестов winget |
 | `tools\make-wordstarts.py`, `tools\make-trayicons.py` | Генерация `uWordStarts.pas` и `uTrayIconData.pas` |
@@ -481,5 +507,6 @@ Free code signing provided by [SignPath.io](https://signpath.io), certificate by
 * Перевод и поиск открывают выбранный вами сайт (Яндекс, Google, DeepL, Bing, DuckDuckGo) в браузере только по вашему жесту; выделенный текст передаётся этому сайту в адресе страницы, дальше действует его политика конфиденциальности.
 * Объяснение выделенного (жест Pause/Break) отправляет выделенный текст выбранному вами сервису ИИ — Pollinations.ai (по умолчанию), Anthropic или указанному вами адресу — только в момент жеста и только после однократного согласия; действуют политики конфиденциальности этих сервисов ([Pollinations](https://pollinations.ai), [Anthropic](https://www.anthropic.com/legal/privacy)). Локальный сервер (Ollama, LM Studio) данные никуда не передаёт.
 * Замена текста переводом (жест «правый Ctrl + правый Alt») отправляет выделенный или набранный текст в Google Переводчик (`translate.googleapis.com`) или, если вы указали ключ, в DeepL (`api.deepl.com` / `api-free.deepl.com`) — только в момент жеста; действуют политики конфиденциальности [Google](https://policies.google.com/privacy) и [DeepL](https://www.deepl.com/privacy).
+* Диктовка (Scroll Lock) с локальной моделью распознаёт речь на компьютере, запись никуда не передаётся и не сохраняется. С облачным сервисом запись голоса отправляется выбранному вами сервису (по умолчанию Groq, `api.groq.com`) — только во время диктовки и только после однократного согласия; действуют политики конфиденциальности этого сервиса ([Groq](https://groq.com/privacy-policy/)). Модели скачиваются с `github.com` только по вашей кнопке «Скачать».
 * Проверка орфографии выполняется встроенными средствами Windows на компьютере.
 * Диагностический журнал и отчёт для разработчика создаются только на вашем компьютере; отчёт отправляете вы сами.

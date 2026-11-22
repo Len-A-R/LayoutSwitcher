@@ -61,3 +61,18 @@ The full SCOWL copyright, including the Ispell and other notices, is in
 
 The tray icons use `TPngImageList` from PngComponents
 (https://github.com/UweRaabe/PngComponents), Mozilla Public License 1.1.
+
+## Speech recognition (downloaded on demand)
+
+Dictation downloads the following components only when the user chooses a
+model; none of them is included in the installer or in this repository.
+
+* sherpa-onnx (https://github.com/k2-fsa/sherpa-onnx), Apache License 2.0.
+* ONNX Runtime (https://github.com/microsoft/onnxruntime), MIT License.
+* GigaAM v3 (https://github.com/salute-developers/GigaAM) by SberDevices,
+  MIT License; converted to ONNX by the sherpa-onnx project.
+* Vosk Russian model (https://huggingface.co/alphacep/vosk-model-ru) by
+  Alpha Cephei, Apache License 2.0; converted to ONNX by the sherpa-onnx project.
+* Parakeet TDT 0.6B v3 (https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) by
+  NVIDIA, Creative Commons Attribution 4.0 International (CC BY 4.0);
+  converted to ONNX and quantized to int8 by the sherpa-onnx project.

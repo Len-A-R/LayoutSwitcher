@@ -12,7 +12,8 @@ uses
   Vcl.Graphics, Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.ExtCtrls, Vcl.Menus,
   Vcl.StdCtrls, Vcl.ComCtrls, Vcl.Grids, uProgramList, uAiExplain, uExplainWindow, uModernUI,
   uSettings, uGestureDetector, uOperationWorker, uConversionChain,
-  uLayoutIndicator, uUpdateCheck, uUpdateProgress, uLayoutConverter, uTextTools;
+  uLayoutIndicator, uUpdateCheck, uUpdateProgress, uLayoutConverter, uTextTools,
+  uDictation, uDictationPage;
 
 const
   INSTANCE_WINDOW_PROP = 'LayoutSwitcher.Instance.v2';
@@ -90,6 +91,8 @@ type
     cbTranslateReplace: TComboBox;
     lblExplain: TLabel;
     cbExplain: TComboBox;
+    lblDictate: TLabel;
+    cbDictate: TComboBox;
     tsServices: TTabSheet;
     lblAiHeader: TLabel;
     lblAiService: TLabel;
@@ -284,6 +287,12 @@ type
     // AI explanation window and the answer it waits for.
     FExplainWindow: TExplainWindow;
     FExplainSequence: Cardinal;
+    // Dictation: recording and recognition, its settings page.
+    FDictation: TDictation;
+    FDictationPage: TDictationPage;
+    tsDictation: TTabSheet;
+    // Recognized text waiting for a running operation to finish.
+    FPendingDictation: string;
     // Windows 11 look of the settings window: side navigation, page title,
     // flat buttons (built over the form at start).
     FUiTheme: TUiTheme;
@@ -334,6 +343,11 @@ type
     procedure pcMainChange(Sender: TObject);
     procedure ProgramScanDone(Sender: TObject);
     procedure ModernizeSettingsWindow;
+    procedure CreateDictationPage;
+    procedure DictationPageChange(Sender: TObject);
+    procedure DictationUnloadModel(Sender: TObject);
+    procedure ToggleDictation;
+    procedure DictationResult(const Text, ErrorText: string; Punctuation: Boolean);
     procedure NavChange(Sender: TObject);
     procedure SettingsKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
     function CurrentAiConfig: TAiConfig;
@@ -396,7 +410,7 @@ uses
   Vcl.Imaging.pngimage, uTrayIconData,
   System.StrUtils,
   uDiagnostics, uWinUtils, uTaskAutorun, uLocale, uSettingsStore, uClipboardSnapshot,
-  uSpellCheck, uInWordSwitch, Vcl.Themes, uSounds;
+  uSpellCheck, uInWordSwitch, Vcl.Themes, uSounds, uSpeechModels, uSpeechCloud;
 
 const
   WM_LS_OPERATION_DONE = WM_APP + 10;
@@ -455,7 +469,7 @@ const
 
   ShortGestureNames: array[TLSGesture] of string = (
     '', 'Shift×2', 'LCtrl×2', 'RCtrl×2', 'Ctrl+Ctrl', 'Shift+Shift', 'Caps×2',
-    'RAlt×2', 'LAlt×2', 'RCtrl+RAlt', 'Pause');
+    'RAlt×2', 'LAlt×2', 'RCtrl+RAlt', 'Pause', 'ScrLk');
   AI_PROVIDER_FREE = 0;
   AI_PROVIDER_CLAUDE = 1;
   AI_PROVIDER_OPENAI = 2;
@@ -563,6 +577,9 @@ begin
   FAutoReplace := ParseAutoReplace(FSettings.AutoReplace);
   FCapsShiftLock := IsCapsLockOffByShift;
   FCapsOn := (GetKeyState(VK_CAPITAL) and 1) <> 0;
+  FDictation := TDictation.Create(Self);
+  FDictation.OnResult := DictationResult;
+  CreateDictationPage;
   // Before any window of the form exists: the layout is resized once.
   ModernizeSettingsWindow;
   ApplyLanguage;
@@ -918,6 +935,12 @@ begin
   // pending double Alt nor drop the text typed so far.
   if not FPaused and not IsAltKey(VK) then
     CheckWindowChanged;
+  // Esc cancels a dictation (the key still reaches the application).
+  if (VK = VK_ESCAPE) and not IsKeyUp and (FDictation.State <> dsIdle) then
+  begin
+    DiagnosticsLog('dictation.cancel reason=escape');
+    FDictation.Cancel;
+  end;
 
   // Releases lost on the secure desktop would otherwise block every tap.
   if not IsKeyUp then
@@ -1156,6 +1179,11 @@ var
 begin
   if (Action = laNone) or FPaused then
     Exit;
+  if Action = laDictate then
+  begin
+    ToggleDictation;
+    Exit;
+  end;
   if FBufferOverflowed or FFocusIsPassword then
     Plan := FChain.Plan(laNone, '')
   else if Action = laTranslateReplace then
@@ -1283,6 +1311,21 @@ begin
       Exit;
     end;
     FOperationBusy := False;
+    if FPendingDictation <> '' then
+    begin
+      // After this result is applied: the text before the caret is known.
+      TThread.ForceQueue(nil,
+        procedure
+        var
+          Text: string;
+        begin
+          Text := FPendingDictation;
+          FPendingDictation := '';
+          if (Text <> '') and not FOperationBusy then
+            QueueRequest(laDictate, TConversionChain.PlanReplacement(FBuffer,
+              Length(FBuffer) + 1, 0, Text), False, False);
+        end);
+    end;
 
     if Res.Action in [laTranslate, laWebSearch, laExplain] then
     begin
@@ -1669,6 +1712,8 @@ begin
     cbWebSearch.ItemIndex := Ord(FSettings.GestureForAction(laWebSearch));
     cbTranslateReplace.ItemIndex := Ord(FSettings.GestureForAction(laTranslateReplace));
     cbExplain.ItemIndex := Ord(FSettings.GestureForAction(laExplain));
+    cbDictate.ItemIndex := Ord(FSettings.GestureForAction(laDictate));
+    FDictationPage.Load(FSettings);
     edDeepLKey.Text := FSettings.DeepLApiKey;
     cbTranslator.ItemIndex := FSettings.Translator;
     cbSearchEngine.ItemIndex := FSettings.SearchEngine;
@@ -1867,7 +1912,7 @@ begin
   FNav := TNavBar.Create(Self);
   FNav.Parent := Self;
   FNav.SetBounds(0, 0, S(NAV_WIDTH), ClientHeight);
-  FNav.Setup(pcMain, [#$E713, #$E765, #$E774, #$E8FB, #$E8AB, #$E753, #$E733], FUiTheme);
+  FNav.Setup(pcMain, [#$E713, #$E765, #$E774, #$E8FB, #$E8AB, #$E753, #$E720, #$E733], FUiTheme);
   FNav.Title := 'LayoutSwitcher';
   FNav.OnChange := NavChange;
 
@@ -2501,6 +2546,7 @@ begin
     laWebSearch: Result := T('Поиск', 'Search');
     laTranslateReplace: Result := T('Замена переводом', 'Translate in place');
     laExplain: Result := T('ИИ', 'AI');
+    laDictate: Result := T('Диктовка', 'Dictation');
     laTransliterate: Result := T('Транслит', 'Translit');
     laUndo: Result := T('Отмена', 'Undo');
   else
@@ -2511,7 +2557,7 @@ end;
 function TFormMain.GestureCombos: TArray<TComboBox>;
 begin
   Result := [cbConvert, cbUpper, cbLower, cbInvert, cbTranslit, cbUndo, cbTranslate,
-    cbWebSearch, cbTranslateReplace, cbExplain];
+    cbWebSearch, cbTranslateReplace, cbExplain, cbDictate];
 end;
 
 procedure TFormMain.ApplyLanguage;
@@ -2590,7 +2636,10 @@ begin
     lblWebSearch.Caption := ActionName(laWebSearch);
     lblTranslateReplace.Caption := ActionName(laTranslateReplace);
     lblExplain.Caption := ActionName(laExplain);
+    lblDictate.Caption := ActionName(laDictate);
     tsServices.Caption := T('Сервисы', 'Services');
+    tsDictation.Caption := T('Диктовка', 'Dictation');
+    FDictationPage.ApplyLanguage;
     lblAiHeader.Caption := T('Объяснение выделенного текста с помощью ИИ', 'Explaining the selection with AI');
     lblAiService.Caption := T('Сервис ИИ:', 'AI service:');
     FillCombo(cbAiService, [T('Pollinations.ai — бесплатно, без регистрации',
@@ -3533,6 +3582,132 @@ begin
   end;
   DiagnosticsLogFmt('ai.test provider=%d ok=%s error=%s',
     [FSettings.AiProvider, BoolToStr(Code = '', True), Code]);
+end;
+
+{ Dictation }
+
+procedure TFormMain.CreateDictationPage;
+begin
+  tsDictation := TTabSheet.Create(Self);
+  tsDictation.PageControl := pcMain;
+  tsDictation.PageIndex := tsServices.PageIndex + 1;
+  FDictationPage := TDictationPage.CreatePage(Self, tsDictation);
+  FDictationPage.OnChange := DictationPageChange;
+  FDictationPage.OnUnloadModel := DictationUnloadModel;
+end;
+
+procedure TFormMain.DictationPageChange(Sender: TObject);
+begin
+  if FUpdatingControls then
+    Exit;
+  FDictationPage.Save(FSettings);
+  ApplySettings;
+end;
+
+procedure TFormMain.DictationUnloadModel(Sender: TObject);
+begin
+  FDictation.UnloadModel;
+end;
+
+procedure TFormMain.ToggleDictation;
+var
+  Index: Integer;
+  Model: TSpeechModel;
+  Cloud: TSpeechCloudConfig;
+  Gesture: TLSGesture;
+  Hint, ErrorText: string;
+begin
+  case FDictation.State of
+    dsRecording:
+      begin
+        DiagnosticsLog('dictation.stop');
+        FDictation.Stop;
+        Exit;
+      end;
+    dsRecognizing:
+      Exit;
+  end;
+  Index := FindSpeechModel(FSettings.DictationModel);
+  if Index < 0 then
+    Index := FindSpeechModel(DEFAULT_SPEECH_MODEL);
+  Model := SpeechModels[Index];
+  if not Model.IsCloud and not (IsSpeechEngineInstalled and IsSpeechModelInstalled(Model)) then
+  begin
+    DiagnosticsLogFmt('dictation.skipped reason=model_missing model=%s', [Model.Id]);
+    FDictation.ShowError(Format(T(
+      'Модель «%s» ещё не скачана. Скачайте её в настройках на вкладке «Диктовка».',
+      'The model "%s" is not downloaded yet. Download it on the Dictation tab of the settings.'),
+      [Model.Name]));
+    ShowSettingsWindow;
+    pcMain.ActivePage := tsDictation;
+    NavChange(nil);
+    FNav.Invalidate;
+    Exit;
+  end;
+  if Model.IsCloud then
+  begin
+    if FSettings.DictationCloudKey = '' then
+    begin
+      FDictation.ShowError(T('Укажите ключ API облачного сервиса на вкладке «Диктовка».',
+        'Enter the API key of the cloud service on the Dictation tab.'));
+      Exit;
+    end;
+    // Once: the recording leaves the computer.
+    if not FSettings.DictationCloudConsent then
+    begin
+      if MessageBox(0, PChar(Format(T(
+           'Запись вашего голоса будет отправляться сервису «%s» для распознавания — ' +
+           'только когда вы сами включаете диктовку.' + sLineBreak + sLineBreak + 'Продолжить?',
+           'Your voice recording will be sent to "%s" for recognition, only when you ' +
+           'start dictation yourself.' + sLineBreak + sLineBreak + 'Continue?'),
+           [TranscriptionUrl(FSettings.DictationCloudUrl)])),
+           'LayoutSwitcher', MB_YESNO or MB_ICONQUESTION or MB_TOPMOST or MB_SETFOREGROUND) <> IDYES then
+        Exit;
+      FSettings.DictationCloudConsent := True;
+      ApplySettings;
+    end;
+  end;
+  Cloud.BaseUrl := FSettings.DictationCloudUrl;
+  Cloud.ApiKey := FSettings.DictationCloudKey;
+  Cloud.Model := FSettings.DictationCloudModel;
+  Cloud.Language := '';
+  Gesture := FSettings.GestureForAction(laDictate);
+  if Gesture <> lgNone then
+    Hint := Format(T('%s — вставить текст · Esc — отмена', '%s — insert the text · Esc — cancel'),
+      [GestureName(Gesture)])
+  else
+    Hint := T('Щелчок — вставить текст · Esc — отмена', 'Click to insert the text · Esc — cancel');
+  if FDictation.Start(Model, Cloud, Hint, ErrorText) then
+    DiagnosticsLogFmt('dictation.start model=%s', [Model.Id])
+  else
+  begin
+    DiagnosticsLogFmt('dictation.start_failed error="%s"', [ErrorText]);
+    FDictation.ShowError(ErrorText);
+  end;
+end;
+
+procedure TFormMain.DictationResult(const Text, ErrorText: string; Punctuation: Boolean);
+var
+  Before, Final: string;
+begin
+  DiagnosticsLogFmt('dictation.done length=%d error="%s"', [Length(Text), ErrorText]);
+  if (ErrorText <> '') or (Trim(Text) = '') then
+    Exit;
+  if FBufferOverflowed then
+    Before := ''
+  else
+    Before := FBuffer;
+  Final := FinishDictatedText(Text, Punctuation, Before);
+  if FOperationBusy then
+  begin
+    // Typed when the running correction is done (HandleOperationResult).
+    FPendingDictation := Final;
+    Exit;
+  end;
+  // Typed at the caret like a template: the worker checks the focus and
+  // refuses password fields.
+  QueueRequest(laDictate, TConversionChain.PlanReplacement(FBuffer, Length(FBuffer) + 1, 0,
+    Final), False, False);
 end;
 
 procedure TFormMain.StartExplain(const Text: string);

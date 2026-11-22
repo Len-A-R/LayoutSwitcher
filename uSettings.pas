@@ -7,7 +7,7 @@ interface
 
 uses
   System.SysUtils,
-  uLocale, uSettingsStore;
+  uLocale, uSettingsStore, uSpeechModels;
 
 type
   // Actions are stored by their ActionKeys name; the gestures by ordinal,
@@ -15,12 +15,12 @@ type
   // in front of laAutoSwitch (the TLSActionGestures range).
   TLSAction = (laNone, laConvert, laUpperCase, laLowerCase, laInvertCase,
     laTransliterate, laUndo, laTranslate, laWebSearch, laTranslateReplace,
-    laExplain,
+    laExplain, laDictate,
     // Not bound to a gesture: started automatically after a space.
     laAutoSwitch);
   TLSGesture = (lgNone, lgDoubleShift, lgDoubleLCtrl, lgDoubleRCtrl, lgBothCtrl,
-    lgBothShift, lgDoubleCapsLock, lgDoubleRAlt, lgDoubleLAlt, lgRCtrlRAlt, lgPause);
-  TLSActionGestures = array[laConvert..laExplain] of TLSGesture;
+    lgBothShift, lgDoubleCapsLock, lgDoubleRAlt, lgDoubleLAlt, lgRCtrlRAlt, lgPause, lgScrollLock);
+  TLSActionGestures = array[laConvert..laDictate] of TLSGesture;
 
   TLSSettings = record
     ActionGestures: TLSActionGestures;
@@ -74,6 +74,14 @@ type
     AiOpenAIModel: string;
     // The user agreed that selected text is sent to the AI service.
     AiConsent: Boolean;
+    // Dictation: the model (Id in uSpeechModels.SpeechModels) and the cloud
+    // service (OpenAI-compatible; the key is not exported).
+    DictationModel: string;
+    DictationCloudUrl: string;
+    DictationCloudKey: string;
+    DictationCloudModel: string;
+    // The user agreed that recordings are sent to the cloud service.
+    DictationCloudConsent: Boolean;
     AutoSwitchExceptions: TArray<string>;
     // Programs where only the manual actions work (code editors, terminals).
     NoAutoCorrectProcesses: TArray<string>;
@@ -104,13 +112,14 @@ const
   // 4: notepad++.exe left the default "no automatic corrections" list.
   // 5: "replace with translation" got the Right Ctrl + Right Alt gesture.
   // 6: "explain the selection (AI)" got Pause/Break.
-  CURRENT_SETTINGS_VERSION = 6;
+  // 7: dictation got Scroll Lock.
+  CURRENT_SETTINGS_VERSION = 7;
   STARTUP_VALUE_NAME = 'LayoutSwitcher';
 
   ActionKeys: array[TLSAction] of string = (
     'none', 'convert_layout', 'uppercase', 'lowercase', 'invert_case',
     'transliterate', 'undo', 'translate', 'web_search', 'translate_replace',
-    'explain', 'auto_switch');
+    'explain', 'dictate', 'auto_switch');
 
   // Screenshot tools own full-screen overlays, use Shift/Ctrl themselves and
   // monitor the clipboard.  LayoutSwitcher must not inject input into them.
@@ -209,6 +218,11 @@ const
   VALUE_AI_OPENAI_URL = 'AiOpenAIUrl';
   VALUE_AI_OPENAI_MODEL = 'AiOpenAIModel';
   VALUE_AI_CONSENT = 'AiConsent';
+  VALUE_DICTATION_MODEL = 'DictationModel';
+  VALUE_DICTATION_CLOUD_URL = 'DictationCloudUrl';
+  VALUE_DICTATION_CLOUD_KEY = 'DictationCloudKey';
+  VALUE_DICTATION_CLOUD_MODEL = 'DictationCloudModel';
+  VALUE_DICTATION_CLOUD_CONSENT = 'DictationCloudConsent';
   VALUE_CUSTOM_PROGRAMS = 'CustomPrograms';
   VALUE_AUTO_SWITCH_EXCEPTIONS = 'AutoSwitchExceptions';
   VALUE_NO_AUTOCORRECT = 'NoAutoCorrectProcesses';
@@ -279,6 +293,12 @@ begin
   Result.ActionGestures[laWebSearch] := lgDoubleLAlt;
   Result.ActionGestures[laTranslateReplace] := lgRCtrlRAlt;
   Result.ActionGestures[laExplain] := lgPause;
+  Result.ActionGestures[laDictate] := lgScrollLock;
+  Result.DictationModel := DEFAULT_SPEECH_MODEL;
+  Result.DictationCloudUrl := DEFAULT_SPEECH_CLOUD_URL;
+  Result.DictationCloudKey := '';
+  Result.DictationCloudModel := DEFAULT_SPEECH_CLOUD_MODEL;
+  Result.DictationCloudConsent := False;
 end;
 
 function ActionName(Action: TLSAction): string;
@@ -294,6 +314,7 @@ begin
     laWebSearch: Result := T('Найти выделенное в интернете', 'Search the web for selection');
     laTranslateReplace: Result := T('Заменить текст переводом', 'Replace text with translation');
     laExplain: Result := T('Объяснить выделенное (ИИ)', 'Explain selection (AI)');
+    laDictate: Result := T('Диктовка (голосовой ввод)', 'Dictation (voice typing)');
   else
     Result := T('Нет', 'None');
   end;
@@ -312,6 +333,7 @@ begin
     lgDoubleLAlt: Result := T('Двойной левый Alt', 'Double left Alt');
     lgRCtrlRAlt: Result := T('Правый Ctrl + правый Alt', 'Right Ctrl + right Alt');
     lgPause: Result := 'Pause/Break';
+    lgScrollLock: Result := 'Scroll Lock';
   else
     Result := T('Отключено', 'Disabled');
   end;
@@ -444,9 +466,9 @@ procedure MigrateActionGestures(var Gestures: TLSActionGestures;
   FromVersion: Integer);
 const
   // Actions that received a default gesture in the given settings version.
-  NewActions: array[0..5] of TLSAction = (laTransliterate, laUndo, laTranslate,
-    laWebSearch, laTranslateReplace, laExplain);
-  IntroducedIn: array[0..5] of Integer = (2, 2, 3, 3, 5, 6);
+  NewActions: array[0..6] of TLSAction = (laTransliterate, laUndo, laTranslate,
+    laWebSearch, laTranslateReplace, laExplain, laDictate);
+  IntroducedIn: array[0..6] of Integer = (2, 2, 3, 3, 5, 6, 7);
 var
   Defaults: TLSActionGestures;
   NewAction, Other: TLSAction;
@@ -604,6 +626,16 @@ begin
     Result.AiOpenAIUrl := Trim(Store.ReadString(VALUE_AI_OPENAI_URL, Result.AiOpenAIUrl));
     Result.AiOpenAIModel := Trim(Store.ReadString(VALUE_AI_OPENAI_MODEL, ''));
     Result.AiConsent := Store.ReadBool(VALUE_AI_CONSENT, Result.AiConsent);
+    Result.DictationModel := Trim(Store.ReadString(VALUE_DICTATION_MODEL, Result.DictationModel));
+    if FindSpeechModel(Result.DictationModel) < 0 then
+      Result.DictationModel := DEFAULT_SPEECH_MODEL;
+    Result.DictationCloudUrl := Trim(Store.ReadString(VALUE_DICTATION_CLOUD_URL,
+      Result.DictationCloudUrl));
+    Result.DictationCloudKey := Trim(Store.ReadString(VALUE_DICTATION_CLOUD_KEY, ''));
+    Result.DictationCloudModel := Trim(Store.ReadString(VALUE_DICTATION_CLOUD_MODEL,
+      Result.DictationCloudModel));
+    Result.DictationCloudConsent := Store.ReadBool(VALUE_DICTATION_CLOUD_CONSENT,
+      Result.DictationCloudConsent);
     Result.CustomPrograms := ParseProcessList(Store.ReadString(VALUE_CUSTOM_PROGRAMS, ''));
     if Store.ValueExists(VALUE_AUTO_SWITCH_EXCEPTIONS) then
       Result.AutoSwitchExceptions := ParseWordList(
@@ -672,6 +704,11 @@ begin
     Store.WriteString(VALUE_AI_OPENAI_URL, Settings.AiOpenAIUrl);
     Store.WriteString(VALUE_AI_OPENAI_MODEL, Settings.AiOpenAIModel);
     Store.WriteBool(VALUE_AI_CONSENT, Settings.AiConsent);
+    Store.WriteString(VALUE_DICTATION_MODEL, Settings.DictationModel);
+    Store.WriteString(VALUE_DICTATION_CLOUD_URL, Settings.DictationCloudUrl);
+    Store.WriteString(VALUE_DICTATION_CLOUD_KEY, Settings.DictationCloudKey);
+    Store.WriteString(VALUE_DICTATION_CLOUD_MODEL, Settings.DictationCloudModel);
+    Store.WriteBool(VALUE_DICTATION_CLOUD_CONSENT, Settings.DictationCloudConsent);
     Store.WriteString(VALUE_CUSTOM_PROGRAMS, ProcessListToText(Settings.CustomPrograms));
     Store.WriteString(VALUE_AUTO_SWITCH_EXCEPTIONS,
       string.Join('; ', Settings.AutoSwitchExceptions));
@@ -722,6 +759,7 @@ begin
   Exported.DeepLApiKey := '';
   Exported.AiClaudeKey := '';
   Exported.AiOpenAIKey := '';
+  Exported.DictationCloudKey := '';
   if FileExists(FileName) then
     System.SysUtils.DeleteFile(FileName);
   Store := TIniSettingsStore.Create(FileName);
