@@ -10,7 +10,7 @@ uses
   Winapi.Windows, Winapi.Messages,
   System.SysUtils, System.Classes, System.Types, System.UITypes,
   Vcl.Controls, Vcl.Forms, Vcl.Graphics, Vcl.StdCtrls, Vcl.ComCtrls,
-  uSettings, uSpeechModels, uModernUI;
+  uSettings, uSpeechModels, uModernUI, uAiText;
 
 type
   TDictationPage = class(TComponent)
@@ -31,8 +31,9 @@ type
     FOnUnloadModel: TNotifyEvent;
     lblIntro: TLabel;
     lbModels: TListBox;
-    lblPros: TLabel;
-    lblCons: TLabel;
+    lblAiMode: TLabel;
+    cbAiMode: TComboBox;
+    lblDetails: TLabel;
     lblStatus: TLabel;
     pbDownload: TProgressBar;
     btnDownload: TButton;
@@ -48,7 +49,9 @@ type
     procedure DownloadClick(Sender: TObject);
     procedure DeleteClick(Sender: TObject);
     procedure CloudExit(Sender: TObject);
+    procedure AiModeChange(Sender: TObject);
     procedure UpdateDetails;
+    procedure FillAiModes;
     function DownloadDetails: string;
     procedure Changed;
     function MakeLabel(X, Y, W, H: Integer; WordWrap: Boolean): TLabel;
@@ -90,7 +93,15 @@ begin
   FTheme := CurrentUiTheme(True);
   Y := 8;
   lblIntro := MakeLabel(12, Y, 480, 32, True);
-  Inc(Y, 40);
+  Inc(Y, 36);
+  // What the AI does with the recognized text.
+  lblAiMode := MakeLabel(12, Y + 3, 220, 17, False);
+  cbAiMode := TComboBox.Create(Self);
+  cbAiMode.Parent := FPage;
+  cbAiMode.Style := csDropDownList;
+  cbAiMode.SetBounds(S(240), S(Y), S(252), S(21));
+  cbAiMode.OnChange := AiModeChange;
+  Inc(Y, 30);
   lbModels := TListBox.Create(Self);
   lbModels.Parent := FPage;
   lbModels.SetBounds(S(12), S(Y), S(480), S(ITEM_HEIGHT * Length(SpeechModels) + 4));
@@ -100,11 +111,9 @@ begin
   lbModels.OnClick := ModelsClick;
   for I := Low(SpeechModels) to High(SpeechModels) do
     lbModels.Items.Add(SpeechModels[I].Id);
-  Inc(Y, ITEM_HEIGHT * Length(SpeechModels) + 12);
-  lblPros := MakeLabel(12, Y, 480, 46, True);
-  Inc(Y, 48);
-  lblCons := MakeLabel(12, Y, 480, 46, True);
-  Inc(Y, 52);
+  Inc(Y, ITEM_HEIGHT * Length(SpeechModels) + 10);
+  lblDetails := MakeLabel(12, Y, 480, 78, True);
+  Inc(Y, 82);
   // Local models: status, download and removal.
   lblStatus := MakeLabel(12, Y + 4, 300, 17, False);
   lblStatus.EllipsisPosition := epEndEllipsis;
@@ -190,6 +199,8 @@ begin
     'курсор. Esc отменяет. Выберите модель распознавания:',
     'Press %s, dictate and press it again: the text appears at the cursor. ' +
     'Esc cancels. Choose the recognition model:'), [Hint]);
+  lblAiMode.Caption := T('Обработка текста ИИ:', 'AI text processing:');
+  FillAiModes;
   lblCloudUrl.Caption := T('Адрес API:', 'API address:');
   lblCloudKey.Caption := T('Ключ API:', 'API key:');
   lblCloudModel.Caption := T('Модель:', 'Model:');
@@ -213,6 +224,7 @@ begin
     edCloudUrl.Text := Settings.DictationCloudUrl;
     edCloudKey.Text := Settings.DictationCloudKey;
     edCloudModel.Text := Settings.DictationCloudModel;
+    cbAiMode.ItemIndex := Settings.DictationAiMode;
   finally
     FLoading := False;
   end;
@@ -226,6 +238,8 @@ begin
   if Settings.DictationCloudUrl = '' then
     Settings.DictationCloudUrl := DEFAULT_SPEECH_CLOUD_URL;
   Settings.DictationCloudKey := Trim(edCloudKey.Text);
+  if cbAiMode.ItemIndex >= 0 then
+    Settings.DictationAiMode := cbAiMode.ItemIndex;
   Settings.DictationCloudModel := Trim(edCloudModel.Text);
   if Settings.DictationCloudModel = '' then
     Settings.DictationCloudModel := DEFAULT_SPEECH_CLOUD_MODEL;
@@ -250,6 +264,35 @@ end;
 procedure TDictationPage.CloudExit(Sender: TObject);
 begin
   Changed;
+end;
+
+procedure TDictationPage.AiModeChange(Sender: TObject);
+begin
+  Changed;
+end;
+
+procedure TDictationPage.FillAiModes;
+var
+  Mode: TDictationAiMode;
+  Saved: Integer;
+begin
+  Saved := cbAiMode.ItemIndex;
+  cbAiMode.Items.BeginUpdate;
+  try
+    cbAiMode.Items.Clear;
+    for Mode := Low(TDictationAiMode) to High(TDictationAiMode) do
+      cbAiMode.Items.Add(DictationAiModeName(Mode));
+  finally
+    cbAiMode.Items.EndUpdate;
+  end;
+  if Saved < 0 then
+    Saved := 0;
+  cbAiMode.ItemIndex := Saved;
+  cbAiMode.Hint := T('Сервис ИИ выбирается на вкладке «Сервисы». Голосовые команды ' +
+    '«новая строка», «новый абзац», «точка», «удали последнее», сказанные отдельно, ' +
+    'работают и без ИИ.', 'The AI service is chosen on the Services tab. Voice commands ' +
+    '"new line", "new paragraph", "full stop", "scratch that" said alone work without AI too.');
+  cbAiMode.ShowHint := True;
 end;
 
 procedure TDictationPage.ModelsDrawItem(Control: TWinControl; Index: Integer;
@@ -317,8 +360,8 @@ begin
   if lbModels = nil then
     Exit;
   Model := SpeechModels[SelectedIndex];
-  lblPros.Caption := T('Плюсы: ', 'Pros: ') + Model.Pros;
-  lblCons.Caption := T('Минусы: ', 'Cons: ') + Model.Cons;
+  lblDetails.Caption := T('Плюсы: ', 'Pros: ') + Model.Pros + sLineBreak +
+    T('Минусы: ', 'Cons: ') + Model.Cons;
   Cloud := Model.IsCloud;
   Installed := IsSpeechModelInstalled(Model);
   Downloading := FInstall <> nil;

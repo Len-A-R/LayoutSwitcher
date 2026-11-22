@@ -65,6 +65,9 @@ type
   public
     Sequence: Cardinal;
     Answer, ErrorCode, ErrorText: string;
+    // Free for the caller (dictation: the text typed if the AI fails).
+    FallbackText: string;
+    FallbackPunctuation: Boolean;
     ElapsedMS: Cardinal;
     Success: Boolean;
     constructor Create(const Config: TAiConfig; const System, User: string;

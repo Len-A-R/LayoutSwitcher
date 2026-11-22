@@ -23,12 +23,16 @@ type
     procedure ShiftGestures;
     [Test]
     procedure SettingsAndMigration;
+    [Test]
+    procedure VoiceCommands;
+    [Test]
+    procedure DictationModes;
   end;
 
 implementation
 
 uses
-  Winapi.Windows, System.SysUtils;
+  Winapi.Windows, System.SysUtils, System.IOUtils;
 
 procedure TAiTextTests.Prompts;
 begin
@@ -63,6 +67,8 @@ begin
   Assert.AreEqual('"Да", — сказал он, — "нет"', CleanAiAnswer('"Да", — сказал он, — "нет"'));
   // Line breaks become Windows line breaks.
   Assert.AreEqual('Раз' + sLineBreak + 'два', CleanAiAnswer('Раз' + #10 + 'два'));
+  // Markdown line breaks (two trailing spaces) are dropped.
+  Assert.AreEqual('- Молоко' + sLineBreak + '- Хлеб', CleanAiAnswer('- Молоко  ' + #10 + '- Хлеб'));
   // A normal first line ending with a colon is kept.
   Assert.AreEqual('Список дел:' + sLineBreak + '- молоко',
     CleanAiAnswer('Список дел:' + #10 + '- молоко'));
@@ -119,6 +125,58 @@ begin
   G[laAiFix] := lgNone;
   MigrateActionGestures(G, 8);
   Assert.AreEqual(Ord(lgNone), Ord(G[laAiFix]));
+end;
+
+procedure TAiTextTests.VoiceCommands;
+var
+  Insert: string;
+begin
+  Assert.AreEqual(Ord(vcNewLine), Ord(ParseVoiceCommand('Новая строка.', Insert)));
+  Assert.AreEqual(sLineBreak, Insert);
+  Assert.AreEqual(Ord(vcNewParagraph), Ord(ParseVoiceCommand('новый абзац', Insert)));
+  Assert.AreEqual(sLineBreak + sLineBreak, Insert);
+  Assert.AreEqual(Ord(vcDeleteLast), Ord(ParseVoiceCommand('Удали последнее предложение!', Insert)));
+  Assert.AreEqual(Ord(vcDeleteLast), Ord(ParseVoiceCommand('Scratch that.', Insert)));
+  Assert.AreEqual(Ord(vcPunctuation), Ord(ParseVoiceCommand('Точка.', Insert)));
+  Assert.AreEqual('.', Insert);
+  Assert.AreEqual(Ord(vcPunctuation), Ord(ParseVoiceCommand('вопросительный  знак', Insert)));
+  Assert.AreEqual('?', Insert);
+  Assert.AreEqual(Ord(vcPunctuation), Ord(ParseVoiceCommand('Точка с запятой', Insert)));
+  Assert.AreEqual(';', Insert);
+  // Only a whole utterance is a command: words inside a phrase are text.
+  Assert.AreEqual(Ord(vcNone), Ord(ParseVoiceCommand('Это точка зрения автора.', Insert)));
+  Assert.AreEqual(Ord(vcNone), Ord(ParseVoiceCommand('Начни с новой строки письмо', Insert)));
+  Assert.AreEqual(Ord(vcNone), Ord(ParseVoiceCommand('', Insert)));
+end;
+
+procedure TAiTextTests.DictationModes;
+var
+  S, Loaded: TLSSettings;
+  FileName: string;
+  Diagnostics: Boolean;
+begin
+  Assert.AreEqual(Ord(damAsSaid), Ord(DictationAiModeFromInteger(9)));
+  Assert.AreEqual(Ord(damList), Ord(DictationAiModeFromInteger(3)));
+  Assert.AreEqual('<dictation>ну привет</dictation>', DictationUserMessage(' ну привет '));
+  // Every mode handles spoken commands and never follows requests in the text.
+  Assert.IsTrue(DictationSystemPrompt(damAsSaid).Contains('новая строка'));
+  Assert.IsTrue(DictationSystemPrompt(damNeat).Contains('not instructions'));
+  Assert.IsTrue(DictationSystemPrompt(damNeat).Contains('filler'));
+  Assert.IsFalse(DictationSystemPrompt(damAsSaid).Contains('filler'));
+  Assert.IsTrue(DictationSystemPrompt(damBusiness).Contains('business'));
+  Assert.IsTrue(DictationSystemPrompt(damList).Contains('"- "'));
+  Assert.IsTrue(DictationAiModeName(damNeat) <> DictationAiModeName(damList));
+  S := TLSSettings.Defaults;
+  Assert.AreEqual(0, S.DictationAiMode);
+  FileName := TPath.Combine(TPath.GetTempPath, 'ls-settings-dictai.ini');
+  try
+    S.DictationAiMode := 2;
+    Assert.IsTrue(ExportSettings(S, FileName, False));
+    Assert.IsTrue(ImportSettings(FileName, Loaded, Diagnostics));
+    Assert.AreEqual(2, Loaded.DictationAiMode);
+  finally
+    System.SysUtils.DeleteFile(FileName);
+  end;
 end;
 
 initialization

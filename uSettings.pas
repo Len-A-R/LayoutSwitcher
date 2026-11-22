@@ -83,6 +83,8 @@ type
     DictationCloudModel: string;
     // The user agreed that recordings are sent to the cloud service.
     DictationCloudConsent: Boolean;
+    // TDictationAiMode in uAiText: 0 = typed as recognized.
+    DictationAiMode: Integer;
     AutoSwitchExceptions: TArray<string>;
     // Programs where only the manual actions work (code editors, terminals).
     NoAutoCorrectProcesses: TArray<string>;
@@ -225,6 +227,7 @@ const
   VALUE_DICTATION_CLOUD_KEY = 'DictationCloudKey';
   VALUE_DICTATION_CLOUD_MODEL = 'DictationCloudModel';
   VALUE_DICTATION_CLOUD_CONSENT = 'DictationCloudConsent';
+  VALUE_DICTATION_AI_MODE = 'DictationAiMode';
   VALUE_CUSTOM_PROGRAMS = 'CustomPrograms';
   VALUE_AUTO_SWITCH_EXCEPTIONS = 'AutoSwitchExceptions';
   VALUE_NO_AUTOCORRECT = 'NoAutoCorrectProcesses';
@@ -303,6 +306,7 @@ begin
   Result.DictationCloudKey := '';
   Result.DictationCloudModel := DEFAULT_SPEECH_CLOUD_MODEL;
   Result.DictationCloudConsent := False;
+  Result.DictationAiMode := 0;
 end;
 
 function ActionName(Action: TLSAction): string;
@@ -644,6 +648,9 @@ begin
       Result.DictationCloudModel));
     Result.DictationCloudConsent := Store.ReadBool(VALUE_DICTATION_CLOUD_CONSENT,
       Result.DictationCloudConsent);
+    Result.DictationAiMode := Store.ReadInteger(VALUE_DICTATION_AI_MODE, 0);
+    if (Result.DictationAiMode < 0) or (Result.DictationAiMode > 3) then
+      Result.DictationAiMode := 0;
     Result.CustomPrograms := ParseProcessList(Store.ReadString(VALUE_CUSTOM_PROGRAMS, ''));
     if Store.ValueExists(VALUE_AUTO_SWITCH_EXCEPTIONS) then
       Result.AutoSwitchExceptions := ParseWordList(
@@ -717,6 +724,7 @@ begin
     Store.WriteString(VALUE_DICTATION_CLOUD_KEY, Settings.DictationCloudKey);
     Store.WriteString(VALUE_DICTATION_CLOUD_MODEL, Settings.DictationCloudModel);
     Store.WriteBool(VALUE_DICTATION_CLOUD_CONSENT, Settings.DictationCloudConsent);
+    Store.WriteInteger(VALUE_DICTATION_AI_MODE, Settings.DictationAiMode);
     Store.WriteString(VALUE_CUSTOM_PROGRAMS, ProcessListToText(Settings.CustomPrograms));
     Store.WriteString(VALUE_AUTO_SWITCH_EXCEPTIONS,
       string.Join('; ', Settings.AutoSwitchExceptions));

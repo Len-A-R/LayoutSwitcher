@@ -13,7 +13,7 @@ uses
   Vcl.StdCtrls, Vcl.ComCtrls, Vcl.Grids, uProgramList, uAiExplain, uExplainWindow, uModernUI,
   uSettings, uGestureDetector, uOperationWorker, uConversionChain,
   uLayoutIndicator, uUpdateCheck, uUpdateProgress, uLayoutConverter, uTextTools,
-  uDictation, uDictationPage;
+  uDictation, uDictationPage, uAiText;
 
 const
   INSTANCE_WINDOW_PROP = 'LayoutSwitcher.Instance.v2';
@@ -301,6 +301,9 @@ type
     FAiInstructionNext: string;
     // The running recording is a voice edit command, not text to type.
     FDictationIsEdit: Boolean;
+    // The last dictated text typed (for "удали последнее").
+    FLastDictation: string;
+    FDictationAiSequence: Cardinal;
     // Windows 11 look of the settings window: side navigation, page title,
     // flat buttons (built over the form at start).
     FUiTheme: TUiTheme;
@@ -356,6 +359,9 @@ type
     procedure DictationUnloadModel(Sender: TObject);
     procedure ToggleDictation(VoiceEdit: Boolean);
     procedure StartVoiceEdit(const Command: string);
+    procedure InsertDictatedText(const Text: string; Punctuation: Boolean);
+    procedure RunVoiceCommand(Command: TVoiceCommand; const Insert: string);
+    procedure DictationAiDone(Sender: TObject);
     // Asks once before text goes to the AI service; False if declined.
     function EnsureAiConsent: Boolean;
     function AiServiceName(const Config: TAiConfig): string;
@@ -950,7 +956,7 @@ begin
   if not FPaused and not IsAltKey(VK) then
     CheckWindowChanged;
   // Esc cancels a dictation (the key still reaches the application).
-  if (VK = VK_ESCAPE) and not IsKeyUp and (FDictation.State <> dsIdle) then
+  if (VK = VK_ESCAPE) and not IsKeyUp and ((FDictation.State <> dsIdle) or FDictation.Busy) then
   begin
     DiagnosticsLog('dictation.cancel reason=escape');
     FDictation.Cancel;
@@ -3698,8 +3704,8 @@ begin
       ApplySettings;
     end;
   end;
-  // The command is sent to the AI service: asked before recording.
-  if VoiceEdit and not EnsureAiConsent then
+  // The command (or the text) is sent to the AI service: asked before recording.
+  if (VoiceEdit or (FSettings.DictationAiMode <> 0)) and not EnsureAiConsent then
     Exit;
   Cloud.BaseUrl := FSettings.DictationCloudUrl;
   Cloud.ApiKey := FSettings.DictationCloudKey;
@@ -3738,7 +3744,11 @@ end;
 
 procedure TFormMain.DictationResult(const Text, ErrorText: string; Punctuation: Boolean);
 var
-  Before, Final: string;
+  Command: TVoiceCommand;
+  Insert: string;
+  Config: TAiConfig;
+  Thread: TAiExplainThread;
+  Mode: TDictationAiMode;
 begin
   DiagnosticsLogFmt('dictation.done length=%d error="%s"', [Length(Text), ErrorText]);
   if (ErrorText <> '') or (Trim(Text) = '') then
@@ -3748,11 +3758,104 @@ begin
     StartVoiceEdit(Text);
     Exit;
   end;
+  // "Новая строка", "точка", "удали последнее" said alone: no AI needed.
+  Command := ParseVoiceCommand(Text, Insert);
+  if Command <> vcNone then
+  begin
+    RunVoiceCommand(Command, Insert);
+    Exit;
+  end;
+  Mode := DictationAiModeFromInteger(FSettings.DictationAiMode);
+  if Mode = damAsSaid then
+  begin
+    InsertDictatedText(Text, Punctuation);
+    Exit;
+  end;
+  Config := CurrentAiConfig;
+  Inc(FDictationAiSequence);
+  FPendingDictation := '';
+  FDictation.ShowBusy(T('Обрабатываю текст', 'Processing the text'), AiServiceName(Config));
+  Thread := TAiExplainThread.Create(Config, DictationSystemPrompt(Mode),
+    DictationUserMessage(Text), FDictationAiSequence);
+  // Kept for the fallback: the recognized text is typed if the AI fails.
+  Thread.FallbackText := Text;
+  Thread.FallbackPunctuation := Punctuation;
+  Thread.FreeOnTerminate := True;
+  Thread.OnTerminate := DictationAiDone;
+  Thread.Start;
+  DiagnosticsLogFmt('dictation.ai_start mode=%d length=%d', [Ord(Mode), Length(Text)]);
+end;
+
+procedure TFormMain.DictationAiDone(Sender: TObject);
+var
+  Thread: TAiExplainThread;
+  Answer: string;
+begin
+  Thread := TAiExplainThread(Sender);
+  DiagnosticsLogFmt('dictation.ai_done ok=%s ms=%d error=%s',
+    [BoolToStr(Thread.Success, True), Thread.ElapsedMS, Thread.ErrorCode]);
+  // Cancelled (Esc, the close button) or replaced by a newer dictation.
+  if (Thread.Sequence <> FDictationAiSequence) or not FDictation.Busy then
+    Exit;
+  FDictation.HideBusy;
+  Answer := '';
+  if Thread.Success then
+    Answer := CleanAiAnswer(Thread.Answer);
+  if Answer <> '' then
+    InsertDictatedText(Answer, True)
+  else
+  begin
+    InsertDictatedText(Thread.FallbackText, Thread.FallbackPunctuation);
+    FDictation.ShowError(T('ИИ не обработал текст, вставлен как распознан: ',
+      'The AI did not process the text, typed as recognized: ') + Thread.ErrorText);
+  end;
+end;
+
+procedure TFormMain.RunVoiceCommand(Command: TVoiceCommand; const Insert: string);
+var
+  Len: Integer;
+begin
+  DiagnosticsLogFmt('dictation.command kind=%d', [Ord(Command)]);
+  if FOperationBusy then
+    Exit;
+  case Command of
+    vcNewLine, vcNewParagraph, vcPunctuation:
+      begin
+        // Typed as is: no space or capital letter added.
+        QueueRequest(laDictate, TConversionChain.PlanReplacement(FBuffer, Length(FBuffer) + 1,
+          0, Insert), False, False);
+        FLastDictation := '';
+      end;
+    vcDeleteLast:
+      begin
+        Len := Length(FLastDictation);
+        // Only right after the dictation, while its text is still in front
+        // of the caret.
+        if (Len = 0) or FBufferOverflowed or not FBuffer.EndsWith(FLastDictation) then
+        begin
+          FDictation.ShowError(T('Удалить можно только последний продиктованный текст, пока курсор не сдвинут.',
+            'Only the last dictated text can be deleted, before the caret moves.'));
+          Exit;
+        end;
+        QueueRequest(laDictate, TConversionChain.PlanReplacement(FBuffer,
+          Length(FBuffer) - Len + 1, Len, ''), False, False);
+        FLastDictation := '';
+      end;
+  end;
+end;
+
+procedure TFormMain.InsertDictatedText(const Text: string; Punctuation: Boolean);
+var
+  Before, Final: string;
+begin
   if FBufferOverflowed then
     Before := ''
   else
     Before := FBuffer;
   Final := FinishDictatedText(Text, Punctuation, Before);
+  if Final = '' then
+    Exit;
+  FLastDictation := Final;
   if FOperationBusy then
   begin
     // Typed when the running correction is done (HandleOperationResult).

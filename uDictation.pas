@@ -104,6 +104,8 @@ type
     // Frees the loaded model (settings changed, low memory).
     procedure UnloadModel;
     property State: TDictationState read FState;
+    // ShowBusy is showing (AI work); False after Cancel.
+    property Busy: Boolean read FBusy;
     property OnResult: TDictationResultEvent read FOnResult write FOnResult;
   end;
 
