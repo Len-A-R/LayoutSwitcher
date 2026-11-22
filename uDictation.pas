@@ -399,6 +399,8 @@ begin
   Canvas.Brush.Style := bsClear;
   if FMessage <> '' then
     Glyph := #$E7BA      // warning
+  else if (FState = dsRecognizing) and (FTitle <> '') then
+    Glyph := #$E70F      // pencil: the AI works on text, not on the voice
   else
     Glyph := #$E720;     // microphone
   TextRect := Rect(S(14), MidY - S(18), S(50), MidY + S(18));
