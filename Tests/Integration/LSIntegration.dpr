@@ -437,6 +437,10 @@ begin
     Form.Edit := TEdit.Create(Form);
     Form.Edit.Parent := Form;
     Form.Edit.SetBounds(16, 16, 470, 24);
+    // AutoSelect would select the whole text when a scenario moves the focus
+    // here from the RichEdit: the caret position set by the scenario is lost
+    // and the correction replaces everything.
+    Form.Edit.AutoSelect := False;
     Form.Password := TEdit.Create(Form);
     Form.Password.Parent := Form;
     Form.Password.PasswordChar := '*';
