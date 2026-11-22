@@ -299,6 +299,8 @@ type
     FPendingDictation: string;
     // The spoken command for the next laVoiceEdit request.
     FAiInstructionNext: string;
+    // The running recording is a voice edit command, not text to type.
+    FDictationIsEdit: Boolean;
     // Windows 11 look of the settings window: side navigation, page title,
     // flat buttons (built over the form at start).
     FUiTheme: TUiTheme;
@@ -352,7 +354,8 @@ type
     procedure CreateDictationPage;
     procedure DictationPageChange(Sender: TObject);
     procedure DictationUnloadModel(Sender: TObject);
-    procedure ToggleDictation;
+    procedure ToggleDictation(VoiceEdit: Boolean);
+    procedure StartVoiceEdit(const Command: string);
     // Asks once before text goes to the AI service; False if declined.
     function EnsureAiConsent: Boolean;
     function AiServiceName(const Config: TAiConfig): string;
@@ -1190,9 +1193,9 @@ var
 begin
   if (Action = laNone) or FPaused then
     Exit;
-  if Action = laDictate then
+  if Action in [laDictate, laVoiceEdit] then
   begin
-    ToggleDictation;
+    ToggleDictation(Action = laVoiceEdit);
     Exit;
   end;
   if Action = laAiFix then
@@ -1200,9 +1203,6 @@ begin
     StartAiFix;
     Exit;
   end;
-  // Voice edit: recorded first (not wired yet).
-  if Action = laVoiceEdit then
-    Exit;
   if FBufferOverflowed or FFocusIsPassword then
     Plan := FChain.Plan(laNone, '')
   else if Action = laTranslateReplace then
@@ -3639,17 +3639,18 @@ begin
   FDictation.UnloadModel;
 end;
 
-procedure TFormMain.ToggleDictation;
+procedure TFormMain.ToggleDictation(VoiceEdit: Boolean);
 var
   Index: Integer;
   Model: TSpeechModel;
   Cloud: TSpeechCloudConfig;
   Gesture: TLSGesture;
-  Hint, ErrorText: string;
+  Hint, Title, ErrorText: string;
 begin
   case FDictation.State of
     dsRecording:
       begin
+        // Either gesture ends the recording, whatever started it.
         DiagnosticsLog('dictation.stop');
         FDictation.Stop;
         Exit;
@@ -3697,18 +3698,37 @@ begin
       ApplySettings;
     end;
   end;
+  // The command is sent to the AI service: asked before recording.
+  if VoiceEdit and not EnsureAiConsent then
+    Exit;
   Cloud.BaseUrl := FSettings.DictationCloudUrl;
   Cloud.ApiKey := FSettings.DictationCloudKey;
   Cloud.Model := FSettings.DictationCloudModel;
   Cloud.Language := '';
-  Gesture := FSettings.GestureForAction(laDictate);
-  if Gesture <> lgNone then
-    Hint := Format(T('%s — вставить текст · Esc — отмена', '%s — insert the text · Esc — cancel'),
-      [GestureName(Gesture)])
+  Title := '';
+  if VoiceEdit then
+  begin
+    Title := T('Что сделать с текстом?', 'What to do with the text?');
+    Gesture := FSettings.GestureForAction(laVoiceEdit);
+    if Gesture <> lgNone then
+      Hint := Format(T('«переведи на английский», «сократи» · %s — выполнить',
+        '"translate into Russian", "shorten" · %s — apply'), [GestureName(Gesture)])
+    else
+      Hint := T('«переведи на английский», «сократи» · щелчок — выполнить',
+        '"translate into Russian", "shorten" · click to apply');
+  end
   else
-    Hint := T('Щелчок — вставить текст · Esc — отмена', 'Click to insert the text · Esc — cancel');
-  if FDictation.Start(Model, Cloud, Hint, ErrorText) then
-    DiagnosticsLogFmt('dictation.start model=%s', [Model.Id])
+  begin
+    Gesture := FSettings.GestureForAction(laDictate);
+    if Gesture <> lgNone then
+      Hint := Format(T('%s — вставить текст · Esc — отмена', '%s — insert the text · Esc — cancel'),
+        [GestureName(Gesture)])
+    else
+      Hint := T('Щелчок — вставить текст · Esc — отмена', 'Click to insert the text · Esc — cancel');
+  end;
+  FDictationIsEdit := VoiceEdit;
+  if FDictation.Start(Model, Cloud, Hint, ErrorText, Title) then
+    DiagnosticsLogFmt('dictation.start model=%s edit=%s', [Model.Id, BoolToStr(VoiceEdit, True)])
   else
   begin
     DiagnosticsLogFmt('dictation.start_failed error="%s"', [ErrorText]);
@@ -3723,6 +3743,11 @@ begin
   DiagnosticsLogFmt('dictation.done length=%d error="%s"', [Length(Text), ErrorText]);
   if (ErrorText <> '') or (Trim(Text) = '') then
     Exit;
+  if FDictationIsEdit then
+  begin
+    StartVoiceEdit(Text);
+    Exit;
+  end;
   if FBufferOverflowed then
     Before := ''
   else
@@ -3738,6 +3763,43 @@ begin
   // refuses password fields.
   QueueRequest(laDictate, TConversionChain.PlanReplacement(FBuffer, Length(FBuffer) + 1, 0,
     Final), False, False);
+end;
+
+procedure TFormMain.StartVoiceEdit(const Command: string);
+var
+  Plan: TBufferPlan;
+  Sequence: Cardinal;
+  Spoken: string;
+begin
+  Spoken := Trim(Command);
+  // "Переведи на английский." - the final full stop of the model.
+  while (Spoken <> '') and CharInSet(Spoken[Length(Spoken)], ['.', '!']) do
+    SetLength(Spoken, Length(Spoken) - 1);
+  if Spoken = '' then
+    Exit;
+  if FOperationBusy then
+  begin
+    FDictation.ShowError(T('Подождите: предыдущее действие ещё выполняется.',
+      'Wait: the previous action is still running.'));
+    Exit;
+  end;
+  // The selection, else the phrase typed since the last caret jump.
+  if FBufferOverflowed or FFocusIsPassword then
+    Plan := FChain.Plan(laNone, '')
+  else
+    Plan := TConversionChain.PlanPhrase(FBuffer);
+  FDictation.ShowBusy(Format(T('Выполняю: «%s»', 'Applying: "%s"'), [Spoken]),
+    AiServiceName(CurrentAiConfig));
+  DiagnosticsLogFmt('ai.voice_edit_start command_length=%d', [Length(Spoken)]);
+  Sequence := FOperationSequence;
+  FAiInstructionNext := Spoken;
+  try
+    QueueRequest(laVoiceEdit, Plan, False, False);
+  finally
+    FAiInstructionNext := '';
+  end;
+  if FOperationSequence = Sequence then
+    FDictation.HideBusy;
 end;
 
 function TFormMain.AiServiceName(const Config: TAiConfig): string;

@@ -89,8 +89,9 @@ type
     constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
     // Starts recording with the model; False with ErrorText when it cannot.
+    // Title replaces "Speak..." (voice edit commands).
     function Start(const Model: TSpeechModel; const Cloud: TSpeechCloudConfig;
-      const StopHint: string; out ErrorText: string): Boolean;
+      const StopHint: string; out ErrorText: string; const Title: string = ''): Boolean;
     // Ends the recording and recognizes it.
     procedure Stop;
     procedure Cancel;
@@ -426,7 +427,9 @@ begin
     Exit;
   end;
 
-  if FState = dsRecording then
+  if (FState = dsRecording) and (FTitle <> '') then
+    Title := FTitle
+  else if FState = dsRecording then
     Title := T('Говорите…', 'Speak…')
   else if FTitle <> '' then
     Title := FTitle + Copy('...', 1, (FPhase div 6) mod 4)
@@ -509,7 +512,7 @@ begin
 end;
 
 function TDictation.Start(const Model: TSpeechModel; const Cloud: TSpeechCloudConfig;
-  const StopHint: string; out ErrorText: string): Boolean;
+  const StopHint: string; out ErrorText: string; const Title: string): Boolean;
 begin
   Result := False;
   ErrorText := '';
@@ -523,7 +526,7 @@ begin
   FState := dsRecording;
   FHideTimer.Enabled := False;
   EnsureIndicator;
-  FIndicator.ShowState(dsRecording, StopHint);
+  FIndicator.ShowState(dsRecording, StopHint, Title);
   FMaxTimer.Enabled := True;
   Result := True;
 end;
@@ -580,6 +583,7 @@ begin
         FState := dsIdle;
       end;
   end;
+  FBusy := False;
   HideIndicator(nil);
 end;
 
@@ -613,11 +617,13 @@ begin
     ShowError(T('Не удалось распознать речь: ', 'Speech recognition failed: ') + Thread.FError)
   else if Trim(Thread.FText) = '' then
     ShowError(T('Речь не распознана. Попробуйте говорить ближе к микрофону.',
-      'No speech recognized. Try speaking closer to the microphone.'))
-  else
-    HideIndicator(nil);
+      'No speech recognized. Try speaking closer to the microphone.'));
   if Assigned(FOnResult) then
     FOnResult(Thread.FText, Thread.FError, Thread.FModel.Punctuation);
+  // Kept when the result started AI work (ShowBusy) or shows an error.
+  if (Thread.FError = '') and (Trim(Thread.FText) <> '') and not FBusy and
+     not FHideTimer.Enabled then
+    HideIndicator(nil);
 end;
 
 procedure TDictation.ShowError(const Text: string);
