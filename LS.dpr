@@ -31,6 +31,7 @@ uses
   uModernUI in 'uModernUI.pas',
   uAiExplain in 'uAiExplain.pas',
   uExplainWindow in 'uExplainWindow.pas',
+  uAiText in 'uAiText.pas',
   uSpeechModels in 'uSpeechModels.pas',
   uSherpaOnnx in 'uSherpaOnnx.pas',
   uAudioRecorder in 'uAudioRecorder.pas',

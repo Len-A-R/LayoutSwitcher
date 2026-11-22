@@ -15,12 +15,13 @@ type
   // in front of laAutoSwitch (the TLSActionGestures range).
   TLSAction = (laNone, laConvert, laUpperCase, laLowerCase, laInvertCase,
     laTransliterate, laUndo, laTranslate, laWebSearch, laTranslateReplace,
-    laExplain, laDictate,
+    laExplain, laDictate, laVoiceEdit, laAiFix,
     // Not bound to a gesture: started automatically after a space.
     laAutoSwitch);
   TLSGesture = (lgNone, lgDoubleShift, lgDoubleLCtrl, lgDoubleRCtrl, lgBothCtrl,
-    lgBothShift, lgDoubleCapsLock, lgDoubleRAlt, lgDoubleLAlt, lgRCtrlRAlt, lgPause, lgScrollLock);
-  TLSActionGestures = array[laConvert..laDictate] of TLSGesture;
+    lgBothShift, lgDoubleCapsLock, lgDoubleRAlt, lgDoubleLAlt, lgRCtrlRAlt, lgPause, lgScrollLock,
+    lgShiftScrollLock, lgShiftPause);
+  TLSActionGestures = array[laConvert..laAiFix] of TLSGesture;
 
   TLSSettings = record
     ActionGestures: TLSActionGestures;
@@ -113,13 +114,14 @@ const
   // 5: "replace with translation" got the Right Ctrl + Right Alt gesture.
   // 6: "explain the selection (AI)" got Pause/Break.
   // 7: dictation got Scroll Lock.
-  CURRENT_SETTINGS_VERSION = 7;
+  // 8: voice edit got Shift+Scroll Lock, "fix the text (AI)" Shift+Pause.
+  CURRENT_SETTINGS_VERSION = 8;
   STARTUP_VALUE_NAME = 'LayoutSwitcher';
 
   ActionKeys: array[TLSAction] of string = (
     'none', 'convert_layout', 'uppercase', 'lowercase', 'invert_case',
     'transliterate', 'undo', 'translate', 'web_search', 'translate_replace',
-    'explain', 'dictate', 'auto_switch');
+    'explain', 'dictate', 'voice_edit', 'ai_fix', 'auto_switch');
 
   // Screenshot tools own full-screen overlays, use Shift/Ctrl themselves and
   // monitor the clipboard.  LayoutSwitcher must not inject input into them.
@@ -294,6 +296,8 @@ begin
   Result.ActionGestures[laTranslateReplace] := lgRCtrlRAlt;
   Result.ActionGestures[laExplain] := lgPause;
   Result.ActionGestures[laDictate] := lgScrollLock;
+  Result.ActionGestures[laVoiceEdit] := lgShiftScrollLock;
+  Result.ActionGestures[laAiFix] := lgShiftPause;
   Result.DictationModel := DEFAULT_SPEECH_MODEL;
   Result.DictationCloudUrl := DEFAULT_SPEECH_CLOUD_URL;
   Result.DictationCloudKey := '';
@@ -315,6 +319,8 @@ begin
     laTranslateReplace: Result := T('Заменить текст переводом', 'Replace text with translation');
     laExplain: Result := T('Объяснить выделенное (ИИ)', 'Explain selection (AI)');
     laDictate: Result := T('Диктовка (голосовой ввод)', 'Dictation (voice typing)');
+    laVoiceEdit: Result := T('Голосовая правка выделенного (ИИ)', 'Voice edit of the selection (AI)');
+    laAiFix: Result := T('Исправить ошибки в тексте (ИИ)', 'Fix errors in the text (AI)');
   else
     Result := T('Нет', 'None');
   end;
@@ -334,6 +340,8 @@ begin
     lgRCtrlRAlt: Result := T('Правый Ctrl + правый Alt', 'Right Ctrl + right Alt');
     lgPause: Result := 'Pause/Break';
     lgScrollLock: Result := 'Scroll Lock';
+    lgShiftScrollLock: Result := 'Shift + Scroll Lock';
+    lgShiftPause: Result := 'Shift + Pause/Break';
   else
     Result := T('Отключено', 'Disabled');
   end;
@@ -466,9 +474,9 @@ procedure MigrateActionGestures(var Gestures: TLSActionGestures;
   FromVersion: Integer);
 const
   // Actions that received a default gesture in the given settings version.
-  NewActions: array[0..6] of TLSAction = (laTransliterate, laUndo, laTranslate,
-    laWebSearch, laTranslateReplace, laExplain, laDictate);
-  IntroducedIn: array[0..6] of Integer = (2, 2, 3, 3, 5, 6, 7);
+  NewActions: array[0..8] of TLSAction = (laTransliterate, laUndo, laTranslate,
+    laWebSearch, laTranslateReplace, laExplain, laDictate, laVoiceEdit, laAiFix);
+  IntroducedIn: array[0..8] of Integer = (2, 2, 3, 3, 5, 6, 7, 8, 8);
 var
   Defaults: TLSActionGestures;
   NewAction, Other: TLSAction;

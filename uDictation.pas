@@ -35,6 +35,7 @@ type
     FRecorder: TAudioRecorder;
     FMessage: string;
     FHint: string;
+    FTitle: string;          // replaces "Recognizing" (AI work)
     FOnCancel: TNotifyEvent;
     FOnStop: TNotifyEvent;
     FCloseRect: TRect;
@@ -50,7 +51,8 @@ type
     procedure MouseMove(Shift: TShiftState; X, Y: Integer); override;
   public
     constructor CreateIndicator(AOwner: TComponent; Recorder: TAudioRecorder);
-    procedure ShowState(State: TDictationState; const Hint: string);
+    procedure ShowState(State: TDictationState; const Hint: string;
+      const Title: string = '');
     procedure ShowMessageText(const Text: string);
     procedure HideIndicator;
     function Shown: Boolean;
@@ -75,6 +77,7 @@ type
     FHideTimer: TTimer;
     FOnResult: TDictationResultEvent;
     FStopHint: string;
+    FBusy: Boolean;
     procedure IndicatorCancel(Sender: TObject);
     procedure IndicatorStop(Sender: TObject);
     procedure RecognitionDone(Sender: TObject);
@@ -93,6 +96,10 @@ type
     procedure Cancel;
     // A message in the indicator for a few seconds.
     procedure ShowError(const Text: string);
+    // The indicator with a running title (AI work after or without a
+    // recording) until HideBusy.
+    procedure ShowBusy(const Title, Hint: string);
+    procedure HideBusy;
     // Frees the loaded model (settings changed, low memory).
     procedure UnloadModel;
     property State: TDictationState read FState;
@@ -264,7 +271,8 @@ begin
   Message.Result := HTCLIENT;
 end;
 
-procedure TDictationIndicator.ShowState(State: TDictationState; const Hint: string);
+procedure TDictationIndicator.ShowState(State: TDictationState; const Hint: string;
+  const Title: string);
 var
   Area: TRect;
   Monitor: TMonitor;
@@ -272,6 +280,7 @@ var
 begin
   FState := State;
   FHint := Hint;
+  FTitle := Title;
   FMessage := '';
   FillChar(FLevels, SizeOf(FLevels), 0);
   FTheme := CurrentUiTheme;
@@ -419,6 +428,8 @@ begin
 
   if FState = dsRecording then
     Title := T('Говорите…', 'Speak…')
+  else if FTitle <> '' then
+    Title := FTitle + Copy('...', 1, (FPhase div 6) mod 4)
   else
     Title := T('Распознаю', 'Recognizing') + Copy('...', 1, (FPhase div 6) mod 4);
   Canvas.Font.Size := 11;
@@ -616,6 +627,25 @@ begin
   FHideTimer.Enabled := False;
   FHideTimer.Interval := 4000;
   FHideTimer.Enabled := True;
+end;
+
+procedure TDictation.ShowBusy(const Title, Hint: string);
+begin
+  if FState <> dsIdle then
+    Exit;
+  FHideTimer.Enabled := False;
+  EnsureIndicator;
+  FIndicator.ShowState(dsRecognizing, Hint, Title);
+  FBusy := True;
+end;
+
+procedure TDictation.HideBusy;
+begin
+  if not FBusy then
+    Exit;
+  FBusy := False;
+  if (FState = dsIdle) and not FHideTimer.Enabled then
+    HideIndicator(nil);
 end;
 
 procedure TDictation.HideIndicator(Sender: TObject);

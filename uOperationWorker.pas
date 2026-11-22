@@ -18,7 +18,7 @@ uses
   Winapi.Windows, Winapi.Messages,
   System.SysUtils, System.Classes, System.SyncObjs,
   uSettings, uLayoutConverter, uClipboardSnapshot, uConversionChain,
-  uUIAutomation, uSpellCheck;
+  uUIAutomation, uSpellCheck, uAiExplain;
 
 type
   TBufferAction = (baKeep, baClear, baSet);
@@ -54,6 +54,9 @@ type
     CaretBack: Integer;
     // laTranslateReplace: DeepL key (empty = Google Translate).
     DeepLApiKey: string;
+    // laAiFix, laVoiceEdit: the AI service; the spoken command (voice edit).
+    AiConfig: TAiConfig;
+    AiInstruction: string;
     FocusWnd: HWND;
     WindowLayout: HKL;
     PreviousLayout: HKL;
@@ -98,6 +101,8 @@ type
       const Original, Converted: string; Res: TOperationResult): Boolean;
     function FindTypoFix(Request: TOperationRequest; const Word: string;
       Layout: HKL; out Fixed: string): Boolean;
+    function AiRewriteText(Request: TOperationRequest; const Text: string;
+      Res: TOperationResult; out Rewritten: string): Boolean;
     function TranslateText(Request: TOperationRequest; const Text: string;
       Res: TOperationResult; out Translated: string): Boolean;
     procedure HandleRequest(Request: TOperationRequest);
@@ -140,7 +145,7 @@ implementation
 
 uses
   Winapi.ActiveX,
-  uDiagnostics, uWinUtils, uLocale, uTextTools, uTranslate;
+  uDiagnostics, uWinUtils, uLocale, uTextTools, uTranslate, uAiText;
 
 const
   WM_LS_EXECUTE = WM_APP + 100;
@@ -570,6 +575,9 @@ begin
     laTranslateReplace:
       if not TranslateText(Request, Text, Res, Converted) then
         Exit;
+    laAiFix, laVoiceEdit:
+      if not AiRewriteText(Request, Text, Res, Converted) then
+        Exit;
   else
     Exit;
   end;
@@ -592,6 +600,56 @@ begin
     if (LoWord(NativeUInt(Layout)) and $3FF) = Primary then
       Exit(Layout);
   Result := 0;
+end;
+
+function TOperationWorker.AiRewriteText(Request: TOperationRequest; const Text: string;
+  Res: TOperationResult; out Rewritten: string): Boolean;
+var
+  SystemPrompt, User, Answer, Code, Error: string;
+  Started: DWORD;
+begin
+  Result := False;
+  Rewritten := Text;
+  if Trim(Text) = '' then
+    Exit;
+  if Length(Text) > MAX_AI_REWRITE_LENGTH then
+  begin
+    Notify(Res, 'ai_rewrite_failed', Format(T(
+      'Слишком длинный текст (больше %d символов). Выделите часть поменьше.',
+      'The text is too long (more than %d characters). Select a smaller part.'),
+      [MAX_AI_REWRITE_LENGTH]));
+    Exit;
+  end;
+  if Request.Action = laVoiceEdit then
+  begin
+    SystemPrompt := EditSystemPrompt;
+    User := EditUserMessage(Request.AiInstruction, Text);
+  end
+  else
+  begin
+    SystemPrompt := FixSystemPrompt;
+    User := FixUserMessage(Text);
+  end;
+  // Only lengths and the outcome are logged, never the text.
+  Started := GetTickCount;
+  Result := AskAi(Request.AiConfig, SystemPrompt, User, Answer, Code, Error);
+  DiagnosticsLogFmt('ai.rewrite action=%s length=%d ms=%d ok=%s error=%s',
+    [ActionKeys[Request.Action], Length(Text), GetTickCount - Started,
+     BoolToStr(Result, True), Code]);
+  if Result then
+  begin
+    Answer := CleanAiAnswer(Answer);
+    Result := Answer <> '';
+  end;
+  if not Result then
+  begin
+    if Error = '' then
+      Error := T('пустой ответ', 'empty answer');
+    Notify(Res, 'ai_rewrite_failed', T('Сервис ИИ не ответил: ', 'The AI service failed: ') +
+      Error);
+    Exit;
+  end;
+  Rewritten := KeepOuterSpaces(Text, Answer);
 end;
 
 function TOperationWorker.TranslateText(Request: TOperationRequest; const Text: string;

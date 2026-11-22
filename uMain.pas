@@ -93,6 +93,10 @@ type
     cbExplain: TComboBox;
     lblDictate: TLabel;
     cbDictate: TComboBox;
+    lblVoiceEdit: TLabel;
+    cbVoiceEdit: TComboBox;
+    lblAiFix: TLabel;
+    cbAiFix: TComboBox;
     tsServices: TTabSheet;
     lblAiHeader: TLabel;
     lblAiService: TLabel;
@@ -293,6 +297,8 @@ type
     tsDictation: TTabSheet;
     // Recognized text waiting for a running operation to finish.
     FPendingDictation: string;
+    // The spoken command for the next laVoiceEdit request.
+    FAiInstructionNext: string;
     // Windows 11 look of the settings window: side navigation, page title,
     // flat buttons (built over the form at start).
     FUiTheme: TUiTheme;
@@ -347,6 +353,10 @@ type
     procedure DictationPageChange(Sender: TObject);
     procedure DictationUnloadModel(Sender: TObject);
     procedure ToggleDictation;
+    // Asks once before text goes to the AI service; False if declined.
+    function EnsureAiConsent: Boolean;
+    function AiServiceName(const Config: TAiConfig): string;
+    procedure StartAiFix;
     procedure DictationResult(const Text, ErrorText: string; Punctuation: Boolean);
     procedure NavChange(Sender: TObject);
     procedure SettingsKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
@@ -469,7 +479,8 @@ const
 
   ShortGestureNames: array[TLSGesture] of string = (
     '', 'Shift×2', 'LCtrl×2', 'RCtrl×2', 'Ctrl+Ctrl', 'Shift+Shift', 'Caps×2',
-    'RAlt×2', 'LAlt×2', 'RCtrl+RAlt', 'Pause', 'ScrLk');
+    'RAlt×2', 'LAlt×2', 'RCtrl+RAlt', 'Pause', 'ScrLk',
+    'Shift+ScrLk', 'Shift+Pause');
   AI_PROVIDER_FREE = 0;
   AI_PROVIDER_CLAUDE = 1;
   AI_PROVIDER_OPENAI = 2;
@@ -1184,6 +1195,14 @@ begin
     ToggleDictation;
     Exit;
   end;
+  if Action = laAiFix then
+  begin
+    StartAiFix;
+    Exit;
+  end;
+  // Voice edit: recorded first (not wired yet).
+  if Action = laVoiceEdit then
+    Exit;
   if FBufferOverflowed or FFocusIsPassword then
     Plan := FChain.Plan(laNone, '')
   else if Action = laTranslateReplace then
@@ -1278,6 +1297,8 @@ begin
   Request.Capitalize := FCapitalizeNext and not FInWordNext;
   Request.CaretBack := FCaretBackNext;
   Request.DeepLApiKey := FSettings.DeepLApiKey;
+  Request.AiConfig := CurrentAiConfig;
+  Request.AiInstruction := FAiInstructionNext;
   FPendingStamp := Request.KeystrokeStamp;
   FPendingDoubleSpace := FDoubleSpaceNext;
   if FCapsShiftLock then
@@ -1326,6 +1347,9 @@ begin
               Length(FBuffer) + 1, 0, Text), False, False);
         end);
     end;
+
+    if Res.Action in [laAiFix, laVoiceEdit] then
+      FDictation.HideBusy;
 
     if Res.Action in [laTranslate, laWebSearch, laExplain] then
     begin
@@ -1713,6 +1737,8 @@ begin
     cbTranslateReplace.ItemIndex := Ord(FSettings.GestureForAction(laTranslateReplace));
     cbExplain.ItemIndex := Ord(FSettings.GestureForAction(laExplain));
     cbDictate.ItemIndex := Ord(FSettings.GestureForAction(laDictate));
+    cbVoiceEdit.ItemIndex := Ord(FSettings.GestureForAction(laVoiceEdit));
+    cbAiFix.ItemIndex := Ord(FSettings.GestureForAction(laAiFix));
     FDictationPage.Load(FSettings);
     edDeepLKey.Text := FSettings.DeepLApiKey;
     cbTranslator.ItemIndex := FSettings.Translator;
@@ -2547,6 +2573,8 @@ begin
     laTranslateReplace: Result := T('Замена переводом', 'Translate in place');
     laExplain: Result := T('ИИ', 'AI');
     laDictate: Result := T('Диктовка', 'Dictation');
+    laVoiceEdit: Result := T('Голосовая правка', 'Voice edit');
+    laAiFix: Result := T('Исправление', 'Fix');
     laTransliterate: Result := T('Транслит', 'Translit');
     laUndo: Result := T('Отмена', 'Undo');
   else
@@ -2557,7 +2585,7 @@ end;
 function TFormMain.GestureCombos: TArray<TComboBox>;
 begin
   Result := [cbConvert, cbUpper, cbLower, cbInvert, cbTranslit, cbUndo, cbTranslate,
-    cbWebSearch, cbTranslateReplace, cbExplain, cbDictate];
+    cbWebSearch, cbTranslateReplace, cbExplain, cbDictate, cbVoiceEdit, cbAiFix];
 end;
 
 procedure TFormMain.ApplyLanguage;
@@ -2637,6 +2665,8 @@ begin
     lblTranslateReplace.Caption := ActionName(laTranslateReplace);
     lblExplain.Caption := ActionName(laExplain);
     lblDictate.Caption := ActionName(laDictate);
+    lblVoiceEdit.Caption := ActionName(laVoiceEdit);
+    lblAiFix.Caption := ActionName(laAiFix);
     tsServices.Caption := T('Сервисы', 'Services');
     tsDictation.Caption := T('Диктовка', 'Dictation');
     FDictationPage.ApplyLanguage;
@@ -3710,16 +3740,13 @@ begin
     Final), False, False);
 end;
 
-procedure TFormMain.StartExplain(const Text: string);
+function TFormMain.AiServiceName(const Config: TAiConfig): string;
 const
   Services: array[TAiProvider] of string = ('Pollinations.ai', 'Anthropic Claude', '');
 var
-  Config: TAiConfig;
-  Thread: TAiExplainThread;
-  Service, Host: string;
+  Host: string;
 begin
-  Config := CurrentAiConfig;
-  Service := Services[Config.Provider];
+  Result := Services[Config.Provider];
   if Config.Provider = apOpenAI then
   begin
     Host := Config.BaseUrl;
@@ -3727,24 +3754,66 @@ begin
       Host := Copy(Host, Pos('://', Host) + 3, MaxInt);
     if Pos('/', Host) > 0 then
       Host := Copy(Host, 1, Pos('/', Host) - 1);
-    Service := Host;
+    Result := Host;
   end;
-  // Once: the selected text leaves the computer.
-  if not FSettings.AiConsent and (Pos('localhost', LowerCase(Service)) = 0) and
-     (Pos('127.0.0.1', Service) = 0) then
+end;
+
+function TFormMain.EnsureAiConsent: Boolean;
+var
+  Service: string;
+begin
+  Result := True;
+  Service := AiServiceName(CurrentAiConfig);
+  // Once: the text leaves the computer (a local server keeps it).
+  if FSettings.AiConsent or (Pos('localhost', LowerCase(Service)) > 0) or
+     (Pos('127.0.0.1', Service) > 0) then
+    Exit;
+  Result := MessageBox(0, PChar(Format(T(
+    'Выделенный или продиктованный текст будет отправляться сервису ИИ «%s» — только ' +
+    'когда вы сами вызываете объяснение, исправление или голосовую правку. Сервис ' +
+    'выбирается на вкладке «Сервисы».' + sLineBreak + sLineBreak + 'Продолжить?',
+    'Selected or dictated text will be sent to the AI service "%s", only when you ' +
+    'ask for an explanation, a correction or a voice edit yourself. The service is ' +
+    'chosen on the Services tab.' + sLineBreak + sLineBreak + 'Continue?'), [Service])),
+    'LayoutSwitcher', MB_YESNO or MB_ICONQUESTION or MB_TOPMOST or MB_SETFOREGROUND) = IDYES;
+  if Result then
   begin
-    if MessageBox(0, PChar(Format(T(
-         'Выделенный текст будет отправлен сервису ИИ «%s», чтобы получить объяснение. ' +
-         'Он передаётся только когда вы сами вызываете объяснение. Сервис выбирается на ' +
-         'вкладке «Сервисы».' + sLineBreak + sLineBreak + 'Продолжить?',
-         'The selected text will be sent to the AI service "%s" to get an explanation. ' +
-         'It is sent only when you ask for an explanation. The service is chosen on the ' +
-         'Services tab.' + sLineBreak + sLineBreak + 'Continue?'), [Service])),
-         'LayoutSwitcher', MB_YESNO or MB_ICONQUESTION or MB_TOPMOST or MB_SETFOREGROUND) <> IDYES then
-      Exit;
     FSettings.AiConsent := True;
     ApplySettings;
   end;
+end;
+
+procedure TFormMain.StartAiFix;
+var
+  Plan: TBufferPlan;
+  Sequence: Cardinal;
+begin
+  if not EnsureAiConsent then
+    Exit;
+  // The phrase typed since the last caret jump, else the selection.
+  if FBufferOverflowed or FFocusIsPassword then
+    Plan := FChain.Plan(laNone, '')
+  else
+    Plan := TConversionChain.PlanPhrase(FBuffer);
+  FDictation.ShowBusy(T('Исправляю текст', 'Fixing the text'), AiServiceName(CurrentAiConfig));
+  DiagnosticsLog('ai.fix_start');
+  Sequence := FOperationSequence;
+  QueueRequest(laAiFix, Plan, False, False);
+  // Not queued (busy, excluded program, administrator window...): no result comes.
+  if FOperationSequence = Sequence then
+    FDictation.HideBusy;
+end;
+
+procedure TFormMain.StartExplain(const Text: string);
+var
+  Config: TAiConfig;
+  Thread: TAiExplainThread;
+  Service: string;
+begin
+  Config := CurrentAiConfig;
+  Service := AiServiceName(Config);
+  if not EnsureAiConsent then
+    Exit;
   if FExplainWindow = nil then
     FExplainWindow := TExplainWindow.Create(Self);
   FExplainWindow.StartQuestion(Text, Service + ' · ' + EffectiveAiModel(Config));

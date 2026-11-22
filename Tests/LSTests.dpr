@@ -24,7 +24,8 @@ uses
   TestFeatures24 in 'TestFeatures24.pas',
   TestTranslate in 'TestTranslate.pas',
   TestAiExplain in 'TestAiExplain.pas',
-  TestSpeech in 'TestSpeech.pas';
+  TestSpeech in 'TestSpeech.pas',
+  TestAiText in 'TestAiText.pas';
 
 var
   Runner: ITestRunner;

@@ -190,9 +190,9 @@ begin
   // Press and release arrive together.
   Assert.AreEqual(Ord(lgPause), Ord(Ev(VK_PAUSE, False)));
   Assert.AreEqual(Ord(lgNone), Ord(Ev(VK_PAUSE, True)));
-  // With a modifier held it is not the gesture.
+  // With Shift held it is another gesture (Shift + Pause, "fix the text").
   Ev(VK_LSHIFT, False, 100);
-  Assert.AreEqual(Ord(lgNone), Ord(Ev(VK_PAUSE, False, 20)));
+  Assert.AreEqual(Ord(lgShiftPause), Ord(Ev(VK_PAUSE, False, 20)));
   Ev(VK_PAUSE, True);
   Ev(VK_LSHIFT, True, 20);
   // It cancels a pending first Shift tap: Shift, Pause, Shift is no double Shift.

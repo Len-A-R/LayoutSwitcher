@@ -384,27 +384,61 @@ object FormMain: TFormMain
         TabOrder = 10
         OnChange = cbGestureChange
       end
-      object lblInterval: TLabel
+      object lblVoiceEdit: TLabel
         Left = 12
         Top = 323
+        Width = 8
+        Height = 13
+        Caption = 'VoiceEdit'
+      end
+      object cbVoiceEdit: TComboBox
+        Left = 240
+        Top = 320
+        Width = 252
+        Height = 21
+        Style = csDropDownList
+        Tag = 12
+        TabOrder = 11
+        OnChange = cbGestureChange
+      end
+      object lblAiFix: TLabel
+        Left = 12
+        Top = 351
+        Width = 8
+        Height = 13
+        Caption = 'AiFix'
+      end
+      object cbAiFix: TComboBox
+        Left = 240
+        Top = 348
+        Width = 252
+        Height = 21
+        Style = csDropDownList
+        Tag = 13
+        TabOrder = 12
+        OnChange = cbGestureChange
+      end
+      object lblInterval: TLabel
+        Left = 12
+        Top = 379
         Width = 8
         Height = 13
         Caption = #1048#1085#1090#1077#1088#1074#1072#1083' '#1076#1074#1086#1081#1085#1086#1075#1086' '#1085#1072#1078#1072#1090#1080#1103':'
       end
       object edInterval: TEdit
         Left = 240
-        Top = 320
+        Top = 376
         Width = 57
         Height = 21
         NumbersOnly = True
-        TabOrder = 11
+        TabOrder = 13
         Text = '500'
         OnChange = edIntervalChange
         OnExit = edIntervalExit
       end
       object udInterval: TUpDown
         Left = 297
-        Top = 320
+        Top = 376
         Width = 16
         Height = 21
         Associate = edInterval
@@ -412,12 +446,12 @@ object FormMain: TFormMain
         Max = 1000
         Increment = 50
         Position = 500
-        TabOrder = 12
+        TabOrder = 14
         Thousands = False
       end
       object lblIntervalUnit: TLabel
         Left = 320
-        Top = 323
+        Top = 379
         Width = 8
         Height = 13
         Caption = #1084#1089

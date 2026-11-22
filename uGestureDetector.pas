@@ -7,7 +7,7 @@
 // Pure state machine that turns physical key transitions into gestures:
 // double Shift, double Left Ctrl, double Right Ctrl, Left Ctrl + Right Ctrl,
 // Left Shift + Right Shift, double Caps Lock, double left/right Alt,
-// Right Ctrl + Right Alt, Pause/Break, Scroll Lock.  A double
+// Right Ctrl + Right Alt, Pause/Break, Scroll Lock (also with Shift).  A double
 // Alt opens and closes the menu of classic applications.  A double Caps Lock toggles the
 // Caps Lock state twice and so leaves it unchanged.
 // It has no Win32 calls besides VK_* constants, so it is fully unit-testable.
@@ -81,6 +81,8 @@ type
     FFakeCtrlVK: Cardinal;       // Fake Ctrl whose events are ignored, or 0.
 
     function OtherKeysDown(ExceptA, ExceptB, ExceptC: Cardinal): Boolean;
+    // Only Shift (one or both) is held besides the given keys.
+    function OnlyShiftDownWith(KeyA, KeyB: Cardinal): Boolean;
     function CompleteTap(var Pending: Boolean; var PendingTime: Cardinal;
       Time: Cardinal): Boolean;
     procedure CancelPending;
@@ -259,6 +261,21 @@ begin
     if FS.KeyDown[I] and (I <> ExceptA) and (I <> ExceptB) and (I <> ExceptC) then
       Exit(True);
   Result := False;
+end;
+
+function TGestureDetector.OnlyShiftDownWith(KeyA, KeyB: Cardinal): Boolean;
+var
+  I: Cardinal;
+begin
+  Result := False;
+  for I := Low(FS.KeyDown) to High(FS.KeyDown) do
+    if FS.KeyDown[I] then
+    begin
+      if IsShiftKey(I) then
+        Result := True
+      else if (I <> KeyA) and (I <> KeyB) then
+        Exit(False);
+    end;
 end;
 
 function TGestureDetector.CompleteTap(var Pending: Boolean;
@@ -469,11 +486,15 @@ begin
   // is a gesture on the press, alone (Ctrl+Pause is VK_CANCEL).  Its scan
   // code sequence (E1 1D 45) can also be reported partly as Num Lock.
   if (VK = VK_PAUSE) and not OtherKeysDown(VK_PAUSE, VK_NUMLOCK, VK_PAUSE) then
-    Result := lgPause;
+    Result := lgPause
+  else if (VK = VK_PAUSE) and OnlyShiftDownWith(VK_PAUSE, VK_NUMLOCK) then
+    Result := lgShiftPause;
   // Scroll Lock alone, on the press (dictation); its light toggles twice
   // per dictation (start and stop), so the state comes back.
   if (VK = VK_SCROLL) and not OtherKeysDown(VK_SCROLL, VK_SCROLL, VK_SCROLL) then
-    Result := lgScrollLock;
+    Result := lgScrollLock
+  else if (VK = VK_SCROLL) and OnlyShiftDownWith(VK_SCROLL, VK_SCROLL) then
+    Result := lgShiftScrollLock;
   // Right Ctrl + Right Alt in either order.
   if ((VK = VK_RMENU) and FS.KeyDown[VK_RCONTROL]) or
      ((VK = VK_RCONTROL) and FS.KeyDown[VK_RMENU]) then

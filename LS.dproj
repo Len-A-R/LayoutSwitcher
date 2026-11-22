@@ -166,6 +166,7 @@
         <DCCReference Include="uModernUI.pas"/>
         <DCCReference Include="uAiExplain.pas"/>
         <DCCReference Include="uExplainWindow.pas"/>
+        <DCCReference Include="uAiText.pas"/>
         <DCCReference Include="uSpeechModels.pas"/>
         <DCCReference Include="uSherpaOnnx.pas"/>
         <DCCReference Include="uAudioRecorder.pas"/>
