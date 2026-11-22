@@ -105,7 +105,47 @@ const
 implementation
 
 uses
-  System.Math, uLocale;
+  System.Math, Winapi.GDIPAPI, Winapi.GDIPOBJ, uLocale;
+
+// GDI draws circles and rounded corners without anti-aliasing (jagged
+// edges); GDI+ smooths them.
+procedure FillSmooth(Canvas: TCanvas; const R: TRect; Color: TColor; Radius: Integer);
+var
+  Graphics: TGPGraphics;
+  Brush: TGPSolidBrush;
+  Path: TGPGraphicsPath;
+  RGBColor: Cardinal;
+  D: Integer;
+begin
+  RGBColor := ColorToRGB(Color);
+  Graphics := TGPGraphics.Create(Canvas.Handle);
+  Brush := TGPSolidBrush.Create(MakeColor(255, GetRValue(RGBColor), GetGValue(RGBColor),
+    GetBValue(RGBColor)));
+  try
+    Graphics.SetSmoothingMode(SmoothingModeAntiAlias);
+    Graphics.SetPixelOffsetMode(PixelOffsetModeHalf);
+    if Radius < 0 then
+      Graphics.FillEllipse(Brush, R.Left, R.Top, R.Width, R.Height)
+    else
+    begin
+      D := Radius * 2;
+      Path := TGPGraphicsPath.Create;
+      try
+        Path.AddArc(R.Left, R.Top, D, D, 180, 90);
+        Path.AddArc(R.Right - D, R.Top, D, D, 270, 90);
+        Path.AddArc(R.Right - D, R.Bottom - D, D, D, 0, 90);
+        Path.AddArc(R.Left, R.Bottom - D, D, D, 90, 90);
+        Path.CloseFigure;
+        Graphics.FillPath(Brush, Path);
+      finally
+        Path.Free;
+      end;
+    end;
+  finally
+    Brush.Free;
+    Graphics.Free;
+  end;
+end;
 
 const
   IDLE_UNLOAD_MS = 5 * 60 * 1000;
@@ -193,7 +233,7 @@ begin
   Font.Name := ModernFontName;
   Font.Size := 10;
   Font.Color := FTheme.Text;
-  ClientWidth := S(400);
+  ClientWidth := S(470);
   ClientHeight := S(64);
   FTimer := TTimer.Create(Self);
   FTimer.Interval := 50;
@@ -340,9 +380,7 @@ begin
     GlyphColor := RGB(220, 53, 69)
   else
     GlyphColor := FTheme.Accent;
-  Canvas.Brush.Color := GlyphColor;
-  Canvas.Pen.Color := GlyphColor;
-  Canvas.Ellipse(S(14), MidY - S(18), S(50), MidY + S(18));
+  FillSmooth(Canvas, Rect(S(14), MidY - S(18), S(50), MidY + S(18)), GlyphColor, -1);
   Canvas.Font.Name := IconFontName;
   Canvas.Font.Size := 14;
   Canvas.Font.Color := clWhite;
@@ -358,12 +396,7 @@ begin
   FCloseRect := Rect(R.Right - S(40), MidY - S(16), R.Right - S(8), MidY + S(16));
   if FHoverClose then
   begin
-    Canvas.Brush.Style := bsSolid;
-    Canvas.Brush.Color := FTheme.Hover;
-    Canvas.Pen.Color := FTheme.Hover;
-    Canvas.RoundRect(FCloseRect.Left, FCloseRect.Top, FCloseRect.Right, FCloseRect.Bottom,
-      S(6), S(6));
-    Canvas.Brush.Style := bsClear;
+    FillSmooth(Canvas, FCloseRect, FTheme.Hover, S(4));
   end;
   Canvas.Font.Name := IconFontName;
   Canvas.Font.Size := 9;
@@ -409,10 +442,8 @@ begin
       Index := (FLevelIndex + I) mod Length(FLevels);
       Level := Min(100, FLevels[Index] * 2);
       BarH := Max(S(2), MulDiv(S(26), Level, 100));
-      Canvas.Brush.Style := bsSolid;
-      Canvas.Brush.Color := FTheme.Accent;
-      Canvas.Pen.Color := FTheme.Accent;
-      Canvas.Rectangle(BarX, MidY - BarH div 2, BarX + BarW, MidY + BarH div 2 + 1);
+      FillSmooth(Canvas, Rect(BarX, MidY - BarH div 2, BarX + BarW, MidY + BarH div 2 + 1),
+        FTheme.Accent, Min(BarW div 2, BarH div 2));
       Inc(BarX, BarW + Gap);
     end;
     if FRecorder <> nil then

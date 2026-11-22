@@ -22,6 +22,8 @@ type
     FInstall: TSpeechInstallThread;
     FInstallIndex: Integer;
     FStage: TSpeechInstallStage;
+    FPercent: Integer;       // -1 when unknown
+    FSpeedKB: Integer;
     FLastError: string;
     FTheme: TUiTheme;
     FGesture: TLSGesture;
@@ -47,6 +49,7 @@ type
     procedure DeleteClick(Sender: TObject);
     procedure CloudExit(Sender: TObject);
     procedure UpdateDetails;
+    function DownloadDetails: string;
     procedure Changed;
     function MakeLabel(X, Y, W, H: Integer; WordWrap: Boolean): TLabel;
     function MakeEdit(X, Y, W: Integer): TEdit;
@@ -67,7 +70,7 @@ type
 implementation
 
 uses
-  uLocale;
+  System.Math, uLocale;
 
 const
   WM_SPEECH_PROGRESS = WM_APP + 40;
@@ -333,8 +336,7 @@ begin
   begin
     btnDownload.Caption := T('Отмена', 'Cancel');
     btnDownload.Enabled := True;
-    lblStatus.Caption := SpeechModels[FInstallIndex].Name + ': ' +
-      T(StageText[FStage].Ru, StageText[FStage].En);
+    lblStatus.Caption := T(StageText[FStage].Ru, StageText[FStage].En) + DownloadDetails;
   end
   else if Cloud then
     lblStatus.Caption := ''
@@ -362,6 +364,29 @@ begin
   lblStatus.ShowHint := True;
 end;
 
+// " 45% · 2,5 MB/s · about 40 s left" while a file is downloaded.
+function TDictationPage.DownloadDetails: string;
+var
+  TotalMB, LeftSec: Integer;
+begin
+  Result := '';
+  if not (FStage in [sisDownloadEngine, sisDownloadModel]) or (FPercent < 0) then
+    Exit;
+  Result := Format(' %d%%', [FPercent]);
+  if FSpeedKB <= 0 then
+    Exit;
+  Result := Result + Format(T(' · %.1f МБ/с', ' · %.1f MB/s'), [FSpeedKB / 1024]);
+  if FStage = sisDownloadEngine then
+    TotalMB := 31
+  else
+    TotalMB := SpeechModels[FInstallIndex].DownloadMB;
+  LeftSec := Round(TotalMB * (100 - FPercent) / 100 * 1024 / FSpeedKB);
+  if LeftSec >= 90 then
+    Result := Result + Format(T(' · осталось ~%d мин', ' · ~%d min left'), [(LeftSec + 30) div 60])
+  else
+    Result := Result + Format(T(' · осталось ~%d с', ' · ~%d s left'), [Max(LeftSec, 1)]);
+end;
+
 procedure TDictationPage.DownloadClick(Sender: TObject);
 begin
   if FInstall <> nil then
@@ -378,6 +403,8 @@ begin
     FStage := sisDownloadEngine;
   pbDownload.Position := 0;
   pbDownload.Style := pbstNormal;
+  FPercent := 0;
+  FSpeedKB := 0;
   FInstall := TSpeechInstallThread.Create(SpeechModels[FInstallIndex], FWnd,
     WM_SPEECH_PROGRESS, WM_SPEECH_DONE);
   UpdateDetails;
@@ -407,7 +434,9 @@ begin
   case Message.Msg of
     WM_SPEECH_PROGRESS:
       begin
-        FStage := TSpeechInstallStage(Message.WParam);
+        FStage := TSpeechInstallStage(Message.WParam and $FF);
+        FSpeedKB := Integer(Message.WParam shr 8);
+        FPercent := Integer(Message.LParam);
         if Integer(Message.LParam) < 0 then
           pbDownload.Style := pbstMarquee
         else

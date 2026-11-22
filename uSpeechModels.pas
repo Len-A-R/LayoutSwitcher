@@ -81,6 +81,11 @@ function SpeechEngineArchive: string;
 function SpeechEngineSha256: string;
 function SpeechEngineUrl: string;
 function SpeechModelUrl(const Model: TSpeechModel): string;
+// Parts of a download of Total bytes: up to MaxParts ranges of at least
+// MinPart bytes, as start/end pairs (inclusive).
+function SplitDownload(Total: Int64; MaxParts: Integer; MinPart: Int64): TArray<Int64>;
+// The total size from a Content-Range header ("bytes 0-0/12345"), -1 if none.
+function ParseContentRangeTotal(const Value: string): Int64;
 
 // Capital letter at the start of a phrase from a model without punctuation,
 // and a space in front when the text continues a word.
@@ -89,7 +94,8 @@ function FinishDictatedText(const Text: string; Punctuation: Boolean;
 
 type
   // Downloads the engine (when missing) and a model, checks and unpacks them.
-  // Posts ProgressMsg (WParam = stage, LParam = percent or -1) and finally
+  // Posts ProgressMsg (WParam = stage + speed in KB/s shl 8, LParam = percent
+  // or -1) and finally
   // DoneMsg (WParam = 1 on success, LParam = PChar error text to be freed
   // with StrDispose, or 0).
   TSpeechInstallThread = class(TThread)
@@ -99,10 +105,12 @@ type
     FProgressMsg, FDoneMsg: UINT;
     FStage: TSpeechInstallStage;
     FLastReport: Cardinal;
+    FSpeedKB: Integer;
     procedure Report(Percent: Integer);
     procedure ReceiveData(const Sender: TObject; ContentLength, ReadCount: Int64;
       var Abort: Boolean);
     procedure Download(const Url, FileName: string);
+    procedure DownloadSingle(const Url, FileName: string);
     procedure Install(const Url, Sha256, TargetDir, InnerDir: string;
       const Members: TArray<string>; DownloadStage: TSpeechInstallStage);
   protected
@@ -115,8 +123,8 @@ type
 implementation
 
 uses
-  System.IOUtils, System.Hash, System.Net.HttpClient, System.Character,
-  uLocale;
+  System.IOUtils, System.Hash, System.Net.HttpClient, System.Net.URLClient,
+  System.Character, System.Math, uLocale;
 
 const
   MARKER_FILE = 'installed.ok';
@@ -376,7 +384,8 @@ end;
 
 procedure TSpeechInstallThread.Report(Percent: Integer);
 begin
-  PostMessage(FNotifyWnd, FProgressMsg, WPARAM(Ord(FStage)), LPARAM(Percent));
+  PostMessage(FNotifyWnd, FProgressMsg, WPARAM(Ord(FStage) or (FSpeedKB shl 8)),
+    LPARAM(Percent));
 end;
 
 procedure TSpeechInstallThread.ReceiveData(const Sender: TObject;
@@ -392,7 +401,276 @@ begin
     Report(-1);
 end;
 
+// GitHub limits the speed of one connection (a few hundred KB/s from some
+// networks); eight ranges downloaded at once are about ten times faster.
+// A broken range continues from where it stopped.
+
+const
+  DOWNLOAD_PARTS = 8;
+  MIN_PART_BYTES = 4 * 1024 * 1024;
+  PART_ATTEMPTS = 5;
+
+function SplitDownload(Total: Int64; MaxParts: Integer; MinPart: Int64): TArray<Int64>;
+var
+  Parts, I: Integer;
+  Size, Start: Int64;
+begin
+  Result := nil;
+  if Total <= 0 then
+    Exit;
+  Parts := Integer(EnsureRange(Total div Max(MinPart, 1), 1, Max(MaxParts, 1)));
+  Size := Total div Parts;
+  Start := 0;
+  for I := 0 to Parts - 1 do
+  begin
+    Result := Result + [Start];
+    if I = Parts - 1 then
+      Result := Result + [Total - 1]
+    else
+      Result := Result + [Start + Size - 1];
+    Start := Start + Size;
+  end;
+end;
+
+function ParseContentRangeTotal(const Value: string): Int64;
+var
+  Slash: Integer;
+begin
+  Slash := Pos('/', Value);
+  if (Slash = 0) or not TryStrToInt64(Trim(Copy(Value, Slash + 1, MaxInt)), Result) then
+    Result := -1;
+end;
+
+type
+  // Writes what a range request receives at its place in the file.
+  TPartWriter = class(TStream)
+  private
+    FFile: TFileStream;
+    FDone: PInt64;
+    FAbort: PBoolean;
+    FPos: Int64;
+  public
+    function Write(const Buffer; Count: Longint): Longint; override;
+    function Read(var Buffer; Count: Longint): Longint; override;
+    function Seek(const Offset: Int64; Origin: TSeekOrigin): Int64; override;
+  end;
+
+  TPartThread = class(TThread)
+  private
+    FUrl, FFileName: string;
+    FFirst, FLast: Int64;
+    FDone: Int64;
+    FAbort: PBoolean;
+    FError: string;
+  protected
+    procedure Execute; override;
+  end;
+
+function TPartWriter.Write(const Buffer; Count: Longint): Longint;
+begin
+  if FAbort^ then
+    Abort;
+  FFile.WriteBuffer(Buffer, Count);
+  AtomicIncrement(FDone^, Count);
+  Inc(FPos, Count);
+  Result := Count;
+end;
+
+function TPartWriter.Read(var Buffer; Count: Longint): Longint;
+begin
+  Result := 0;
+end;
+
+function TPartWriter.Seek(const Offset: Int64; Origin: TSeekOrigin): Int64;
+begin
+  Result := FPos;
+end;
+
+// The address after redirects (GitHub answers with a signed link to its
+// file storage, valid for a while), and the size from a one-byte range.
+function ResolveDownload(const Url: string; out FinalUrl: string; out Total: Int64): Boolean;
+var
+  Client: THTTPClient;
+  Response: IHTTPResponse;
+  Hop: Integer;
+  Location: string;
+  Base: TURI;
+begin
+  Result := False;
+  Total := -1;
+  FinalUrl := Url;
+  Client := THTTPClient.Create;
+  try
+    Client.ConnectionTimeout := 30000;
+    Client.ResponseTimeout := 30000;
+    Client.UserAgent := 'LayoutSwitcher';
+    Client.HandleRedirects := False;
+    Client.CustomHeaders['Range'] := 'bytes=0-0';
+    for Hop := 1 to 6 do
+    begin
+      Response := Client.Get(FinalUrl);
+      if (Response.StatusCode >= 300) and (Response.StatusCode < 400) then
+      begin
+        Location := Response.HeaderValue['Location'];
+        if Location = '' then
+          Exit;
+        if Location.StartsWith('/') then
+        begin
+          Base := TURI.Create(FinalUrl);
+          Location := Base.Scheme + '://' + Base.Host + Location;
+        end;
+        FinalUrl := Location;
+        Continue;
+      end;
+      if Response.StatusCode = 206 then
+      begin
+        Total := ParseContentRangeTotal(Response.HeaderValue['Content-Range']);
+        Result := Total > 0;
+      end;
+      Exit;
+    end;
+  finally
+    Client.Free;
+  end;
+end;
+
+procedure TPartThread.Execute;
+var
+  Client: THTTPClient;
+  Response: IHTTPResponse;
+  Writer: TPartWriter;
+  Stream: TFileStream;
+  Attempt: Integer;
+  Url: string;
+  Total: Int64;
+begin
+  NameThreadForDebugging('LayoutSwitcher.SpeechDownloadPart');
+  Url := FUrl;
+  Attempt := 0;
+  while (FFirst + FDone <= FLast) and not FAbort^ do
+  begin
+    try
+      Stream := TFileStream.Create(FFileName, fmOpenWrite or fmShareDenyNone);
+      Writer := TPartWriter.Create;
+      Client := THTTPClient.Create;
+      try
+        Stream.Position := FFirst + FDone;
+        Writer.FFile := Stream;
+        Writer.FDone := @FDone;
+        Writer.FAbort := FAbort;
+        Client.ConnectionTimeout := 30000;
+        Client.ResponseTimeout := 30000;
+        Client.UserAgent := 'LayoutSwitcher';
+        Client.HandleRedirects := True;
+        Client.CustomHeaders['Range'] := Format('bytes=%d-%d', [FFirst + FDone, FLast]);
+        Response := Client.Get(Url, Writer);
+        if Response.StatusCode <> 206 then
+          raise Exception.CreateFmt('HTTP %d', [Response.StatusCode]);
+      finally
+        Client.Free;
+        Writer.Free;
+        Stream.Free;
+      end;
+    except
+      on E: Exception do
+      begin
+        if FAbort^ then
+          Exit;
+        Inc(Attempt);
+        if Attempt >= PART_ATTEMPTS then
+        begin
+          FError := E.Message;
+          Exit;
+        end;
+        Sleep(1000 * Attempt);
+        // The signed link may have expired meanwhile.
+        if not ResolveDownload(FUrl, Url, Total) then
+          Url := FUrl;
+      end;
+    end;
+  end;
+end;
+
 procedure TSpeechInstallThread.Download(const Url, FileName: string);
+var
+  FinalUrl, Error: string;
+  Total, Received, LastReceived: Int64;
+  Ranges: TArray<Int64>;
+  Parts: array of TPartThread;
+  AbortFlag, Running: Boolean;
+  I: Integer;
+  Stream: TFileStream;
+  LastTick, Tick: Cardinal;
+begin
+  if not ResolveDownload(Url, FinalUrl, Total) or (Total < 2 * MIN_PART_BYTES) then
+  begin
+    // No ranges (some mirrors) or a small file: one connection.
+    DownloadSingle(Url, FileName);
+    Exit;
+  end;
+  Stream := TFileStream.Create(FileName, fmCreate);
+  try
+    Stream.Size := Total;
+  finally
+    Stream.Free;
+  end;
+  Ranges := SplitDownload(Total, DOWNLOAD_PARTS, MIN_PART_BYTES);
+  AbortFlag := False;
+  SetLength(Parts, Length(Ranges) div 2);
+  for I := 0 to High(Parts) do
+  begin
+    Parts[I] := TPartThread.Create(True);
+    Parts[I].FUrl := FinalUrl;
+    Parts[I].FFileName := FileName;
+    Parts[I].FFirst := Ranges[I * 2];
+    Parts[I].FLast := Ranges[I * 2 + 1];
+    Parts[I].FAbort := @AbortFlag;
+    Parts[I].Start;
+  end;
+  try
+    LastTick := GetTickCount;
+    LastReceived := 0;
+    repeat
+      Sleep(200);
+      if Terminated then
+        AbortFlag := True;
+      Received := 0;
+      Running := False;
+      for I := 0 to High(Parts) do
+      begin
+        Received := Received + AtomicCmpExchange(Parts[I].FDone, 0, 0);
+        if not Parts[I].Finished then
+          Running := True;
+      end;
+      Tick := GetTickCount;
+      if Tick - LastTick >= 1000 then
+      begin
+        // Smoothed speed for the status line.
+        FSpeedKB := (FSpeedKB + Integer((Received - LastReceived) * 1000 div
+          Max(Int64(Tick - LastTick), 1) div 1024)) div 2;
+        LastTick := Tick;
+        LastReceived := Received;
+      end;
+      Report(Integer(Received * 100 div Total));
+    until not Running;
+  finally
+    Error := '';
+    for I := 0 to High(Parts) do
+    begin
+      Parts[I].WaitFor;
+      if (Error = '') and (Parts[I].FError <> '') then
+        Error := Parts[I].FError;
+      Parts[I].Free;
+    end;
+    FSpeedKB := 0;
+  end;
+  if Terminated then
+    Abort;
+  if Error <> '' then
+    raise Exception.Create(Error);
+end;
+
+procedure TSpeechInstallThread.DownloadSingle(const Url, FileName: string);
 var
   Client: THTTPClient;
   Response: IHTTPResponse;

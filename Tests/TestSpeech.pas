@@ -21,6 +21,8 @@ type
     [Test]
     procedure ModelFiles;
     [Test]
+    procedure DownloadParts;
+    [Test]
     procedure FinishText;
     [Test]
     procedure Wav;
@@ -115,6 +117,31 @@ begin
   finally
     TDirectory.Delete(Dir, True);
   end;
+end;
+
+procedure TSpeechTests.DownloadParts;
+var
+  R: TArray<Int64>;
+  I: Integer;
+begin
+  // 8 ranges covering every byte once, the remainder in the last one.
+  R := SplitDownload(100000003, 8, 4 * 1024 * 1024);
+  Assert.AreEqual<Integer>(16, Length(R));
+  Assert.AreEqual<Int64>(0, R[0]);
+  for I := 1 to 7 do
+    Assert.AreEqual<Int64>(R[I * 2 - 1] + 1, R[I * 2]);
+  Assert.AreEqual<Int64>(100000002, R[15]);
+  // Small files: fewer, but not smaller, parts.
+  R := SplitDownload(10 * 1024 * 1024, 8, 4 * 1024 * 1024);
+  Assert.AreEqual<Integer>(4, Length(R));
+  Assert.AreEqual<Int64>(10 * 1024 * 1024 - 1, R[3]);
+  R := SplitDownload(1000, 8, 4 * 1024 * 1024);
+  Assert.AreEqual<Integer>(2, Length(R));
+  Assert.AreEqual<Int64>(999, R[1]);
+  Assert.AreEqual<Integer>(0, Length(SplitDownload(0, 8, 1)));
+  Assert.AreEqual<Int64>(163300000, ParseContentRangeTotal('bytes 0-0/163300000'));
+  Assert.AreEqual<Int64>(-1, ParseContentRangeTotal('bytes 0-0/*'));
+  Assert.AreEqual<Int64>(-1, ParseContentRangeTotal(''));
 end;
 
 procedure TSpeechTests.FinishText;
