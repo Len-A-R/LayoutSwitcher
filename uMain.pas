@@ -3801,7 +3801,18 @@ begin
   Answer := '';
   if Thread.Success then
     Answer := CleanAiAnswer(Thread.Answer);
-  if Answer <> '' then
+  // The model answered a dictated question instead of writing it down: the
+  // dictation is typed as recognized.
+  if (Answer <> '') and not IsDictationRewrite(Thread.FallbackText, Answer,
+    DictationAiModeFromInteger(FSettings.DictationAiMode)) then
+  begin
+    DiagnosticsLogFmt('dictation.ai_reply_rejected length=%d answer=%d',
+      [Length(Thread.FallbackText), Length(Answer)]);
+    InsertDictatedText(Thread.FallbackText, Thread.FallbackPunctuation);
+    FDictation.ShowError(T('ИИ ответил на текст вместо того, чтобы записать его, — вставлен как распознан.',
+      'The AI replied to the text instead of writing it down: typed as recognized.'));
+  end
+  else if Answer <> '' then
     InsertDictatedText(Answer, True)
   else
   begin

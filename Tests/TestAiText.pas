@@ -27,6 +27,8 @@ type
     procedure VoiceCommands;
     [Test]
     procedure DictationModes;
+    [Test]
+    procedure DictationRewriteCheck;
   end;
 
 implementation
@@ -177,6 +179,28 @@ begin
   finally
     System.SysUtils.DeleteFile(FileName);
   end;
+end;
+
+procedure TAiTextTests.DictationRewriteCheck;
+begin
+  // A written-down question passes.
+  Assert.IsTrue(IsDictationRewrite('ну какая завтра погода в москве',
+    'Какая завтра погода в Москве?', damNeat));
+  Assert.IsTrue(IsDictationRewrite('встреча двадцать пятого марта в три',
+    'Встреча 25 марта в 15:00.', damNeat));
+  Assert.IsTrue(IsDictationRewrite('купить молоко хлеб и яйца',
+    'Купить:' + sLineBreak + '- молоко' + sLineBreak + '- хлеб' + sLineBreak + '- яйца', damList));
+  Assert.IsTrue(IsDictationRewrite('скажи коле что отчёт будет завтра',
+    'Николай, добрый день! Отчёт будет готов завтра.', damBusiness));
+  // An answer to it does not.
+  Assert.IsFalse(IsDictationRewrite('какая завтра погода в москве',
+    'Завтра в Москве ожидается облачная погода, температура около плюс пяти градусов.', damNeat));
+  Assert.IsFalse(IsDictationRewrite('привет как дела',
+    'Привет! У меня всё отлично, спасибо, что спросили. Чем могу помочь?', damNeat));
+  Assert.IsFalse(IsDictationRewrite('напиши стих про осень',
+    'Листья кружатся над тихой рекой, ветер уносит последнее лето, ' +
+    'небо роняет холодные капли, и осень приходит неслышной тропой.', damBusiness));
+  Assert.AreEqual('Текст.', CleanAiAnswer('<dictation>Текст.</dictation>'));
 end;
 
 initialization
