@@ -170,7 +170,7 @@ function IsPartEnd(const Samples: TArray<Single>): Boolean;
 implementation
 
 uses
-  System.Math, Winapi.GDIPAPI, Winapi.GDIPOBJ, uLocale;
+  System.Math, Winapi.GDIPAPI, Winapi.GDIPOBJ, Vcl.Clipbrd, uLocale;
 
 // GDI draws circles and rounded corners without anti-aliasing (jagged
 // edges); GDI+ smooths them.
@@ -826,10 +826,31 @@ end;
 
 procedure TDictation.DeliverTick(Sender: TObject);
 begin
+  // The text is typed only into the window it was dictated for, once that
+  // window has the focus again (every 50 ms, at least 150 ms after closing).
   Inc(FDeliverTicks);
-  if (FDeliverTicks < 3) or
-     ((GetForegroundWindow <> FWindow.TargetWindow) and (FDeliverTicks < 20)) then
+  if FDeliverTicks < 3 then
     Exit;
+  if GetForegroundWindow <> FWindow.TargetWindow then
+  begin
+    // After half a second: once more, harder.
+    if FDeliverTicks = 10 then
+      FWindow.ReturnFocus;
+    if FDeliverTicks < 30 then
+      Exit;
+    // The focus did not come back: the text must not land in some other
+    // window.
+    FDeliverTimer.Enabled := False;
+    try
+      Clipboard.AsText := FDeliverText;
+    except
+      // The clipboard is busy: the message says so anyway.
+    end;
+    ShowError(T('Не удалось вернуться в окно, где был курсор: текст скопирован в буфер обмена ' +
+      '(Ctrl+V — вставить).', 'Could not return to the window with the cursor: the text is ' +
+      'copied to the clipboard (Ctrl+V to paste).'));
+    Exit;
+  end;
   FDeliverTimer.Enabled := False;
   if Assigned(FOnResult) then
     FOnResult(FDeliverText, '', FModel.Punctuation);

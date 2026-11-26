@@ -89,6 +89,9 @@ type
     procedure SetStatus(const Text: string);
     // Hides the window and gives the focus back to the remembered field.
     procedure CloseAndReturnFocus;
+    // Gives the focus back to the remembered window and field again (the
+    // first attempt was refused); True when that window is in front.
+    function ReturnFocus: Boolean;
     function Text: string;
     function Shown: Boolean;
     function HasFocus: Boolean;
@@ -103,7 +106,7 @@ type
 implementation
 
 uses
-  System.Math, uLocale, uDictation;
+  System.Math, System.Variants, Winapi.OleAcc, uLocale, uDictation;
 
 // A background program may not take the focus by itself: attached to the
 // input of the foreground window it may.
@@ -120,6 +123,10 @@ begin
   try
     BringWindowToTop(Wnd);
     SetForegroundWindow(Wnd);
+    // Active and focused in the shared input state as well: otherwise the
+    // window is in front, but the keys of the user reach nobody.
+    SetActiveWindow(Wnd);
+    Winapi.Windows.SetFocus(Wnd);
   finally
     AttachThreadInput(Mine, ForegroundThread, False);
   end
@@ -146,6 +153,47 @@ procedure THeaderBox.Paint;
 begin
   if Assigned(FOnPaint) then
     FOnPaint(Self);
+end;
+
+// Where the text goes, in screen coordinates: the caret (the system caret,
+// or the one browsers and Office report through MSAA), else the focused
+// control.  False when none is known.
+function TargetAnchor(const Info: TGUIThreadInfo; out Anchor: TRect; out IsCaret: Boolean): Boolean;
+var
+  Acc: IAccessible;
+  X, Y, W, H: Integer;
+  TopLeft, BottomRight: TPoint;
+begin
+  Result := False;
+  IsCaret := False;
+  if (Info.hwndCaret <> 0) and not IsRectEmpty(Info.rcCaret) then
+  begin
+    TopLeft := Info.rcCaret.TopLeft;
+    BottomRight := Info.rcCaret.BottomRight;
+    Winapi.Windows.ClientToScreen(Info.hwndCaret, TopLeft);
+    Winapi.Windows.ClientToScreen(Info.hwndCaret, BottomRight);
+    Anchor := Rect(TopLeft.X, TopLeft.Y, BottomRight.X, BottomRight.Y);
+    IsCaret := True;
+    Exit(True);
+  end;
+  if Info.hwndFocus = 0 then
+    Exit;
+  try
+    if Succeeded(AccessibleObjectFromWindow(Info.hwndFocus, OBJID_CARET, IID_IAccessible, Acc)) and
+       (Acc <> nil) and Succeeded(Acc.accLocation(X, Y, W, H, CHILDID_SELF)) and
+       ((X <> 0) or (Y <> 0)) and (H > 0) then
+    begin
+      Anchor := Rect(X, Y, X + Max(W, 1), Y + H);
+      IsCaret := True;
+      Exit(True);
+    end;
+  except
+    // An application with a broken accessibility server.
+  end;
+  // The focused control itself, unless it is the whole window.
+  if (GetAncestor(Info.hwndFocus, GA_ROOT) <> Info.hwndFocus) and GetWindowRect(Info.hwndFocus, Anchor) and
+     not IsRectEmpty(Anchor) then
+    Result := True;
 end;
 
 { TDictationWindow }
@@ -277,16 +325,23 @@ end;
 procedure TDictationWindow.Open(const Hint: string; Live: Boolean);
 var
   Info: TGUIThreadInfo;
-  Area: TRect;
+  Area, Anchor: TRect;
   Monitor: TMonitor;
+  IsCaret, Known: Boolean;
+  Gap: Integer;
 begin
   // The field the text is for.
   FTargetWindow := GetForegroundWindow;
   FTargetFocus := 0;
   FillChar(Info, SizeOf(Info), 0);
   Info.cbSize := SizeOf(Info);
+  Known := False;
+  IsCaret := False;
   if GetGUIThreadInfo(GetWindowThreadProcessId(FTargetWindow, nil), Info) then
+  begin
     FTargetFocus := Info.hwndFocus;
+    Known := TargetAnchor(Info, Anchor, IsCaret);
+  end;
 
   ApplyTheme;
   FLive := Live;
@@ -296,17 +351,48 @@ begin
   FMemo.Clear;
   SetState(dwRecording);
 
-  // Bottom centre of the monitor the user works on.
-  Monitor := Screen.MonitorFromWindow(FTargetWindow);
+  if Known then
+    Monitor := Screen.MonitorFromRect(Anchor)
+  else
+    Monitor := Screen.MonitorFromWindow(FTargetWindow);
   if Monitor <> nil then
     Area := Monitor.WorkareaRect
   else
     Area := Screen.WorkAreaRect;
-  Left := Area.Left + (Area.Width - Width) div 2;
-  Top := Area.Bottom - Height - S(48);
+  if Known then
+  begin
+    // A tall control (a document): its bottom edge is the anchor, so that
+    // the window does not cover the text being written.
+    if not IsCaret and (Anchor.Height > S(120)) then
+      Anchor.Top := Anchor.Bottom - 1;
+    // Under the caret or the control, else above it; the left edge in
+    // line with it, inside the work area.
+    Gap := S(10);
+    if IsCaret then
+      Left := Anchor.Left - S(24)
+    else
+      Left := Anchor.Left;
+    if Anchor.Bottom + Gap + Height <= Area.Bottom then
+      Top := Anchor.Bottom + Gap
+    else if Anchor.Top - Gap - Height >= Area.Top then
+      Top := Anchor.Top - Gap - Height
+    else
+      Top := Area.Bottom - Height - S(8);
+    Left := EnsureRange(Left, Area.Left + S(8), Max(Area.Left + S(8), Area.Right - Width - S(8)));
+    Top := EnsureRange(Top, Area.Top + S(8), Max(Area.Top + S(8), Area.Bottom - Height - S(8)));
+  end
+  else
+  begin
+    // Nothing known about the field: bottom centre of the monitor.
+    Left := Area.Left + (Area.Width - Width) div 2;
+    Top := Area.Bottom - Height - S(48);
+  end;
   Show;
   TakeForeground(Handle);
   ActiveControl := FMemo;
+  // The text has the keyboard focus (Enter, Esc, corrections).
+  if FMemo.HandleAllocated and (GetForegroundWindow = Handle) then
+    Winapi.Windows.SetFocus(FMemo.Handle);
   FTimer.Enabled := True;
 end;
 
@@ -357,30 +443,43 @@ begin
   FHeader.Invalidate;
 end;
 
-procedure TDictationWindow.CloseAndReturnFocus;
+function TDictationWindow.ReturnFocus: Boolean;
 var
   Mine, TargetThread: DWORD;
+begin
+  Result := False;
+  if not IsWindow(FTargetWindow) then
+    Exit;
+  if GetForegroundWindow <> FTargetWindow then
+  begin
+    if not SetForegroundWindow(FTargetWindow) then
+      // Not allowed directly (this window is not in front any more).
+      TakeForeground(FTargetWindow);
+  end;
+  // The field that had the focus inside that window.
+  if IsWindow(FTargetFocus) then
+  begin
+    Mine := GetCurrentThreadId;
+    TargetThread := GetWindowThreadProcessId(FTargetFocus, nil);
+    if (TargetThread <> Mine) and AttachThreadInput(Mine, TargetThread, True) then
+    try
+      if Winapi.Windows.GetFocus <> FTargetFocus then
+        Winapi.Windows.SetFocus(FTargetFocus);
+    finally
+      AttachThreadInput(Mine, TargetThread, False);
+    end;
+  end;
+  Result := GetForegroundWindow = FTargetWindow;
+end;
+
+procedure TDictationWindow.CloseAndReturnFocus;
 begin
   FTimer.Enabled := False;
   if not Visible then
     Exit;
   // The field gets the focus back first: hiding the active window would
   // activate some other window.
-  if IsWindow(FTargetWindow) then
-  begin
-    SetForegroundWindow(FTargetWindow);
-    if IsWindow(FTargetFocus) then
-    begin
-      Mine := GetCurrentThreadId;
-      TargetThread := GetWindowThreadProcessId(FTargetFocus, nil);
-      if (TargetThread <> Mine) and AttachThreadInput(Mine, TargetThread, True) then
-      try
-        Winapi.Windows.SetFocus(FTargetFocus);
-      finally
-        AttachThreadInput(Mine, TargetThread, False);
-      end;
-    end;
-  end;
+  ReturnFocus;
   Hide;
 end;
 
