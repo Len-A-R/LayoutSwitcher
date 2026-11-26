@@ -3878,10 +3878,11 @@ function TFormMain.RadialItems: TArray<TRadialItem>;
     Result.Title := Caption;
     Result.Tag := Ord(Action);
     Gesture := FSettings.GestureForAction(Action);
-    // The full name, and the key for it.
-    Result.Hint := ActionName(Action);
+    // Under the name: its key (the name says enough).
     if Gesture <> lgNone then
-      Result.Hint := Result.Hint + sLineBreak + GestureName(Gesture);
+      Result.Hint := GestureName(Gesture)
+    else
+      Result.Hint := T('без клавиши', 'no shortcut');
   end;
 
 begin

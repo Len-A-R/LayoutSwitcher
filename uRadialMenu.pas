@@ -67,9 +67,9 @@ uses
   Winapi.GDIPAPI, Winapi.GDIPOBJ;
 
 const
-  OUTER_RADIUS = 150;
-  INNER_RADIUS = 64;
-  CENTER_RADIUS = 58;
+  OUTER_RADIUS = 158;
+  INNER_RADIUS = 72;
+  CENTER_RADIUS = 66;
   SHADOW = 14;
   GAP_DEGREES = 1.2;
 
@@ -264,6 +264,8 @@ begin
     G.Clear(MakeColor(0, 0, 0, 0));
     Format.SetAlignment(StringAlignmentCenter);
     Format.SetLineAlignment(StringAlignmentCenter);
+    // Text that does not fit ends with an ellipsis inside its circle.
+    Format.SetTrimming(StringTrimmingEllipsisWord);
 
     // A soft shadow around the ring.
     for I := SHADOW downto 1 do
@@ -352,14 +354,14 @@ begin
     end;
     Brush := TGPSolidBrush.Create(Ink);
     try
-      R := MakeRect(Single(Cx - Rc + S(6)), Single(Cy - S(30)), Single((Rc - S(6)) * 2), Single(S(36)));
+      R := MakeRect(Single(Cx - Rc + S(8)), Single(Cy - S(26)), Single((Rc - S(8)) * 2), Single(S(24)));
       G.DrawString(Title, -1, TitleFont, R, Format, Brush);
     finally
       Brush.Free;
     end;
     Brush := TGPSolidBrush.Create(Muted);
     try
-      R := MakeRect(Single(Cx - Rc + S(8)), Single(Cy + S(4)), Single((Rc - S(8)) * 2), Single(S(30)));
+      R := MakeRect(Single(Cx - Rc + S(12)), Single(Cy + S(1)), Single((Rc - S(12)) * 2), Single(S(30)));
       G.DrawString(Hint, -1, HintFont, R, Format, Brush);
     finally
       Brush.Free;
