@@ -13,7 +13,8 @@ uses
   Vcl.StdCtrls, Vcl.ComCtrls, Vcl.Grids, uProgramList, uAiExplain, uExplainWindow, uModernUI,
   uSettings, uGestureDetector, uOperationWorker, uConversionChain,
   uLayoutIndicator, uUpdateCheck, uUpdateProgress, uLayoutConverter, uTextTools,
-  uDictation, uDictationPage, uAiText, uReadAloud, uVoicePage, uWindowWatch;
+  uDictation, uDictationPage, uAiText, uReadAloud, uVoicePage, uWindowWatch, uMouseHook,
+  uRadialMenu;
 
 const
   INSTANCE_WINDOW_PROP = 'LayoutSwitcher.Instance.v2';
@@ -295,6 +296,14 @@ type
     // watch it (when the menu opens, the menu itself is in front).
     FLastForeground: HWND;
     FForegroundHook: THandle;
+    // The radial menu of the middle mouse button.
+    FMouseHook: TMouseHookThread;
+    FRadial: TRadialMenu;
+    // The running action comes from the radial menu, not from a key
+    // gesture (no Scroll Lock press to undo).
+    FActionFromMenu: Boolean;
+    lblRadial: TLabel;
+    cbRadial: TComboBox;
     // Exclusions table: programs found on the computer (read when the tab
     // is opened for the first time), all rows and the rows shown.
     FInstalledPrograms: TArray<TProgramEntry>;
@@ -455,6 +464,14 @@ type
     procedure WatchTimerTick(Sender: TObject);
     procedure TryReadWatchQueue;
     procedure ForegroundChanged(Wnd: HWND);
+    procedure CreateRadialControls;
+    procedure RadialModeChange(Sender: TObject);
+    procedure UpdateMouseHook;
+    procedure UpdateRadialAllowed(Wnd: HWND);
+    function RadialItems: TArray<TRadialItem>;
+    procedure HandleRadial(Kind: Integer; const P: TPoint);
+    procedure CloseRadial;
+    procedure RunRadialItem(Index: Integer);
     procedure DownloadCancel(Sender: TObject);
     function DownloadRunning: Boolean;
   protected
@@ -487,6 +504,8 @@ const
   WM_LS_UPDATE_RESULT = WM_APP + 11;
   WM_LS_UPDATE_DOWNLOADED = WM_APP + 12;
   WM_LS_UPDATE_PROGRESS = WM_APP + 13;
+  // From the middle mouse button hook (uMouseHook): WParam = RM_*.
+  WM_LS_RADIAL = WM_APP + 14;
   // The phrase typed since the last caret jump (spaces included).
   MAX_PHRASE_LEN = 300;
   TO_UNICODE_NO_STATE_CHANGE = 4;
@@ -654,6 +673,7 @@ begin
   FDictation.OnWindowClosed := DictationWindowClosed;
   CreateDictationPage;
   CreateReadAloudControls;
+  CreateRadialControls;
   // Before any window of the form exists: the layout is resized once.
   ModernizeSettingsWindow;
   ApplyLanguage;
@@ -715,6 +735,11 @@ begin
   DiagnosticsLog('form.destroy begin');
   if FForegroundHook <> 0 then
     UnhookWinEvent(FForegroundHook);
+  if FMouseHook <> nil then
+  begin
+    FMouseHook.Stop;
+    FreeAndNil(FMouseHook);
+  end;
   FreeAndNil(FWatcher);
   StopReadAloud('exit');
   FreeAndNil(FReadAloud);
@@ -832,6 +857,12 @@ begin
   if Message.Msg = WM_LS_OPERATION_DONE then
   begin
     HandleOperationResult(TOperationResult(Message.LParam));
+    Exit;
+  end;
+
+  if Message.Msg = WM_LS_RADIAL then
+  begin
+    HandleRadial(Integer(Message.WParam), UnpackPoint(Message.LParam));
     Exit;
   end;
 
@@ -1027,6 +1058,8 @@ begin
       SendKeyTap(VK_SCROLL);
     end;
   end;
+  if (VK = VK_ESCAPE) and not IsKeyUp and (FRadial <> nil) and FRadial.Shown then
+    CloseRadial;
   // Esc cancels a dictation (the key still reaches the application); in
   // the dictation window Esc is its own key.
   if (VK = VK_ESCAPE) and not IsKeyUp and ((FDictation.State <> dsIdle) or FDictation.Busy) and
@@ -1288,7 +1321,7 @@ begin
     // A Scroll Lock gesture would leave the Scroll Lock light on (the
     // dictation window counts its presses itself).
     if (FSettings.GestureForAction(laReadAloud) in [lgScrollLock, lgShiftScrollLock,
-       lgAltScrollLock]) and not FDictationWatchScroll then
+       lgAltScrollLock]) and not FDictationWatchScroll and not FActionFromMenu then
       FRestoreScrollOnUp := True;
     // The gesture again: stop.
     if FReadAloudActive then
@@ -1622,6 +1655,7 @@ end;
 
 procedure TFormMain.UpdatePauseState;
 begin
+  UpdateRadialAllowed(GetForegroundWindow);
   mniResume.Visible := FPaused;
   mniPause15.Enabled := not FPaused;
   mniPause60.Enabled := not FPaused;
@@ -1866,6 +1900,8 @@ begin
     udInterval.Position := Integer(FSettings.DoubleTapInterval);
     edInterval.Text := IntToStr(FSettings.DoubleTapInterval);
     chkPauseFullscreen.Checked := FSettings.PauseInFullscreen;
+    if cbRadial <> nil then
+      cbRadial.ItemIndex := FSettings.RadialMenuMode;
     chkNotifications.Checked := FSettings.ShowNotifications;
     chkDisableStickyKeys.Checked := FSettings.DisableStickyKeysHotkey;
     chkLayoutIndicator.Checked := FSettings.ShowLayoutIndicator;
@@ -1879,6 +1915,9 @@ end;
 procedure TFormMain.ApplySettings;
 begin
   FDetector.Interval := FSettings.DoubleTapInterval;
+  RadialMode := FSettings.RadialMenuMode;
+  UpdateMouseHook;
+  UpdateRadialAllowed(GetForegroundWindow);
   FSnippets := ParseSnippets(FSettings.Snippets);
   FAutoReplace := ParseAutoReplace(FSettings.AutoReplace);
   if not SaveSettings(FSettings) then
@@ -2714,6 +2753,21 @@ begin
     Caption := T('LayoutSwitcher - Переключатель раскладок клавиатуры',
       'LayoutSwitcher - Keyboard layout switcher');
     tsGeneral.Caption := T('Основные', 'General');
+    if cbRadial <> nil then
+    begin
+      lblRadial.Caption := T('Круговое меню колёсиком мыши:', 'Radial menu with the mouse wheel:');
+      Index := cbRadial.ItemIndex;
+      cbRadial.Items.Clear;
+      cbRadial.Items.Add(T('Выключено', 'Off'));
+      cbRadial.Items.Add(T('Удержание колёсика (рывок — сразу команда)', 'Hold the wheel (flick: the command at once)'));
+      cbRadial.Items.Add(T('Щелчок колёсиком', 'Wheel click'));
+      cbRadial.Items.Add(T('Ctrl + щелчок колёсиком', 'Ctrl + wheel click'));
+      cbRadial.ItemIndex := Index;
+      cbRadial.Hint := T('Удерживайте колёсико, наведите на команду и отпустите. Короткий щелчок ' +
+        'колёсиком работает как обычно.', 'Hold the wheel, point at a command and release. A short ' +
+        'wheel click works as usual.');
+      cbRadial.ShowHint := True;
+    end;
     tsHotkeys.Caption := T('Сочетания', 'Shortcuts');
     tsLayout.Caption := T('Раскладка', 'Layout');
     tsCorrections.Caption := T('Исправления', 'Corrections');
@@ -3753,6 +3807,170 @@ begin
   FDictationPage.OnUnloadModel := DictationUnloadModel;
 end;
 
+{ The radial menu of the middle mouse button }
+
+procedure TFormMain.CreateRadialControls;
+
+  function S(Value: Integer): Integer;
+  begin
+    Result := MulDiv(Value, Screen.PixelsPerInch, 96);
+  end;
+
+begin
+  FRadial := TRadialMenu.CreateMenu(Self);
+  // On the General page, under the export buttons.
+  lblRadial := TLabel.Create(Self);
+  lblRadial.Parent := tsGeneral;
+  lblRadial.SetBounds(S(12), S(329), S(220), S(13));
+  cbRadial := TComboBox.Create(Self);
+  cbRadial.Parent := tsGeneral;
+  cbRadial.Style := csDropDownList;
+  cbRadial.SetBounds(S(240), S(326), S(252), S(21));
+  cbRadial.OnChange := RadialModeChange;
+end;
+
+procedure TFormMain.RadialModeChange(Sender: TObject);
+begin
+  if FUpdatingControls or (cbRadial.ItemIndex < 0) then
+    Exit;
+  FSettings.RadialMenuMode := cbRadial.ItemIndex;
+  ApplySettings;
+end;
+
+procedure TFormMain.UpdateMouseHook;
+begin
+  // The hook only while the menu is on: every mouse event passes it.
+  if (FSettings.RadialMenuMode <> RADIAL_OFF) and (FMouseHook = nil) then
+    FMouseHook := TMouseHookThread.Create(Handle, WM_LS_RADIAL)
+  else if (FSettings.RadialMenuMode = RADIAL_OFF) and (FMouseHook <> nil) then
+  begin
+    FMouseHook.Stop;
+    FreeAndNil(FMouseHook);
+    CloseRadial;
+  end;
+end;
+
+procedure TFormMain.UpdateRadialAllowed(Wnd: HWND);
+var
+  ProcessName: string;
+begin
+  // Paused, an excluded program, an administrator window (the replayed
+  // click would not reach it) or a full-screen game: the wheel is theirs.
+  if FPaused or (FSettings.RadialMenuMode = RADIAL_OFF) or (Wnd = 0) then
+  begin
+    RadialAllowed := not FPaused and (FSettings.RadialMenuMode <> RADIAL_OFF);
+    Exit;
+  end;
+  ProcessName := GetWindowProcessFileName(Wnd);
+  RadialAllowed := not FSettings.IsProcessExcluded(ProcessName) and
+    not IsWindowProcessElevatedAboveUs(Wnd) and
+    not (FSettings.PauseInFullscreen and IsFullscreenAppActive);
+end;
+
+function TFormMain.RadialItems: TArray<TRadialItem>;
+
+  function Item(Glyph: Char; const Caption: string; Action: TLSAction): TRadialItem;
+  var
+    Gesture: TLSGesture;
+  begin
+    Result.Glyph := Glyph;
+    Result.Caption := Caption;
+    Result.Title := Caption;
+    Result.Tag := Ord(Action);
+    Gesture := FSettings.GestureForAction(Action);
+    // The full name, and the key for it.
+    Result.Hint := ActionName(Action);
+    if Gesture <> lgNone then
+      Result.Hint := Result.Hint + sLineBreak + GestureName(Gesture);
+  end;
+
+begin
+  // Clockwise from the top.
+  Result := [
+    Item(#$E765, T('Раскладка', 'Layout'), laConvert),
+    Item(#$E70F, T('Исправить', 'Fix'), laAiFix),
+    Item(#$E897, T('Объяснить', 'Explain'), laExplain),
+    Item(#$E775, T('Перевести', 'Translate'), laTranslate),
+    Item(#$E721, T('Найти', 'Search'), laWebSearch),
+    Item(#$E8F2, T('Голосом', 'Voice edit'), laVoiceEdit),
+    Item(#$E720, T('Диктовка', 'Dictate'), laDictate),
+    Item(#$E767, T('Прочитать', 'Read aloud'), laReadAloud)];
+end;
+
+procedure TFormMain.CloseRadial;
+begin
+  if FRadial <> nil then
+    FRadial.HideMenu;
+  RadialMenuOpen := False;
+end;
+
+procedure TFormMain.RunRadialItem(Index: Integer);
+var
+  Items: TArray<TRadialItem>;
+  Action: TLSAction;
+begin
+  Items := FRadial.Items;
+  CloseRadial;
+  if (Index < 0) or (Index > High(Items)) then
+    Exit;
+  Action := TLSAction(Items[Index].Tag);
+  DiagnosticsLogFmt('radial.run action=%s', [ActionKeys[Action]]);
+  // The window the user works in kept the focus: the action applies there.
+  FActionFromMenu := True;
+  try
+    QueueAction(Action);
+  finally
+    FActionFromMenu := False;
+  end;
+end;
+
+procedure TFormMain.HandleRadial(Kind: Integer; const P: TPoint);
+var
+  Index: Integer;
+begin
+  case Kind of
+    RM_OPEN:
+      begin
+        if RadialMode = RADIAL_HOLD then
+          FRadial.Popup(RadialItems, P, 'LayoutSwitcher',
+            T('Наведите на команду и отпустите колёсико', 'Point at a command and release the wheel'))
+        else
+          FRadial.Popup(RadialItems, P, 'LayoutSwitcher',
+            T('Щёлкните команду · Esc — закрыть', 'Click a command · Esc to close'));
+        RadialMenuOpen := True;
+        DiagnosticsLog('radial.open');
+      end;
+    RM_MOVE:
+      if FRadial.Shown then
+        FRadial.TrackPoint(P);
+    RM_RELEASE:
+      begin
+        Index := FRadial.ItemAt(P);
+        if Index >= 0 then
+          RunRadialItem(Index)
+        else if not FRadial.Shown then
+          CloseRadial;
+        // Released in the centre: the menu stays for a click.
+      end;
+    RM_CLICK:
+      begin
+        Index := FRadial.ItemAt(P);
+        if Index >= 0 then
+          RunRadialItem(Index)
+        else
+          CloseRadial;
+      end;
+    RM_CANCEL:
+      CloseRadial;
+    RM_FLICK:
+      begin
+        // Without the menu on the screen: the direction of the flick.
+        FRadial.SetItems(RadialItems);
+        RunRadialItem(FRadial.ItemInDirection(RadialFlickStart, P));
+      end;
+  end;
+end;
+
 procedure ForegroundEventProc(Hook: THandle; Event: DWORD; Wnd: HWND; ObjectId, ChildId: Longint;
   EventThread, EventTime: DWORD); stdcall;
 begin
@@ -3809,6 +4027,7 @@ var
 begin
   if Wnd = 0 then
     Exit;
+  UpdateRadialAllowed(Wnd);
   Root := GetAncestor(Wnd, GA_ROOT);
   if Root = 0 then
     Root := Wnd;
@@ -4123,7 +4342,8 @@ begin
     begin
       FDictationWatchScroll := True;
       // The press that opened the window.
-      if FSettings.GestureForAction(laDictate) in [lgScrollLock, lgShiftScrollLock] then
+      if (FSettings.GestureForAction(laDictate) in [lgScrollLock, lgShiftScrollLock]) and
+         not FActionFromMenu then
         FDictationScrollPresses := 1
       else
         FDictationScrollPresses := 0;

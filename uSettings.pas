@@ -92,6 +92,9 @@ type
     ReadAloudVoiceRu: string;
     ReadAloudVoiceEn: string;
     ReadAloudSpeed: Integer;
+    // The radial menu of the middle mouse button: RADIAL_* in uMouseHook
+    // (0 off, 1 hold, 2 click, 3 Ctrl + click).
+    RadialMenuMode: Integer;
     AutoSwitchExceptions: TArray<string>;
     // Programs where only the manual actions work (code editors, terminals).
     NoAutoCorrectProcesses: TArray<string>;
@@ -244,6 +247,7 @@ const
   VALUE_READ_ALOUD_VOICE_RU = 'ReadAloudVoiceRu';
   VALUE_READ_ALOUD_VOICE_EN = 'ReadAloudVoiceEn';
   VALUE_READ_ALOUD_SPEED = 'ReadAloudSpeed';
+  VALUE_RADIAL_MENU_MODE = 'RadialMenuMode';
   VALUE_CUSTOM_PROGRAMS = 'CustomPrograms';
   VALUE_AUTO_SWITCH_EXCEPTIONS = 'AutoSwitchExceptions';
   VALUE_NO_AUTOCORRECT = 'NoAutoCorrectProcesses';
@@ -327,6 +331,7 @@ begin
   Result.ReadAloudVoiceRu := '';
   Result.ReadAloudVoiceEn := '';
   Result.ReadAloudSpeed := 1;
+  Result.RadialMenuMode := 1;
 end;
 
 function ActionName(Action: TLSAction): string;
@@ -698,6 +703,9 @@ begin
     Result.ReadAloudSpeed := Store.ReadInteger(VALUE_READ_ALOUD_SPEED, 1);
     if (Result.ReadAloudSpeed < 0) or (Result.ReadAloudSpeed > 4) then
       Result.ReadAloudSpeed := 1;
+    Result.RadialMenuMode := Store.ReadInteger(VALUE_RADIAL_MENU_MODE, Result.RadialMenuMode);
+    if (Result.RadialMenuMode < 0) or (Result.RadialMenuMode > 3) then
+      Result.RadialMenuMode := 1;
     Result.CustomPrograms := ParseProcessList(Store.ReadString(VALUE_CUSTOM_PROGRAMS, ''));
     if Store.ValueExists(VALUE_AUTO_SWITCH_EXCEPTIONS) then
       Result.AutoSwitchExceptions := ParseWordList(
@@ -775,6 +783,7 @@ begin
     Store.WriteString(VALUE_READ_ALOUD_VOICE_RU, Settings.ReadAloudVoiceRu);
     Store.WriteString(VALUE_READ_ALOUD_VOICE_EN, Settings.ReadAloudVoiceEn);
     Store.WriteInteger(VALUE_READ_ALOUD_SPEED, Settings.ReadAloudSpeed);
+    Store.WriteInteger(VALUE_RADIAL_MENU_MODE, Settings.RadialMenuMode);
     Store.WriteString(VALUE_CUSTOM_PROGRAMS, ProcessListToText(Settings.CustomPrograms));
     Store.WriteString(VALUE_AUTO_SWITCH_EXCEPTIONS,
       string.Join('; ', Settings.AutoSwitchExceptions));

@@ -27,7 +27,8 @@ uses
   TestSpeech in 'TestSpeech.pas',
   TestAiText in 'TestAiText.pas',
   TestReadAloud in 'TestReadAloud.pas',
-  TestWindowWatch in 'TestWindowWatch.pas';
+  TestWindowWatch in 'TestWindowWatch.pas',
+  TestRadial in 'TestRadial.pas';
 
 var
   Runner: ITestRunner;

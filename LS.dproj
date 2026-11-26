@@ -177,6 +177,8 @@
         <DCCReference Include="uNeuralVoice.pas"/>
         <DCCReference Include="uVoicePage.pas"/>
         <DCCReference Include="uWindowWatch.pas"/>
+        <DCCReference Include="uMouseHook.pas"/>
+        <DCCReference Include="uRadialMenu.pas"/>
         <DCCReference Include="uDictationPage.pas"/>
         <DCCReference Include="uOperationWorker.pas"/>
         <DCCReference Include="uMain.pas">

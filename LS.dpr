@@ -42,6 +42,8 @@ uses
   uNeuralVoice in 'uNeuralVoice.pas',
   uVoicePage in 'uVoicePage.pas',
   uWindowWatch in 'uWindowWatch.pas',
+  uMouseHook in 'uMouseHook.pas',
+  uRadialMenu in 'uRadialMenu.pas',
   uDictationPage in 'uDictationPage.pas',
   uOperationWorker in 'uOperationWorker.pas',
   uMain in 'uMain.pas' {FormMain};
