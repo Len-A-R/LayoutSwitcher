@@ -33,7 +33,19 @@ type
     function IsCloud: Boolean;
   end;
 
-  TSpeechInstallStage = (sisDownloadEngine, sisDownloadModel, sisVerify, sisUnpack);
+  TSpeechInstallStage = (sisDownloadEngine, sisDownloadModel, sisVerify, sisUnpack,
+    sisDownloadPhonemizer, sisDownloadVoice);
+
+  // One archive to install: downloaded from Url, checked, the Members (all
+  // when empty) unpacked, InnerDir of the archive moved to TargetDir.
+  TSpeechPackage = record
+    Url: string;
+    Sha256: string;
+    TargetDir: string;
+    InnerDir: string;
+    Members: TArray<string>;
+    Stage: TSpeechInstallStage;
+  end;
 
 const
   SHERPA_VERSION = '2.0.3';
@@ -66,8 +78,17 @@ function FindSpeechModel(const Id: string): Integer;
 function SpeechRootDir: string;
 function SpeechEngineDir: string;
 function SpeechModelDir(const Model: TSpeechModel): string;
+// The engine for recognition: the current build or the build without
+// text-to-speech that versions before 2.6 downloaded.
 function IsSpeechEngineInstalled: Boolean;
+// The current build, which also synthesizes speech (neural voices).
+function IsSpeechTtsEngineInstalled: Boolean;
+// Removes the old engine build once the current one is installed; False
+// when its files are in use (it is loaded).
+function CleanupLegacySpeechEngine: Boolean;
 function IsSpeechModelInstalled(const Model: TSpeechModel): Boolean;
+// A package (its marker file) is installed in Dir.
+function IsSpeechPackageInstalled(const Dir: string): Boolean;
 // Megabytes the installed model takes on disk.
 function SpeechModelDiskMB(const Model: TSpeechModel): Integer;
 function DeleteSpeechModel(const Model: TSpeechModel): Boolean;
@@ -81,6 +102,8 @@ function SpeechEngineArchive: string;
 function SpeechEngineSha256: string;
 function SpeechEngineUrl: string;
 function SpeechModelUrl(const Model: TSpeechModel): string;
+// The engine as a package (only its three libraries are unpacked).
+function SpeechEnginePackage: TSpeechPackage;
 // Parts of a download of Total bytes: up to MaxParts ranges of at least
 // MinPart bytes, as start/end pairs (inclusive).
 function SplitDownload(Total: Int64; MaxParts: Integer; MinPart: Int64): TArray<Int64>;
@@ -100,7 +123,8 @@ type
   // with StrDispose, or 0).
   TSpeechInstallThread = class(TThread)
   private
-    FModel: TSpeechModel;
+    FPackages: TArray<TSpeechPackage>;
+    FNeedTtsEngine: Boolean;
     FNotifyWnd: HWND;
     FProgressMsg, FDoneMsg: UINT;
     FStage: TSpeechInstallStage;
@@ -118,6 +142,10 @@ type
   public
     constructor Create(const Model: TSpeechModel; NotifyWnd: HWND;
       ProgressMsg, DoneMsg: UINT);
+    // Packages after the engine (when missing; the current build when
+    // NeedTtsEngine); installed ones are skipped.
+    constructor CreatePackages(const Packages: TArray<TSpeechPackage>; NeedTtsEngine: Boolean;
+      NotifyWnd: HWND; ProgressMsg, DoneMsg: UINT);
   end;
 
 implementation
@@ -128,8 +156,10 @@ uses
 
 const
   MARKER_FILE = 'installed.ok';
-  ENGINE_SHA256_X64 = 'fd776a611aca0d088947da7e635c25a02e2b42ace00fc70b960af61059a727e6';
-  ENGINE_SHA256_X86 = '1f0a055781e2408af21eef40d0cda6e677ad0ea0aea407f404124b2662be8f1f';
+  // The build with text-to-speech (reading aloud with neural voices); only
+  // 1 MB larger than the build without it.
+  ENGINE_SHA256_X64 = '1d2414ac8921f718ba3188782f80475f525a3d82eeb59cef75ceb9360fbf8182';
+  ENGINE_SHA256_X86 = '65e99e8388a4161db877307ceb754cc1b69a69faa6a7bde5240874e2cbe95fa6';
 
 { TSpeechModel }
 
@@ -252,9 +282,9 @@ end;
 function SpeechEngineArchive: string;
 begin
 {$IFDEF WIN64}
-  Result := 'sherpa-onnx-v' + SHERPA_VERSION + '-win-x64-shared-MT-Release-no-tts';
+  Result := 'sherpa-onnx-v' + SHERPA_VERSION + '-win-x64-shared-MT-Release';
 {$ELSE}
-  Result := 'sherpa-onnx-v' + SHERPA_VERSION + '-win-x86-shared-MT-Release-no-tts';
+  Result := 'sherpa-onnx-v' + SHERPA_VERSION + '-win-x86-shared-MT-Release';
 {$ENDIF}
 end;
 
@@ -286,9 +316,19 @@ begin
   Result := SpeechDownloadBase + 'asr-models/' + Model.Archive + '.tar.bz2';
 end;
 
+function LegacyEngineDir: string;
+begin
+  Result := TPath.Combine(SpeechRootDir, SpeechEngineArchive + '-no-tts');
+end;
+
 function SpeechEngineDir: string;
 begin
   Result := TPath.Combine(SpeechRootDir, SpeechEngineArchive);
+  // Recognition keeps working on the old build until a voice brings the
+  // current one.
+  if not FileExists(TPath.Combine(Result, MARKER_FILE)) and
+     FileExists(TPath.Combine(LegacyEngineDir, MARKER_FILE)) then
+    Result := LegacyEngineDir;
 end;
 
 function SpeechModelDir(const Model: TSpeechModel): string;
@@ -299,6 +339,41 @@ end;
 function IsSpeechEngineInstalled: Boolean;
 begin
   Result := FileExists(TPath.Combine(SpeechEngineDir, MARKER_FILE));
+end;
+
+function IsSpeechTtsEngineInstalled: Boolean;
+begin
+  Result := FileExists(TPath.Combine(TPath.Combine(SpeechRootDir, SpeechEngineArchive), MARKER_FILE));
+end;
+
+function CleanupLegacySpeechEngine: Boolean;
+begin
+  Result := True;
+  if not IsSpeechTtsEngineInstalled or not TDirectory.Exists(LegacyEngineDir) then
+    Exit;
+  try
+    TDirectory.Delete(LegacyEngineDir, True);
+  except
+    Result := False;
+  end;
+end;
+
+function IsSpeechPackageInstalled(const Dir: string): Boolean;
+begin
+  Result := FileExists(TPath.Combine(Dir, MARKER_FILE));
+end;
+
+function SpeechEnginePackage: TSpeechPackage;
+begin
+  Result.Url := SpeechEngineUrl;
+  Result.Sha256 := SpeechEngineSha256;
+  Result.TargetDir := TPath.Combine(SpeechRootDir, SpeechEngineArchive);
+  Result.InnerDir := SpeechEngineArchive;
+  // Only the libraries: the archive also holds 60 MB of tools.
+  Result.Members := [SpeechEngineArchive + '/lib/sherpa-onnx-c-api.dll',
+    SpeechEngineArchive + '/lib/onnxruntime.dll',
+    SpeechEngineArchive + '/lib/onnxruntime_providers_shared.dll'];
+  Result.Stage := sisDownloadEngine;
 end;
 
 function IsSpeechModelInstalled(const Model: TSpeechModel): Boolean;
@@ -373,8 +448,23 @@ end;
 
 constructor TSpeechInstallThread.Create(const Model: TSpeechModel; NotifyWnd: HWND;
   ProgressMsg, DoneMsg: UINT);
+var
+  Package: TSpeechPackage;
 begin
-  FModel := Model;
+  Package.Url := SpeechModelUrl(Model);
+  Package.Sha256 := Model.Sha256;
+  Package.TargetDir := SpeechModelDir(Model);
+  Package.InnerDir := Model.Archive;
+  Package.Members := nil;
+  Package.Stage := sisDownloadModel;
+  CreatePackages([Package], False, NotifyWnd, ProgressMsg, DoneMsg);
+end;
+
+constructor TSpeechInstallThread.CreatePackages(const Packages: TArray<TSpeechPackage>;
+  NeedTtsEngine: Boolean; NotifyWnd: HWND; ProgressMsg, DoneMsg: UINT);
+begin
+  FPackages := Packages;
+  FNeedTtsEngine := NeedTtsEngine;
   FNotifyWnd := NotifyWnd;
   FProgressMsg := ProgressMsg;
   FDoneMsg := DoneMsg;
@@ -742,6 +832,7 @@ begin
     TDirectory.Delete(Temp, True);
   ForceDirectories(Temp);
   try
+    // tar.exe recognises the format (bzip2 or zip) by the content.
     ArchiveFile := TPath.Combine(Temp, 'archive.tar.bz2');
     FStage := DownloadStage;
     Report(0);
@@ -782,20 +873,26 @@ end;
 procedure TSpeechInstallThread.Execute;
 var
   Error: string;
+  Package: TSpeechPackage;
 begin
   NameThreadForDebugging('LayoutSwitcher.SpeechInstall');
   Error := '';
   try
-    if not IsSpeechEngineInstalled then
-      // Only the libraries: the archive also holds 60 MB of tools.
-      Install(SpeechEngineUrl, SpeechEngineSha256, SpeechEngineDir, SpeechEngineArchive,
-        [SpeechEngineArchive + '/lib/sherpa-onnx-c-api.dll',
-         SpeechEngineArchive + '/lib/onnxruntime.dll',
-         SpeechEngineArchive + '/lib/onnxruntime_providers_shared.dll'],
-        sisDownloadEngine);
-    if not Terminated and not IsSpeechModelInstalled(FModel) then
-      Install(SpeechModelUrl(FModel), FModel.Sha256, SpeechModelDir(FModel), FModel.Archive,
-        nil, sisDownloadModel);
+    if (FNeedTtsEngine and not IsSpeechTtsEngineInstalled) or not IsSpeechEngineInstalled then
+    begin
+      Package := SpeechEnginePackage;
+      Install(Package.Url, Package.Sha256, Package.TargetDir, Package.InnerDir,
+        Package.Members, Package.Stage);
+      CleanupLegacySpeechEngine;
+    end;
+    for Package in FPackages do
+    begin
+      if Terminated then
+        Break;
+      if not IsSpeechPackageInstalled(Package.TargetDir) then
+        Install(Package.Url, Package.Sha256, Package.TargetDir, Package.InnerDir,
+          Package.Members, Package.Stage);
+    end;
   except
     on E: EAbort do
       Error := '';

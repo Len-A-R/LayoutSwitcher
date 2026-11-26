@@ -7,7 +7,7 @@ interface
 
 uses
   DUnitX.TestFramework,
-  uReadAloud, uSettings, uGestureDetector;
+  uReadAloud, uSettings, uGestureDetector, uNeuralVoice, uSherpaOnnx, uSpeechModels;
 
 type
   [TestFixture]
@@ -23,6 +23,12 @@ type
     procedure VoiceChoice;
     [Test]
     procedure Pauses;
+    [Test]
+    procedure NeuralText;
+    [Test]
+    procedure NeuralCatalogue;
+    [Test]
+    procedure MixedLanguages;
   end;
 
 implementation
@@ -91,11 +97,13 @@ begin
   Assert.AreEqual(Ord(lgNone), Ord(G[laReadAloud]));
   FileName := TPath.Combine(TPath.GetTempPath, 'ls-settings-readaloud.ini');
   try
-    S.ReadAloudVoice := 'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Speech\Voices\Tokens\X';
+    S.ReadAloudVoiceRu := 'piper:ru-ruslan';
+    S.ReadAloudVoiceEn := 'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Speech\Voices\Tokens\X';
     S.ReadAloudSpeed := 3;
     Assert.IsTrue(ExportSettings(S, FileName, False));
     Assert.IsTrue(ImportSettings(FileName, Loaded, Diagnostics));
-    Assert.AreEqual(S.ReadAloudVoice, Loaded.ReadAloudVoice);
+    Assert.AreEqual(S.ReadAloudVoiceRu, Loaded.ReadAloudVoiceRu);
+    Assert.AreEqual(S.ReadAloudVoiceEn, Loaded.ReadAloudVoiceEn);
     Assert.AreEqual(3, Loaded.ReadAloudSpeed);
   finally
     System.SysUtils.DeleteFile(FileName);
@@ -154,6 +162,95 @@ begin
     PrepareSpeech('Яблоки и т. д. Да.', True));
   // Markdown marks are not read.
   Assert.AreEqual('Важно.<silence msec="380"/>', PrepareSpeech('**Важно**', True));
+end;
+
+procedure TReadAloudTests.NeuralText;
+var
+  P: TArray<string>;
+begin
+  P := PrepareNeuralText('Список' + sLineBreak + '- молоко' + sLineBreak + '- хлеб' + sLineBreak +
+    sLineBreak + 'Это тест, т. е. проверка — с тире.', True);
+  Assert.AreEqual(2, Integer(Length(P)));
+  Assert.AreEqual('Список. молоко. хлеб.', P[0]);
+  Assert.AreEqual('Это тест, то есть проверка, с тире.', P[1]);
+  // The clause terminators of espeak-ng, as piper-phonemize maps them.
+  Assert.AreEqual('.', ClausePunctuation(40 or $00080000));
+  Assert.AreEqual(',', ClausePunctuation(20 or $00001000 or $00040000));
+  Assert.AreEqual('?', ClausePunctuation(40 or $00002000 or $00080000));
+  Assert.IsTrue(IsSentenceEnd(45 or $00003000 or $00080000));
+  Assert.IsFalse(IsSentenceEnd(20 or $00001000 or $00040000));
+  Assert.AreEqual('hɛloʊ', RemoveLanguageFlags('(en)hɛloʊ(ru)'));
+end;
+
+procedure TReadAloudTests.NeuralCatalogue;
+var
+  Packages: TArray<TSpeechPackage>;
+  V: TNeuralVoiceInfo;
+begin
+  // The mirrored C structures of sherpa-onnx 2.0.3 (x64).
+  Assert.AreEqual(456, SherpaTtsConfigSize);
+  Assert.AreEqual(104, SherpaGenerationConfigSize);
+  Assert.AreEqual(2, FindNeuralVoice('piper:ru-dmitri'));
+  Assert.IsTrue(NeuralVoices[0].Recommended);
+  Assert.AreEqual(-1, FindNeuralVoice('piper:nobody'));
+  for V in NeuralVoices do
+  begin
+    Assert.AreEqual(64, Integer(Length(V.Sha256)));
+    Assert.IsTrue(V.License <> '');
+  end;
+  Packages := NeuralVoicePackages(NeuralVoices[0]);
+  Assert.AreEqual(2, Integer(Length(Packages)));
+  // Only espeak-ng.dll and its data of the 59 MB archive.
+  Assert.AreEqual(2, Integer(Length(Packages[0].Members)));
+  Assert.AreEqual('vits-piper-ru_RU-ruslan-medium/ru_RU-ruslan-medium.onnx', Packages[1].Members[0]);
+  Assert.IsTrue(Packages[1].Url.EndsWith('tts-models/vits-piper-ru_RU-ruslan-medium.tar.bz2'));
+end;
+
+procedure TReadAloudTests.MixedLanguages;
+var
+  P: TArray<TReadSegment>;
+  Ru, En: string;
+begin
+  // A whole English phrase gets the English voice.
+  P := SplitByLanguage('Он сказал: The quick brown fox jumps. И ушёл.');
+  Assert.AreEqual(3, Integer(Length(P)));
+  Assert.AreEqual('Он сказал:', P[0].Text);
+  Assert.AreEqual(Integer($0419), Integer(P[0].Language));
+  Assert.AreEqual('The quick brown fox jumps.', P[1].Text);
+  Assert.AreEqual(Integer($0409), Integer(P[1].Language));
+  Assert.AreEqual('И ушёл.', P[2].Text);
+  // Short inserts stay in the Russian phrase.
+  P := SplitByLanguage('Нажмите Ctrl+C и откройте Word, 2 раза.');
+  Assert.AreEqual(1, Integer(Length(P)));
+  Assert.AreEqual(Integer($0419), Integer(P[0].Language));
+  // English text with a Russian word: Cyrillic always to the Russian voice.
+  P := SplitByLanguage('Say привет to everyone here');
+  Assert.AreEqual(3, Integer(Length(P)));
+  Assert.AreEqual('Say', P[0].Text);
+  Assert.AreEqual(Integer($0409), Integer(P[0].Language));
+  Assert.AreEqual('привет', P[1].Text);
+  Assert.AreEqual('to everyone here', P[2].Text);
+  // The rule is per sentence: an English sentence next to it does not
+  // split a Russian one.
+  P := SplitByLanguage('Он сказал: We need to ship this feature before Friday. ' +
+    'Нажмите Ctrl+C и откройте Word.');
+  Assert.AreEqual(3, Integer(Length(P)));
+  Assert.AreEqual('Нажмите Ctrl+C и откройте Word.', P[2].Text);
+  Assert.AreEqual(Integer($0419), Integer(P[2].Language));
+  // Short English text alone stays English.
+  P := SplitByLanguage('Thank you!');
+  Assert.AreEqual(1, Integer(Length(P)));
+  Assert.AreEqual(Integer($0409), Integer(P[0].Language));
+  // The single voice of the first builds goes to its language.
+  Ru := '';
+  En := '';
+  MigrateReadAloudVoice('piper:ru-irina', Ru, En);
+  Assert.AreEqual('piper:ru-irina', Ru);
+  MigrateReadAloudVoice('HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Speech_OneCore\Voices\Tokens\MSTTS_V110_enUS_ZiraM', Ru, En);
+  Assert.IsTrue(En.EndsWith('ZiraM'));
+  Ru := '';
+  MigrateReadAloudVoice('HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Speech\Voices\Tokens\TTS_MS_RU-RU_IRINA_11.0', Ru, En);
+  Assert.IsTrue(Ru.EndsWith('IRINA_11.0'));
 end;
 
 initialization

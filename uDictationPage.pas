@@ -352,7 +352,9 @@ const
     (Ru: 'Загрузка движка распознавания…'; En: 'Downloading the recognition engine…'),
     (Ru: 'Загрузка модели…'; En: 'Downloading the model…'),
     (Ru: 'Проверка файла…'; En: 'Checking the file…'),
-    (Ru: 'Распаковка…'; En: 'Unpacking…'));
+    (Ru: 'Распаковка…'; En: 'Unpacking…'),
+    (Ru: 'Загрузка транскрипции…'; En: 'Downloading the phonemizer…'),
+    (Ru: 'Загрузка голоса…'; En: 'Downloading the voice…'));
 var
   Model: TSpeechModel;
   Installed, Cloud, Downloading: Boolean;

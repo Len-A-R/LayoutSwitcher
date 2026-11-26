@@ -9,7 +9,7 @@
 interface
 
 uses
-  System.SysUtils, System.Variants;
+  System.SysUtils, System.Variants, uNeuralVoice;
 
 type
   TReadAloudVoice = record
@@ -18,23 +18,56 @@ type
     Language: Word;      // LANGID: $0419 Russian, $0409 English...
   end;
 
+  // A piece of a paragraph in one language.
+  TReadSegment = record
+    Text: string;
+    Language: Word;         // $0419 or $0409
+    ParagraphEnd: Boolean;
+  end;
+
+  // Segments read one after another by one engine: a neural voice (or
+  // several), or one voice of Windows.
+  TReadRun = record
+    Neural: Boolean;
+    Segments: TArray<TNeuralSegment>;
+    WindowsVoice: Integer;
+    WindowsXml: string;
+  end;
+
   TReadAloud = class
   private
     FVoice: OleVariant;
     FVoices: TArray<TReadAloudVoice>;
     FTokens: TArray<OleVariant>;
     FLoaded: Boolean;
+    FNeural: TNeuralSpeaker;
+    FRuns: TArray<TReadRun>;
+    FRunIndex: Integer;
+    FSpeedIndex: Integer;
+    FWindowsError: string;
     procedure EnsureVoices;
+    function WindowsVoiceFor(const VoiceId: string; Language: Word; out ErrorText: string): Integer;
+    function StartRun(Index: Integer): Boolean;
+    function RunActive: Boolean;
   public
+    constructor Create;
     destructor Destroy; override;
-    // All installed voices, Narrator voices first.
+    // The voices of Windows, Narrator voices first.
     function Voices: TArray<TReadAloudVoice>;
-    // Reads Text with the voice VoiceId ('' or not found: a voice of the
-    // language of the text).  Rate: -10..10, 0 is normal.  False with
-    // ErrorText when no voice can speak.
-    function Speak(const Text, VoiceId: string; Rate: Integer; out ErrorText: string): Boolean;
+    // Reads Text: Russian pieces with VoiceRu, English ones with VoiceEn
+    // ("piper:<id>" a neural voice, a token id a voice of Windows; '' or
+    // not installed: the neural voice of the language when downloaded,
+    // otherwise a voice of Windows of the language).  SpeedIndex:
+    // READ_ALOUD_SPEED_NAMES.  False with ErrorText when no voice can
+    // speak; a neural voice may fail later (TakeError).
+    function Speak(const Text, VoiceRu, VoiceEn: string; SpeedIndex: Integer;
+      out ErrorText: string): Boolean;
     procedure Stop;
     function Speaking: Boolean;
+    // An error of a neural voice that came up while reading, once.
+    function TakeError: string;
+    // Frees the loaded neural voice (it takes about 100 MB).
+    procedure Unload;
   end;
 
 // The language of a text by its letters: Cyrillic - Russian, otherwise English.
@@ -46,17 +79,32 @@ function ParseVoiceLanguage(const Value: string): Word;
 function FindVoiceForLanguage(const Voices: TArray<TReadAloudVoice>; Language: Word): Integer;
 // A valid index of READ_ALOUD_RATES (1, normal speed, for anything else).
 function ReadAloudSpeedIndex(Value: Integer): Integer;
+// The text for a neural voice as paragraphs: abbreviations spelled out
+// (Russian), list markers and Markdown dropped, a full stop after a line
+// without a final mark, a dash between words read as a pause (a comma).
+function PrepareNeuralText(const Text: string; Russian: Boolean): TArray<string>;
+// The installed neural voice of a language, -1 if none.
+function InstalledNeuralVoiceFor(Language: Word): Integer;
+// A paragraph cut where the alphabet changes: Cyrillic is Russian, Latin is
+// English.  In a mostly Russian sentence a Latin insert shorter than
+// MIN_ENGLISH_WORDS words stays in the Russian piece (a term, a program
+// name: one voice for the phrase).
+function SplitByLanguage(const Paragraph: string): TArray<TReadSegment>;
+
+const
+  MIN_ENGLISH_WORDS = 3;
 // The text as SAPI XML with pauses the voices of Windows hardly make by
 // themselves: after a sentence, a comma, a dash, at the end of a line
 // without punctuation (a heading, a list item) and between paragraphs.
 // Russian abbreviations are spelled out ("т. е." - "то есть"), list
 // markers and Markdown symbols are dropped.
-function PrepareSpeech(const Text: string; Russian: Boolean): string;
+function PrepareSpeech(const Text: string; Russian: Boolean; FinalStop: Boolean = True): string;
 
 const
   // SAPI rates of the speed choices 0.75x, 1x, 1.25x, 1.5x, 2x (the rate
   // is about 3^(rate/10) times the normal speed).
   READ_ALOUD_RATES: array[0..4] of Integer = (-3, 0, 2, 4, 6);
+  READ_ALOUD_SPEEDS: array[0..4] of Single = (0.75, 1, 1.25, 1.5, 2);
   READ_ALOUD_SPEED_NAMES: array[0..4] of string = ('0,75×', '1×', '1,25×', '1,5×', '2×');
 
 implementation
@@ -396,7 +444,7 @@ begin
   end;
 end;
 
-function PrepareSpeech(const Text: string; Russian: Boolean): string;
+function PrepareSpeech(const Text: string; Russian, FinalStop: Boolean): string;
 var
   Lines: TArray<string>;
   Line, Body: string;
@@ -435,7 +483,7 @@ begin
       Paragraph := False;
       // A line without a final mark (a heading, a list item) ends like a
       // sentence: with a falling tone and a pause.
-      if not InChars(Body[Length(Body)], '.!?…:;,")»') then
+      if FinalStop and not InChars(Body[Length(Body)], '.!?…:;,")»') then
         Body := Body + '.';
       B.Append(PrepareLine(Body));
       if not B.ToString.EndsWith('/>') then
@@ -447,7 +495,66 @@ begin
   end;
 end;
 
+function PrepareNeuralText(const Text: string; Russian: Boolean): TArray<string>;
+var
+  Body, Line, Paragraph: string;
+  Lines: TArray<string>;
+
+  procedure Flush;
+  begin
+    if Trim(Paragraph) <> '' then
+      Result := Result + [Trim(Paragraph)];
+    Paragraph := '';
+  end;
+
+begin
+  Result := nil;
+  Body := StringReplace(Text, #13#10, #10, [rfReplaceAll]);
+  Body := StringReplace(Body, #13, #10, [rfReplaceAll]);
+  Body := StringReplace(Body, #9, ' ', [rfReplaceAll]);
+  if Russian then
+    Body := ExpandAbbreviations(Body);
+  Body := StringReplace(Body, '**', '', [rfReplaceAll]);
+  Body := StringReplace(Body, '__', '', [rfReplaceAll]);
+  Body := StringReplace(Body, '`', '', [rfReplaceAll]);
+  // espeak-ng skips a dash: a comma keeps the pause.
+  Body := StringReplace(Body, ' — ', ', ', [rfReplaceAll]);
+  Body := StringReplace(Body, ' – ', ', ', [rfReplaceAll]);
+  Body := StringReplace(Body, ' - ', ', ', [rfReplaceAll]);
+  Lines := Body.Split([#10]);
+  Paragraph := '';
+  for Line in Lines do
+  begin
+    Body := CollapseSpaces(StripLineMarker(Trim(Line)));
+    if Body = '' then
+    begin
+      Flush;
+      Continue;
+    end;
+    if not InChars(Body[Length(Body)], '.!?…:;,")»') then
+      Body := Body + '.';
+    Paragraph := Paragraph + ' ' + Body;
+  end;
+  Flush;
+end;
+
+function InstalledNeuralVoiceFor(Language: Word): Integer;
+var
+  I: Integer;
+begin
+  for I := Low(NeuralVoices) to High(NeuralVoices) do
+    if (NeuralVoices[I].Language = Language) and IsNeuralVoiceInstalled(NeuralVoices[I]) then
+      Exit(I);
+  Result := -1;
+end;
+
 { TReadAloud }
+
+constructor TReadAloud.Create;
+begin
+  inherited;
+  FNeural := TNeuralSpeaker.Create;
+end;
 
 destructor TReadAloud.Destroy;
 begin
@@ -459,6 +566,7 @@ begin
     end;
   FTokens := nil;
   FVoice := Unassigned;
+  FNeural.Free;
   inherited;
 end;
 
@@ -521,59 +629,298 @@ begin
   Result := FVoices;
 end;
 
-function TReadAloud.Speak(const Text, VoiceId: string; Rate: Integer;
+function SplitSentenceByLanguage(const Paragraph: string): TArray<TReadSegment>;
+type
+  TRun = record
+    Language: Word;
+    Start: Integer;         // index of its first word
+    Words: Integer;
+  end;
+var
+  Runs: TArray<TRun>;
+  I, J, WordStart, Next: Integer;
+  Language: Word;
+  Ch: Char;
+  Segment: TReadSegment;
+  RussianWords, EnglishWords: Integer;
+
+  procedure AddWord(Start: Integer; Lang: Word);
+  var
+    Run: TRun;
+  begin
+    if (Length(Runs) > 0) and (Runs[High(Runs)].Language = Lang) then
+      Inc(Runs[High(Runs)].Words)
+    else
+    begin
+      Run.Language := Lang;
+      Run.Start := Start;
+      Run.Words := 1;
+      Runs := Runs + [Run];
+    end;
+  end;
+
+begin
+  Result := nil;
+  Runs := nil;
+  // Words and their alphabet; other letters and digits belong to the piece
+  // they are in.
+  I := 1;
+  while I <= Length(Paragraph) do
+  begin
+    if not Paragraph[I].IsLetter then
+    begin
+      Inc(I);
+      Continue;
+    end;
+    WordStart := I;
+    Language := 0;
+    while (I <= Length(Paragraph)) and Paragraph[I].IsLetter do
+    begin
+      Ch := Paragraph[I];
+      case Ch of
+        'А'..'я', 'Ё', 'ё': Language := $0419;
+        'A'..'Z', 'a'..'z':
+          if Language = 0 then
+            Language := $0409;
+      end;
+      Inc(I);
+    end;
+    if Language <> 0 then
+      AddWord(WordStart, Language);
+  end;
+  if Length(Runs) = 0 then
+  begin
+    Segment.Text := Trim(Paragraph);
+    Segment.Language := TextLanguage(Paragraph);
+    Segment.ParagraphEnd := False;
+    if Segment.Text <> '' then
+      Result := [Segment];
+    Exit;
+  end;
+  // Short English inserts in a mostly Russian text join the Russian piece.
+  RussianWords := 0;
+  EnglishWords := 0;
+  for I := 0 to High(Runs) do
+    if Runs[I].Language = $0419 then
+      Inc(RussianWords, Runs[I].Words)
+    else
+      Inc(EnglishWords, Runs[I].Words);
+  if (RussianWords > 0) and (RussianWords >= EnglishWords) then
+    for I := 0 to High(Runs) do
+      if (Runs[I].Language = $0409) and (Runs[I].Words < MIN_ENGLISH_WORDS) then
+        Runs[I].Language := $0419;
+  // Neighbours of the same language become one piece.
+  I := 0;
+  while I < High(Runs) do
+    if Runs[I + 1].Language = Runs[I].Language then
+    begin
+      Inc(Runs[I].Words, Runs[I + 1].Words);
+      Delete(Runs, I + 1, 1);
+    end
+    else
+      Inc(I);
+  // A piece runs to the first word of the next one; the text before the
+  // first word goes to the first piece.
+  for J := 0 to High(Runs) do
+  begin
+    if J = 0 then
+      WordStart := 1
+    else
+      WordStart := Runs[J].Start;
+    if J < High(Runs) then
+      Next := Runs[J + 1].Start
+    else
+      Next := Length(Paragraph) + 1;
+    Segment.Text := Trim(Copy(Paragraph, WordStart, Next - WordStart));
+    Segment.Language := Runs[J].Language;
+    Segment.ParagraphEnd := False;
+    if Segment.Text <> '' then
+      Result := Result + [Segment];
+  end;
+end;
+
+// Sentences end with ".", "!", "?" or "…" followed by a space.
+function SplitSentences(const Text: string): TArray<string>;
+var
+  I, Start: Integer;
+begin
+  Result := nil;
+  Start := 1;
+  for I := 1 to Length(Text) - 1 do
+    if InChars(Text[I], '.!?…') and (Text[I + 1] = ' ') then
+    begin
+      Result := Result + [Copy(Text, Start, I - Start + 1)];
+      Start := I + 2;
+    end;
+  if Start <= Length(Text) then
+    Result := Result + [Copy(Text, Start, MaxInt)];
+end;
+
+function SplitByLanguage(const Paragraph: string): TArray<TReadSegment>;
+var
+  Sentence: string;
+  Segment: TReadSegment;
+begin
+  // The rule for short inserts looks at each sentence; neighbouring pieces
+  // of one language become one again.
+  Result := nil;
+  for Sentence in SplitSentences(Paragraph) do
+    for Segment in SplitSentenceByLanguage(Sentence) do
+      if (Length(Result) > 0) and (Result[High(Result)].Language = Segment.Language) then
+        Result[High(Result)].Text := Result[High(Result)].Text + ' ' + Segment.Text
+      else
+        Result := Result + [Segment];
+end;
+
+function TReadAloud.WindowsVoiceFor(const VoiceId: string; Language: Word;
+  out ErrorText: string): Integer;
+var
+  I: Integer;
+begin
+  ErrorText := '';
+  EnsureVoices;
+  Result := -1;
+  if (VoiceId <> '') and not VoiceId.StartsWith(NEURAL_VOICE_PREFIX) then
+    for I := 0 to High(FVoices) do
+      if SameText(FVoices[I].Id, VoiceId) then
+        Result := I;
+  if Result < 0 then
+    Result := FindVoiceForLanguage(FVoices, Language);
+  if Result >= 0 then
+    Exit;
+  // A Russian text read by an English voice is gibberish.
+  if Language = $0419 then
+    ErrorText := T('Нет русского голоса. Скачайте нейросетевой голос на вкладке «Чтение ' +
+      'вслух» или добавьте голос Windows: Параметры → Время и язык → Язык и регион → ' +
+      'Русский → Языковые параметры → Речь.', 'No Russian voice. Download a neural voice ' +
+      'on the Read aloud tab or add a Windows voice: Settings → Time & language → Language & ' +
+      'region → Russian → Language options → Speech.')
+  else if Length(FVoices) > 0 then
+    Result := 0
+  else
+    ErrorText := T('В Windows нет ни одного голоса. Скачайте нейросетевой голос на вкладке ' +
+      '«Чтение вслух».', 'Windows has no voice. Download a neural voice on the Read aloud tab.');
+end;
+
+function TReadAloud.Speak(const Text, VoiceRu, VoiceEn: string; SpeedIndex: Integer;
   out ErrorText: string): Boolean;
 var
-  I, Index: Integer;
-  Language: Word;
+  Paragraph, VoiceId: string;
+  Segments, Part: TArray<TReadSegment>;
+  Segment: TReadSegment;
+  NeuralSegment: TNeuralSegment;
+  Run: TReadRun;
+  Neural, Windows: Integer;
+  Last: Boolean;
 begin
   Result := False;
   ErrorText := '';
-  EnsureVoices;
-  Index := -1;
-  if VoiceId <> '' then
-    for I := 0 to High(FVoices) do
-      if SameText(FVoices[I].Id, VoiceId) then
-        Index := I;
-  if Index < 0 then
+  Stop;
+  FSpeedIndex := ReadAloudSpeedIndex(SpeedIndex);
+  Segments := nil;
+  for Paragraph in PrepareNeuralText(Text, True) do
   begin
-    Language := TextLanguage(Text);
-    Index := FindVoiceForLanguage(FVoices, Language);
-    // A Russian text read by an English voice is gibberish.
-    if (Index < 0) and (Language = $0419) then
+    Part := SplitByLanguage(Paragraph);
+    if Length(Part) > 0 then
+      Part[High(Part)].ParagraphEnd := True;
+    Segments := Segments + Part;
+  end;
+  if Length(Segments) = 0 then
+    Exit(True);
+  // Each piece to the voice of its language; neighbouring pieces of one
+  // engine (and one Windows voice) make one run.
+  FRuns := nil;
+  for Segment in Segments do
+  begin
+    if Segment.Language = $0419 then
+      VoiceId := VoiceRu
+    else
+      VoiceId := VoiceEn;
+    Neural := -1;
+    if VoiceId.StartsWith(NEURAL_VOICE_PREFIX) then
     begin
-      ErrorText := T('В Windows нет русского голоса. Добавьте: Параметры → Время и язык → ' +
-        'Язык и регион → Русский → Языковые параметры → Речь.',
-        'Windows has no Russian voice. Add one: Settings → Time & language → Language & ' +
-        'region → Russian → Language options → Speech.');
-      Exit;
+      Neural := FindNeuralVoice(VoiceId);
+      if (Neural >= 0) and not IsNeuralVoiceInstalled(NeuralVoices[Neural]) then
+        Neural := -1;
+    end;
+    if (Neural < 0) and ((VoiceId = '') or VoiceId.StartsWith(NEURAL_VOICE_PREFIX)) then
+      Neural := InstalledNeuralVoiceFor(Segment.Language);
+    Last := Length(FRuns) > 0;
+    if Neural >= 0 then
+    begin
+      NeuralSegment.Text := Segment.Text;
+      NeuralSegment.VoiceIndex := Neural;
+      NeuralSegment.ParagraphEnd := Segment.ParagraphEnd;
+      if Last and FRuns[High(FRuns)].Neural then
+        FRuns[High(FRuns)].Segments := FRuns[High(FRuns)].Segments + [NeuralSegment]
+      else
+      begin
+        Run := Default(TReadRun);
+        Run.Neural := True;
+        Run.Segments := [NeuralSegment];
+        FRuns := FRuns + [Run];
+      end;
+    end
+    else
+    begin
+      Windows := WindowsVoiceFor(VoiceId, Segment.Language, ErrorText);
+      if Windows < 0 then
+      begin
+        FRuns := nil;
+        Exit;
+      end;
+      if Last and not FRuns[High(FRuns)].Neural and (FRuns[High(FRuns)].WindowsVoice = Windows) then
+        FRuns[High(FRuns)].WindowsXml := FRuns[High(FRuns)].WindowsXml + ' ' +
+          PrepareSpeech(Segment.Text, Segment.Language = $0419, Segment.ParagraphEnd)
+      else
+      begin
+        Run := Default(TReadRun);
+        Run.WindowsVoice := Windows;
+        Run.WindowsXml := PrepareSpeech(Segment.Text, Segment.Language = $0419,
+          Segment.ParagraphEnd);
+        FRuns := FRuns + [Run];
+      end;
+      if Segment.ParagraphEnd then
+        FRuns[High(FRuns)].WindowsXml := FRuns[High(FRuns)].WindowsXml + Silence(PAUSE_PARAGRAPH);
     end;
   end;
-  if (Index < 0) and (Length(FVoices) > 0) then
-    Index := 0;
-  if Index < 0 then
-  begin
-    ErrorText := T('В Windows нет ни одного голоса. Добавьте: Параметры → Время и язык → ' +
-      'Речь → Добавить голоса.', 'Windows has no voice. Add one: Settings → Time & ' +
-      'language → Speech → Add voices.');
+  Result := StartRun(0);
+  if not Result then
+    ErrorText := TakeError;
+end;
+
+function TReadAloud.StartRun(Index: Integer): Boolean;
+var
+  Run: TReadRun;
+begin
+  Result := False;
+  FRunIndex := Index;
+  if Index > High(FRuns) then
     Exit;
+  Run := FRuns[Index];
+  if Run.Neural then
+  begin
+    FNeural.Speak(Run.Segments, READ_ALOUD_SPEEDS[FSpeedIndex]);
+    Exit(True);
   end;
   try
     if VarIsEmpty(FVoice) then
       FVoice := CreateOleObject('SAPI.SpVoice');
-    PutRef(FVoice, 'Voice', FTokens[Index]);
-    FVoice.Rate := Rate;
-    FVoice.Speak(PrepareSpeech(Text, FVoices[Index].Language = $0419),
-      SVSF_ASYNC or SVSF_PURGE_BEFORE_SPEAK or SVSF_IS_XML);
+    PutRef(FVoice, 'Voice', FTokens[Run.WindowsVoice]);
+    FVoice.Rate := READ_ALOUD_RATES[FSpeedIndex];
+    FVoice.Speak(Run.WindowsXml, SVSF_ASYNC or SVSF_PURGE_BEFORE_SPEAK or SVSF_IS_XML);
     Result := True;
   except
     on E: Exception do
-      ErrorText := T('Не удалось прочитать текст: ', 'Could not read the text: ') + E.Message;
+      FWindowsError := T('Не удалось прочитать текст: ', 'Could not read the text: ') + E.Message;
   end;
 end;
 
 procedure TReadAloud.Stop;
 begin
+  FRuns := nil;
+  FRunIndex := 0;
+  FNeural.Stop;
   if VarIsEmpty(FVoice) then
     Exit;
   try
@@ -583,10 +930,31 @@ begin
   end;
 end;
 
+function TReadAloud.TakeError: string;
+begin
+  Result := FNeural.TakeError;
+  if Result = '' then
+    Result := FWindowsError;
+  FWindowsError := '';
+end;
+
+procedure TReadAloud.Unload;
+begin
+  FNeural.Unload;
+end;
+
 function TReadAloud.Speaking: Boolean;
 begin
-  Result := False;
-  if VarIsEmpty(FVoice) then
+  // The next run starts when one is done.
+  Result := RunActive;
+  while not Result and (FRunIndex < High(FRuns)) do
+    Result := StartRun(FRunIndex + 1) and RunActive;
+end;
+
+function TReadAloud.RunActive: Boolean;
+begin
+  Result := FNeural.Speaking;
+  if Result or VarIsEmpty(FVoice) then
     Exit;
   try
     Result := FVoice.Status.RunningState <> SRSE_DONE;

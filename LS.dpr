@@ -39,6 +39,8 @@ uses
   uDictation in 'uDictation.pas',
   uDictationWindow in 'uDictationWindow.pas',
   uReadAloud in 'uReadAloud.pas',
+  uNeuralVoice in 'uNeuralVoice.pas',
+  uVoicePage in 'uVoicePage.pas',
   uDictationPage in 'uDictationPage.pas',
   uOperationWorker in 'uOperationWorker.pas',
   uMain in 'uMain.pas' {FormMain};

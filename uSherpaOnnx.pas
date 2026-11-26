@@ -158,8 +158,117 @@ type
     property ModelId: string read FModelId;
   end;
 
+  // Offline text-to-speech (only the VITS/Piper part is used).
+  TSherpaTtsVits = record
+    model, lexicon, tokens, data_dir: PSherpaChar;
+    noise_scale, noise_scale_w, length_scale: Single;
+    dict_dir: PSherpaChar;
+  end;
+
+  TSherpaTtsMatcha = record
+    acoustic_model, vocoder, lexicon, tokens, data_dir: PSherpaChar;
+    noise_scale, length_scale: Single;
+    dict_dir: PSherpaChar;
+  end;
+
+  TSherpaTtsKokoro = record
+    model, voices, tokens, data_dir: PSherpaChar;
+    length_scale: Single;
+    dict_dir, lexicon, lang: PSherpaChar;
+  end;
+
+  TSherpaTtsKitten = record
+    model, voices, tokens, data_dir: PSherpaChar;
+    length_scale: Single;
+    lexicon: PSherpaChar;
+  end;
+
+  TSherpaTtsZipvoice = record
+    tokens, encoder, decoder, vocoder, data_dir, lexicon: PSherpaChar;
+    feat_scale, t_shift, target_rms, guidance_scale: Single;
+  end;
+
+  TSherpaTtsPocket = record
+    lm_flow, lm_main, encoder, decoder, text_conditioner, vocab_json,
+      token_scores_json: PSherpaChar;
+    voice_embedding_cache_capacity: Int32;
+  end;
+
+  TSherpaTtsSupertonic = record
+    duration_predictor, text_encoder, vector_estimator, vocoder, tts_json,
+      unicode_indexer, voice_style: PSherpaChar;
+  end;
+
+  TSherpaTtsModelConfig = record
+    vits: TSherpaTtsVits;
+    num_threads: Int32;
+    debug: Int32;
+    provider: PSherpaChar;
+    matcha: TSherpaTtsMatcha;
+    kokoro: TSherpaTtsKokoro;
+    kitten: TSherpaTtsKitten;
+    zipvoice: TSherpaTtsZipvoice;
+    pocket: TSherpaTtsPocket;
+    supertonic: TSherpaTtsSupertonic;
+  end;
+
+  TSherpaTtsConfig = record
+    model: TSherpaTtsModelConfig;
+    rule_fsts: PSherpaChar;
+    max_num_sentences: Int32;
+    rule_fars: PSherpaChar;
+    silence_scale: Single;
+  end;
+  PSherpaTtsConfig = ^TSherpaTtsConfig;
+
+  TSherpaGenerationConfig = record
+    silence_scale: Single;
+    speed: Single;
+    sid: Int32;
+    reference_audio: PSingle;
+    reference_audio_len: Int32;
+    reference_sample_rate: Int32;
+    reference_text: PSherpaChar;
+    num_steps: Int32;
+    extra: PSherpaChar;
+    phoneme_codepoints: PInteger;
+    phoneme_codepoints_lens: PInteger;
+    phoneme_codepoints_num_sentences: Int32;
+    tokens: Pointer;
+    tokens_lens: PInteger;
+    tokens_num_sentences: Int32;
+  end;
+  PSherpaGenerationConfig = ^TSherpaGenerationConfig;
+
+  TSherpaGeneratedAudio = record
+    samples: PSingle;
+    n: Int32;
+    sample_rate: Int32;
+  end;
+  PSherpaGeneratedAudio = ^TSherpaGeneratedAudio;
+
+  // One loaded voice (a Piper VITS model).  Not thread-safe.
+  TSpeechSynthesizer = class
+  private
+    FTts: Pointer;
+    FSampleRate: Integer;
+  public
+    // ModelFile: the .onnx; Tokens: tokens.txt; the scales come from the
+    // .onnx.json of the voice.  Raises an exception with a readable message
+    // when it cannot load.
+    constructor Create(const ModelFile, Tokens: string; Threads: Integer;
+      NoiseScale, NoiseScaleW, LengthScale: Single);
+    destructor Destroy; override;
+    // Mono samples in -1..1 at SampleRate for one sentence given as phoneme
+    // codepoints (espeak-ng IPA, see uNeuralVoice); Speed 1 is normal.
+    function GeneratePhonemes(const Codepoints: TArray<Integer>; Speed: Single): TArray<Single>;
+    property SampleRate: Integer read FSampleRate;
+  end;
+
 // For the tests: sizes of the mirrored C structures.
 function SherpaConfigSize: Integer;
+function SherpaTtsConfigSize: Integer;
+function SherpaGenerationConfigSize: Integer;
 
 implementation
 
@@ -176,6 +285,12 @@ type
   TDecodeOfflineStream = procedure(Recognizer, Stream: Pointer); cdecl;
   TGetOfflineStreamResult = function(Stream: Pointer): PSherpaOfflineRecognizerResult; cdecl;
   TDestroyOfflineRecognizerResult = procedure(Result: PSherpaOfflineRecognizerResult); cdecl;
+  TCreateOfflineTts = function(Config: PSherpaTtsConfig): Pointer; cdecl;
+  TDestroyOfflineTts = procedure(Tts: Pointer); cdecl;
+  TOfflineTtsSampleRate = function(Tts: Pointer): Int32; cdecl;
+  TOfflineTtsGenerateWithConfig = function(Tts: Pointer; Text: PSherpaChar;
+    Config: PSherpaGenerationConfig; Callback, Arg: Pointer): PSherpaGeneratedAudio; cdecl;
+  TDestroyGeneratedAudio = procedure(Audio: PSherpaGeneratedAudio); cdecl;
 
 var
   GLibrary: HMODULE;
@@ -187,10 +302,26 @@ var
   DecodeOfflineStream: TDecodeOfflineStream;
   GetOfflineStreamResult: TGetOfflineStreamResult;
   DestroyOfflineRecognizerResult: TDestroyOfflineRecognizerResult;
+  // Bound separately: an engine without text-to-speech still recognizes.
+  CreateOfflineTts: TCreateOfflineTts;
+  DestroyOfflineTts: TDestroyOfflineTts;
+  OfflineTtsSampleRate: TOfflineTtsSampleRate;
+  OfflineTtsGenerateWithConfig: TOfflineTtsGenerateWithConfig;
+  DestroyGeneratedAudio: TDestroyGeneratedAudio;
 
 function SherpaConfigSize: Integer;
 begin
   Result := SizeOf(TSherpaOfflineRecognizerConfig);
+end;
+
+function SherpaTtsConfigSize: Integer;
+begin
+  Result := SizeOf(TSherpaTtsConfig);
+end;
+
+function SherpaGenerationConfigSize: Integer;
+begin
+  Result := SizeOf(TSherpaGenerationConfig);
 end;
 
 procedure LoadEngine;
@@ -227,6 +358,11 @@ begin
     @DecodeOfflineStream := Bind('SherpaOnnxDecodeOfflineStream');
     @GetOfflineStreamResult := Bind('SherpaOnnxGetOfflineStreamResult');
     @DestroyOfflineRecognizerResult := Bind('SherpaOnnxDestroyOfflineRecognizerResult');
+    @CreateOfflineTts := GetProcAddress(GLibrary, 'SherpaOnnxCreateOfflineTts');
+    @DestroyOfflineTts := GetProcAddress(GLibrary, 'SherpaOnnxDestroyOfflineTts');
+    @OfflineTtsSampleRate := GetProcAddress(GLibrary, 'SherpaOnnxOfflineTtsSampleRate');
+    @OfflineTtsGenerateWithConfig := GetProcAddress(GLibrary, 'SherpaOnnxOfflineTtsGenerateWithConfig');
+    @DestroyGeneratedAudio := GetProcAddress(GLibrary, 'SherpaOnnxDestroyOfflineTtsGeneratedAudio');
   except
     FreeLibrary(GLibrary);
     GLibrary := 0;
@@ -344,6 +480,91 @@ begin
     end;
   finally
     DestroyOfflineStream(Stream);
+  end;
+end;
+
+{ TSpeechSynthesizer }
+
+constructor TSpeechSynthesizer.Create(const ModelFile, Tokens: string;
+  Threads: Integer; NoiseScale, NoiseScaleW, LengthScale: Single);
+var
+  Config: TSherpaTtsConfig;
+  Model, TokensPath, Provider: UTF8String;
+begin
+  inherited Create;
+  LoadEngine;
+  if not Assigned(CreateOfflineTts) or not Assigned(OfflineTtsGenerateWithConfig) or
+     not Assigned(DestroyGeneratedAudio) then
+  begin
+    // Dictation loaded the old build in this session; the new one is on
+    // the disk already.
+    if IsSpeechTtsEngineInstalled then
+      raise Exception.Create(T('Перезапустите LayoutSwitcher: после обновления движка голос ' +
+        'заработает со следующего запуска.', 'Restart LayoutSwitcher: after the engine update ' +
+        'the voice works from the next start.'));
+    raise Exception.Create(T('Установленный движок не умеет синтезировать речь. Скачайте голос ' +
+      'заново: движок обновится.', 'The installed engine cannot synthesize speech. Download ' +
+      'the voice again: the engine will be updated.'));
+  end;
+  if not FileExists(ModelFile) or not FileExists(Tokens) then
+    raise Exception.Create(T('Файлы голоса повреждены. Скачайте голос заново.',
+      'The voice files are damaged. Download the voice again.'));
+  FillChar(Config, SizeOf(Config), 0);
+  Model := EnginePath(ModelFile);
+  TokensPath := EnginePath(Tokens);
+  Provider := 'cpu';
+  Config.model.vits.model := PSherpaChar(Model);
+  Config.model.vits.tokens := PSherpaChar(TokensPath);
+  Config.model.vits.noise_scale := NoiseScale;
+  Config.model.vits.noise_scale_w := NoiseScaleW;
+  Config.model.vits.length_scale := LengthScale;
+  Config.model.num_threads := Threads;
+  Config.model.provider := PSherpaChar(Provider);
+  Config.max_num_sentences := 1;
+  Config.silence_scale := 0.2;
+  FTts := CreateOfflineTts(@Config);
+  if FTts = nil then
+    raise Exception.Create(T('Не удалось загрузить голос', 'Could not load the voice'));
+  FSampleRate := OfflineTtsSampleRate(FTts);
+end;
+
+destructor TSpeechSynthesizer.Destroy;
+begin
+  if FTts <> nil then
+    DestroyOfflineTts(FTts);
+  inherited;
+end;
+
+function TSpeechSynthesizer.GeneratePhonemes(const Codepoints: TArray<Integer>;
+  Speed: Single): TArray<Single>;
+var
+  Config: TSherpaGenerationConfig;
+  Len: Integer;
+  Empty: UTF8String;
+  Audio: PSherpaGeneratedAudio;
+begin
+  Result := nil;
+  if Length(Codepoints) = 0 then
+    Exit;
+  FillChar(Config, SizeOf(Config), 0);
+  Config.silence_scale := 0.2;
+  Config.speed := Speed;
+  Len := Length(Codepoints);
+  Config.phoneme_codepoints := @Codepoints[0];
+  Config.phoneme_codepoints_lens := @Len;
+  Config.phoneme_codepoints_num_sentences := 1;
+  Empty := '';
+  Audio := OfflineTtsGenerateWithConfig(FTts, PSherpaChar(Empty), @Config, nil, nil);
+  if Audio = nil then
+    Exit;
+  try
+    if (Audio.samples <> nil) and (Audio.n > 0) then
+    begin
+      SetLength(Result, Audio.n);
+      Move(Audio.samples^, Result[0], Audio.n * SizeOf(Single));
+    end;
+  finally
+    DestroyGeneratedAudio(Audio);
   end;
 end;
 

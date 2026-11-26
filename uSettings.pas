@@ -85,9 +85,12 @@ type
     DictationCloudConsent: Boolean;
     // TDictationAiMode in uAiText: 0 = typed as recognized.
     DictationAiMode: Integer;
-    // Reading aloud: the voice (token id, '' = by the language of the text)
-    // and the speed (index of READ_ALOUD_RATES in uReadAloud, 1 = normal).
-    ReadAloudVoice: string;
+    // Reading aloud: the voice for Russian and for English text ('' =
+    // automatic, "piper:<id>" a neural voice, otherwise a token id of a
+    // Windows voice) and the speed (index of READ_ALOUD_RATES in uReadAloud,
+    // 1 = normal).
+    ReadAloudVoiceRu: string;
+    ReadAloudVoiceEn: string;
     ReadAloudSpeed: Integer;
     AutoSwitchExceptions: TArray<string>;
     // Programs where only the manual actions work (code editors, terminals).
@@ -159,6 +162,9 @@ function GestureName(Gesture: TLSGesture): string;
 // the value is missing).
 procedure MigrateActionGestures(var Gestures: TLSActionGestures;
   FromVersion: Integer = 1);
+// The single reading aloud voice of the first builds with reading aloud
+// to the voice of its language.
+procedure MigrateReadAloudVoice(const Voice: string; var VoiceRu, VoiceEn: string);
 
 function LoadSettings: TLSSettings;
 function SaveSettings(const Settings: TLSSettings): Boolean;
@@ -233,7 +239,10 @@ const
   VALUE_DICTATION_CLOUD_MODEL = 'DictationCloudModel';
   VALUE_DICTATION_CLOUD_CONSENT = 'DictationCloudConsent';
   VALUE_DICTATION_AI_MODE = 'DictationAiMode';
+  // One voice for every language (the first builds with reading aloud).
   VALUE_READ_ALOUD_VOICE = 'ReadAloudVoice';
+  VALUE_READ_ALOUD_VOICE_RU = 'ReadAloudVoiceRu';
+  VALUE_READ_ALOUD_VOICE_EN = 'ReadAloudVoiceEn';
   VALUE_READ_ALOUD_SPEED = 'ReadAloudSpeed';
   VALUE_CUSTOM_PROGRAMS = 'CustomPrograms';
   VALUE_AUTO_SWITCH_EXCEPTIONS = 'AutoSwitchExceptions';
@@ -315,7 +324,8 @@ begin
   Result.DictationCloudModel := DEFAULT_SPEECH_CLOUD_MODEL;
   Result.DictationCloudConsent := False;
   Result.DictationAiMode := 0;
-  Result.ReadAloudVoice := '';
+  Result.ReadAloudVoiceRu := '';
+  Result.ReadAloudVoiceEn := '';
   Result.ReadAloudSpeed := 1;
 end;
 
@@ -518,6 +528,22 @@ begin
   end;
 end;
 
+// The single voice of earlier settings goes to the language it speaks:
+// "piper:ru-..." and the Russian voices of Windows (their token ids hold
+// "RU-RU" or "ruRU") to Russian, the rest to English.
+procedure MigrateReadAloudVoice(const Voice: string; var VoiceRu, VoiceEn: string);
+var
+  Key: string;
+begin
+  if Voice = '' then
+    Exit;
+  Key := UpperCase(Voice);
+  if Key.StartsWith('PIPER:RU-') or (Pos('RU-RU', Key) > 0) or (Pos('RURU', Key) > 0) then
+    VoiceRu := Voice
+  else
+    VoiceEn := Voice;
+end;
+
 function ParseWordList(const Text: string): TArray<string>;
 var
   Part: string;
@@ -663,7 +689,12 @@ begin
     Result.DictationAiMode := Store.ReadInteger(VALUE_DICTATION_AI_MODE, 0);
     if (Result.DictationAiMode < 0) or (Result.DictationAiMode > 3) then
       Result.DictationAiMode := 0;
-    Result.ReadAloudVoice := Trim(Store.ReadString(VALUE_READ_ALOUD_VOICE, ''));
+    Result.ReadAloudVoiceRu := Trim(Store.ReadString(VALUE_READ_ALOUD_VOICE_RU, ''));
+    Result.ReadAloudVoiceEn := Trim(Store.ReadString(VALUE_READ_ALOUD_VOICE_EN, ''));
+    if not Store.ValueExists(VALUE_READ_ALOUD_VOICE_RU) and
+       not Store.ValueExists(VALUE_READ_ALOUD_VOICE_EN) then
+      MigrateReadAloudVoice(Trim(Store.ReadString(VALUE_READ_ALOUD_VOICE, '')),
+        Result.ReadAloudVoiceRu, Result.ReadAloudVoiceEn);
     Result.ReadAloudSpeed := Store.ReadInteger(VALUE_READ_ALOUD_SPEED, 1);
     if (Result.ReadAloudSpeed < 0) or (Result.ReadAloudSpeed > 4) then
       Result.ReadAloudSpeed := 1;
@@ -741,7 +772,8 @@ begin
     Store.WriteString(VALUE_DICTATION_CLOUD_MODEL, Settings.DictationCloudModel);
     Store.WriteBool(VALUE_DICTATION_CLOUD_CONSENT, Settings.DictationCloudConsent);
     Store.WriteInteger(VALUE_DICTATION_AI_MODE, Settings.DictationAiMode);
-    Store.WriteString(VALUE_READ_ALOUD_VOICE, Settings.ReadAloudVoice);
+    Store.WriteString(VALUE_READ_ALOUD_VOICE_RU, Settings.ReadAloudVoiceRu);
+    Store.WriteString(VALUE_READ_ALOUD_VOICE_EN, Settings.ReadAloudVoiceEn);
     Store.WriteInteger(VALUE_READ_ALOUD_SPEED, Settings.ReadAloudSpeed);
     Store.WriteString(VALUE_CUSTOM_PROGRAMS, ProcessListToText(Settings.CustomPrograms));
     Store.WriteString(VALUE_AUTO_SWITCH_EXCEPTIONS,

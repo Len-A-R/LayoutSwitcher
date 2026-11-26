@@ -76,3 +76,26 @@ model; none of them is included in the installer or in this repository.
 * Parakeet TDT 0.6B v3 (https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) by
   NVIDIA, Creative Commons Attribution 4.0 International (CC BY 4.0);
   converted to ONNX and quantized to int8 by the sherpa-onnx project.
+
+## Reading aloud with neural voices (downloaded on demand, x64)
+
+Downloaded only when the user chooses a neural voice; none of them is
+included in the installer or in this repository.
+
+* sherpa-onnx with text-to-speech (see above), Apache License 2.0.
+* espeak-ng (https://github.com/espeak-ng/espeak-ng), GNU General Public
+  License v3.0: `espeak-ng.dll` and `espeak-ng-data` of the Windows build of
+  piper-phonemize (https://github.com/rhasspy/piper-phonemize, MIT License),
+  loaded at run time to turn text into phonemes.
+* Piper voices (https://github.com/rhasspy/piper, MIT License; models from
+  https://huggingface.co/rhasspy/piper-voices, converted by the sherpa-onnx
+  project). The licenses of the voice data, from their model cards:
+  * ru_RU denis: dataset CC0 (https://github.com/OHF-Voice/voice-datasets).
+  * ru_RU dmitri: dataset CC0; fine-tuned from the hifi_tts_92 base model
+    (Hi-Fi TTS, CC BY 4.0).
+  * ru_RU irina: dataset RHVoice (https://github.com/RHVoice/RHVoice), license
+    not stated; fine-tuned from the en_US lessac voice.
+  * ru_RU ruslan: RUSLAN corpus (https://ruslan-corpus.github.io/),
+    CC BY-NC-SA 4.0, non-commercial use only.
+  * en_US ljspeech: LJ Speech dataset (https://keithito.com/LJ-Speech-Dataset/),
+    public domain.

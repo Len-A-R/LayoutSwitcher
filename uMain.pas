@@ -13,7 +13,7 @@ uses
   Vcl.StdCtrls, Vcl.ComCtrls, Vcl.Grids, uProgramList, uAiExplain, uExplainWindow, uModernUI,
   uSettings, uGestureDetector, uOperationWorker, uConversionChain,
   uLayoutIndicator, uUpdateCheck, uUpdateProgress, uLayoutConverter, uTextTools,
-  uDictation, uDictationPage, uAiText, uReadAloud;
+  uDictation, uDictationPage, uAiText, uReadAloud, uVoicePage;
 
 const
   INSTANCE_WINDOW_PROP = 'LayoutSwitcher.Instance.v2';
@@ -304,11 +304,10 @@ type
     // Alt+Scroll Lock toggled the Scroll Lock light: switched back when
     // Scroll Lock is released.
     FRestoreScrollOnUp: Boolean;
-    lblReadAloudVoice: TLabel;
-    cbReadAloudVoice: TComboBox;
-    cbReadAloudSpeed: TComboBox;
-    FReadAloudVoiceIds: TArray<string>;
     tsDictation: TTabSheet;
+    tsReadAloud: TTabSheet;
+    FVoicePage: TVoicePage;
+    FReadAloudUnloadTimer: TTimer;
     // Recognized text waiting for a running operation to finish.
     FPendingDictation: string;
     // The spoken command for the next laVoiceEdit request.
@@ -381,8 +380,8 @@ type
     procedure ModernizeSettingsWindow;
     procedure CreateDictationPage;
     procedure CreateReadAloudControls;
-    procedure FillReadAloudControls;
-    procedure ReadAloudControlChange(Sender: TObject);
+    procedure VoicePageChange(Sender: TObject);
+    procedure ReadAloudUnload(Sender: TObject);
     procedure StartReadAloud(const Text: string);
     procedure StopReadAloud(const Reason: string);
     procedure ReadAloudTick(Sender: TObject);
@@ -1815,7 +1814,7 @@ begin
     cbVoiceEdit.ItemIndex := Ord(FSettings.GestureForAction(laVoiceEdit));
     cbAiFix.ItemIndex := Ord(FSettings.GestureForAction(laAiFix));
     cbReadAloud.ItemIndex := Ord(FSettings.GestureForAction(laReadAloud));
-    FillReadAloudControls;
+    FVoicePage.Load(FSettings);
     FDictationPage.Load(FSettings);
     edDeepLKey.Text := FSettings.DeepLApiKey;
     cbTranslator.ItemIndex := FSettings.Translator;
@@ -2015,7 +2014,8 @@ begin
   FNav := TNavBar.Create(Self);
   FNav.Parent := Self;
   FNav.SetBounds(0, 0, S(NAV_WIDTH), ClientHeight);
-  FNav.Setup(pcMain, [#$E713, #$E765, #$E774, #$E8FB, #$E8AB, #$E753, #$E720, #$E733], FUiTheme);
+  FNav.Setup(pcMain, [#$E713, #$E765, #$E774, #$E8FB, #$E8AB, #$E753, #$E720, #$E767, #$E733],
+    FUiTheme);
   FNav.Title := 'LayoutSwitcher';
   FNav.OnChange := NavChange;
 
@@ -2746,8 +2746,8 @@ begin
     lblVoiceEdit.Caption := ActionName(laVoiceEdit);
     lblAiFix.Caption := ActionName(laAiFix);
     lblReadAloud.Caption := ActionName(laReadAloud);
-    lblReadAloudVoice.Caption := T('Голос для чтения вслух:', 'Voice for reading aloud:');
-    FillReadAloudControls;
+    tsReadAloud.Caption := T('Чтение вслух', 'Read aloud');
+    FVoicePage.ApplyLanguage;
     tsServices.Caption := T('Сервисы', 'Services');
     tsDictation.Caption := T('Диктовка', 'Dictation');
     FDictationPage.ApplyLanguage;
@@ -3708,84 +3708,40 @@ begin
 end;
 
 procedure TFormMain.CreateReadAloudControls;
-
-  function S(Value: Integer): Integer;
-  begin
-    Result := MulDiv(Value, Screen.PixelsPerInch, 96);
-  end;
-
 begin
   FReadAloud := TReadAloud.Create;
   FReadAloudTimer := TTimer.Create(Self);
   FReadAloudTimer.Enabled := False;
   FReadAloudTimer.Interval := 250;
   FReadAloudTimer.OnTimer := ReadAloudTick;
-  // Under the AI settings on the Services page: the voice and the speed.
-  lblReadAloudVoice := TLabel.Create(Self);
-  lblReadAloudVoice.Parent := tsServices;
-  lblReadAloudVoice.SetBounds(S(12), S(369), S(220), S(13));
-  cbReadAloudVoice := TComboBox.Create(Self);
-  cbReadAloudVoice.Parent := tsServices;
-  cbReadAloudVoice.Style := csDropDownList;
-  cbReadAloudVoice.SetBounds(S(240), S(366), S(170), S(21));
-  cbReadAloudVoice.OnChange := ReadAloudControlChange;
-  cbReadAloudSpeed := TComboBox.Create(Self);
-  cbReadAloudSpeed.Parent := tsServices;
-  cbReadAloudSpeed.Style := csDropDownList;
-  cbReadAloudSpeed.SetBounds(S(416), S(366), S(76), S(21));
-  cbReadAloudSpeed.OnChange := ReadAloudControlChange;
+  // A neural voice takes about 100 MB: freed after 5 minutes without reading.
+  FReadAloudUnloadTimer := TTimer.Create(Self);
+  FReadAloudUnloadTimer.Enabled := False;
+  FReadAloudUnloadTimer.Interval := 5 * 60 * 1000;
+  FReadAloudUnloadTimer.OnTimer := ReadAloudUnload;
+  // The engine build without text-to-speech of 2.5 is not needed any more
+  // once a voice brought the current one (nothing is loaded yet).
+  CleanupLegacySpeechEngine;
+  tsReadAloud := TTabSheet.Create(Self);
+  tsReadAloud.PageControl := pcMain;
+  tsReadAloud.PageIndex := tsDictation.PageIndex + 1;
+  FVoicePage := TVoicePage.CreatePage(Self, tsReadAloud, FReadAloud);
+  FVoicePage.OnChange := VoicePageChange;
 end;
 
-procedure TFormMain.FillReadAloudControls;
-var
-  Voice: TReadAloudVoice;
-  I, Index: Integer;
-  Saved: Boolean;
-begin
-  if cbReadAloudVoice = nil then
-    Exit;
-  Saved := FUpdatingControls;
-  FUpdatingControls := True;
-  try
-    cbReadAloudVoice.Items.BeginUpdate;
-    try
-      cbReadAloudVoice.Items.Clear;
-      cbReadAloudVoice.Items.Add(T('По языку текста', 'By the language of the text'));
-      FReadAloudVoiceIds := [''];
-      for Voice in FReadAloud.Voices do
-      begin
-        cbReadAloudVoice.Items.Add(Voice.Name);
-        FReadAloudVoiceIds := FReadAloudVoiceIds + [Voice.Id];
-      end;
-    finally
-      cbReadAloudVoice.Items.EndUpdate;
-    end;
-    Index := 0;
-    for I := 0 to High(FReadAloudVoiceIds) do
-      if SameText(FReadAloudVoiceIds[I], FSettings.ReadAloudVoice) then
-        Index := I;
-    cbReadAloudVoice.ItemIndex := Index;
-    cbReadAloudVoice.Hint := T('Голоса Windows: добавить можно в Параметрах → Время и язык → Речь.',
-      'Windows voices: add more in Settings → Time & language → Speech.');
-    cbReadAloudVoice.ShowHint := True;
-    cbReadAloudSpeed.Items.Clear;
-    for I := Low(READ_ALOUD_SPEED_NAMES) to High(READ_ALOUD_SPEED_NAMES) do
-      cbReadAloudSpeed.Items.Add(READ_ALOUD_SPEED_NAMES[I]);
-    cbReadAloudSpeed.ItemIndex := FSettings.ReadAloudSpeed;
-  finally
-    FUpdatingControls := Saved;
-  end;
-end;
-
-procedure TFormMain.ReadAloudControlChange(Sender: TObject);
+procedure TFormMain.VoicePageChange(Sender: TObject);
 begin
   if FUpdatingControls then
     Exit;
-  if (cbReadAloudVoice.ItemIndex >= 0) and (cbReadAloudVoice.ItemIndex <= High(FReadAloudVoiceIds)) then
-    FSettings.ReadAloudVoice := FReadAloudVoiceIds[cbReadAloudVoice.ItemIndex];
-  if cbReadAloudSpeed.ItemIndex >= 0 then
-    FSettings.ReadAloudSpeed := cbReadAloudSpeed.ItemIndex;
+  FVoicePage.Save(FSettings);
   ApplySettings;
+end;
+
+procedure TFormMain.ReadAloudUnload(Sender: TObject);
+begin
+  FReadAloudUnloadTimer.Enabled := False;
+  if not FReadAloud.Speaking then
+    FReadAloud.Unload;
 end;
 
 procedure TFormMain.StartReadAloud(const Text: string);
@@ -3793,8 +3749,9 @@ var
   ErrorText, Hint: string;
   Gesture: TLSGesture;
 begin
-  if not FReadAloud.Speak(Text, FSettings.ReadAloudVoice,
-    READ_ALOUD_RATES[ReadAloudSpeedIndex(FSettings.ReadAloudSpeed)], ErrorText) then
+  FReadAloudUnloadTimer.Enabled := False;
+  if not FReadAloud.Speak(Text, FSettings.ReadAloudVoiceRu, FSettings.ReadAloudVoiceEn,
+    FSettings.ReadAloudSpeed, ErrorText) then
   begin
     DiagnosticsLogFmt('read_aloud.failed error="%s"', [ErrorText]);
     FDictation.ShowError(ErrorText);
@@ -3814,6 +3771,8 @@ begin
 end;
 
 procedure TFormMain.StopReadAloud(const Reason: string);
+var
+  ErrorText: string;
 begin
   FReadAloudTimer.Enabled := False;
   if not FReadAloudActive then
@@ -3822,6 +3781,16 @@ begin
   FReadAloud.Stop;
   FDictation.HideBusy;
   DiagnosticsLogFmt('read_aloud.stop reason=%s', [Reason]);
+  // A neural voice that could not read (a damaged download, no Visual C++
+  // runtime...) reports it now.
+  ErrorText := FReadAloud.TakeError;
+  if ErrorText <> '' then
+  begin
+    DiagnosticsLogFmt('read_aloud.error "%s"', [ErrorText]);
+    FDictation.ShowError(ErrorText);
+  end;
+  FReadAloudUnloadTimer.Enabled := False;
+  FReadAloudUnloadTimer.Enabled := True;
 end;
 
 procedure TFormMain.ReadAloudTick(Sender: TObject);
