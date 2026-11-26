@@ -46,6 +46,12 @@ function ParseVoiceLanguage(const Value: string): Word;
 function FindVoiceForLanguage(const Voices: TArray<TReadAloudVoice>; Language: Word): Integer;
 // A valid index of READ_ALOUD_RATES (1, normal speed, for anything else).
 function ReadAloudSpeedIndex(Value: Integer): Integer;
+// The text as SAPI XML with pauses the voices of Windows hardly make by
+// themselves: after a sentence, a comma, a dash, at the end of a line
+// without punctuation (a heading, a list item) and between paragraphs.
+// Russian abbreviations are spelled out ("т. е." - "то есть"), list
+// markers and Markdown symbols are dropped.
+function PrepareSpeech(const Text: string; Russian: Boolean): string;
 
 const
   // SAPI rates of the speed choices 0.75x, 1x, 1.25x, 1.5x, 2x (the rate
@@ -56,12 +62,23 @@ const
 implementation
 
 uses
-  Winapi.Windows, Winapi.ActiveX, System.Win.ComObj, uLocale;
+  Winapi.Windows, Winapi.ActiveX, System.Win.ComObj,
+  System.Character, uLocale;
 
 const
   SVSF_ASYNC = 1;
   SVSF_PURGE_BEFORE_SPEAK = 2;
+  SVSF_IS_XML = 8;
   SVSF_IS_NOT_XML = 16;
+  // Pauses, ms.
+  PAUSE_SENTENCE = 380;
+  PAUSE_ELLIPSIS = 550;
+  PAUSE_COMMA = 140;
+  PAUSE_COLON = 260;
+  PAUSE_DASH = 200;
+  PAUSE_BRACKET = 120;
+  PAUSE_LINE = 450;
+  PAUSE_PARAGRAPH = 750;
   SRSE_DONE = 1;
   ONECORE_VOICES = 'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Speech_OneCore\Voices';
   CLASSIC_VOICES = 'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Speech\Voices';
@@ -145,6 +162,289 @@ begin
     Result := Value
   else
     Result := 1;
+end;
+
+function InChars(Ch: Char; const Chars: string): Boolean;
+begin
+  Result := Pos(Ch, Chars) > 0;
+end;
+
+function Silence(MS: Integer): string;
+begin
+  Result := Format('<silence msec="%d"/>', [MS]);
+end;
+
+function EscapeXml(Ch: Char): string;
+begin
+  case Ch of
+    '&': Result := '&amp;';
+    '<': Result := '&lt;';
+    '>': Result := '&gt;';
+  else
+    Result := Ch;
+  end;
+end;
+
+// "т. е." and the like: spelled out.  In a pattern "." may be followed by
+// spaces and " " stands for one or more spaces.  At the end of a sentence
+// (a capital letter or the end of the line follows) the full stop stays.
+function ExpandAbbreviations(const Text: string): string;
+const
+  Pairs: array[0..7, 0..1] of string = (
+    ('т.е.', 'то есть'),
+    ('т.к.', 'так как'),
+    ('т.н.', 'так называемый'),
+    ('и т.д.', 'и так далее'),
+    ('и т.п.', 'и тому подобное'),
+    ('и др.', 'и другие'),
+    ('напр.', 'например'),
+    ('см.', 'смотрите'));
+
+  function IsSpace(Ch: Char): Boolean;
+  begin
+    Result := (Ch = ' ') or (Ch = #160);
+  end;
+
+  // The length of the pattern matched at Text[Index], 0 if none.
+  function MatchAt(const Text, Pattern: string; Index: Integer): Integer;
+  var
+    I, J: Integer;
+  begin
+    Result := 0;
+    J := Index;
+    for I := 1 to Length(Pattern) do
+    begin
+      if Pattern[I] = ' ' then
+      begin
+        if (J > Length(Text)) or not IsSpace(Text[J]) then
+          Exit;
+        while (J <= Length(Text)) and IsSpace(Text[J]) do
+          Inc(J);
+        Continue;
+      end;
+      if (J > Length(Text)) or (AnsiLowerCase(Text[J]) <> Pattern[I]) then
+        Exit;
+      Inc(J);
+      // Spaces after a full stop inside the pattern: "т. е.".
+      if (Pattern[I] = '.') and (I < Length(Pattern)) and (Pattern[I + 1] <> ' ') then
+        while (J <= Length(Text)) and IsSpace(Text[J]) do
+          Inc(J);
+    end;
+    Result := J - Index;
+  end;
+
+var
+  I, P, Len, Next: Integer;
+  B: TStringBuilder;
+  Found: Boolean;
+begin
+  B := TStringBuilder.Create;
+  try
+    I := 1;
+    while I <= Length(Text) do
+    begin
+      Found := False;
+      if (I = 1) or not Text[I - 1].IsLetter then
+        for P := Low(Pairs) to High(Pairs) do
+        begin
+          Len := MatchAt(Text, Pairs[P, 0], I);
+          if Len = 0 then
+            Continue;
+          B.Append(Pairs[P, 1]);
+          Next := I + Len;
+          while (Next <= Length(Text)) and IsSpace(Text[Next]) do
+            Inc(Next);
+          if (Next > Length(Text)) or (Text[Next] = #10) or Text[Next].IsUpper then
+            B.Append('.');
+          // The space before the next word stays.
+          if (I + Len <= Length(Text)) and IsSpace(Text[I + Len - 1]) then
+            B.Append(' ');
+          Inc(I, Len);
+          Found := True;
+          Break;
+        end;
+      if not Found then
+      begin
+        B.Append(Text[I]);
+        Inc(I);
+      end;
+    end;
+    Result := B.ToString;
+  finally
+    B.Free;
+  end;
+end;
+
+// "# Заголовок", "- пункт", "* пункт", "• пункт": without the marker.
+function StripLineMarker(const Line: string): string;
+var
+  I: Integer;
+begin
+  Result := Line;
+  I := 1;
+  while (I <= Length(Result)) and (Result[I] = '#') do
+    Inc(I);
+  if (I = 1) and (Result <> '') and InChars(Result[1], '-*•–—') then
+    I := 2;
+  if (I > 1) and (I <= Length(Result)) and (Result[I] = ' ') then
+    Result := TrimLeft(Copy(Result, I, MaxInt));
+end;
+
+// Runs of spaces as one space.
+function CollapseSpaces(const Line: string): string;
+var
+  Ch: Char;
+  B: TStringBuilder;
+begin
+  B := TStringBuilder.Create;
+  try
+    for Ch in Line do
+      if not ((Ch = ' ') and (B.Length > 0) and (B.Chars[B.Length - 1] = ' ')) then
+        B.Append(Ch);
+    Result := B.ToString;
+  finally
+    B.Free;
+  end;
+end;
+
+// The word that ends at Text[Index] (a full stop follows it).
+function WordBefore(const Text: string; Index: Integer): string;
+var
+  Start: Integer;
+begin
+  Start := Index;
+  while (Start >= 1) and Text[Start].IsLetter do
+    Dec(Start);
+  Result := Copy(Text, Start + 1, Index - Start);
+end;
+
+// A full stop after an initial ("А. С. Пушкин") or a short abbreviation
+// ("2024 г.", "ул.", "Dr.") does not end a sentence.
+function IsAbbreviation(const Word: string): Boolean;
+const
+  Known: array[0..13] of string = ('г', 'гг', 'ул', 'им', 'проф', 'акад', 'тыс', 'руб',
+    'коп', 'млн', 'млрд', 'mr', 'mrs', 'dr');
+var
+  K: string;
+begin
+  if Length(Word) = 1 then
+    Exit(True);
+  for K in Known do
+    if SameText(Word, K) then
+      Exit(True);
+  Result := False;
+end;
+
+function PrepareLine(const Line: string): string;
+var
+  I, N, Mark: Integer;
+  Ch, Next: Char;
+  B: TStringBuilder;
+begin
+  B := TStringBuilder.Create;
+  try
+    N := Length(Line);
+    I := 1;
+    while I <= N do
+    begin
+      Ch := Line[I];
+      if I < N then
+        Next := Line[I + 1]
+      else
+        Next := ' ';
+      // "..." and "…"
+      if ((Ch = '.') and (Copy(Line, I, 3) = '...')) or (Ch = '…') then
+      begin
+        B.Append('…');
+        if Ch = '.' then
+          Inc(I, 2);
+        B.Append(Silence(PAUSE_ELLIPSIS));
+      end
+      else if InChars(Ch, '.!?') and ((Next = ' ') or (I = N) or
+        InChars(Next, '")»')) then
+      begin
+        B.Append(Ch);
+        Mark := I;
+        // Several marks ("?!") make one pause.
+        while (I < N) and InChars(Line[I + 1], '.!?")»') do
+        begin
+          Inc(I);
+          B.Append(EscapeXml(Line[I]));
+        end;
+        if not ((Ch = '.') and IsAbbreviation(WordBefore(Line, Mark - 1))) then
+          B.Append(Silence(PAUSE_SENTENCE));
+      end
+      else if (Ch = ',') and ((Next = ' ') or (I = N)) then
+        B.Append(',').Append(Silence(PAUSE_COMMA))
+      else if InChars(Ch, ':;') and ((Next = ' ') or (I = N)) then
+        B.Append(Ch).Append(Silence(PAUSE_COLON))
+      // A dash between words: " — ", " – ", " - ".
+      else if InChars(Ch, '—–-') and (I > 1) and (Line[I - 1] = ' ') and
+        (Next = ' ') then
+        B.Append(Silence(PAUSE_DASH)).Append(Ch)
+      else if Ch = '(' then
+        B.Append(Silence(PAUSE_BRACKET)).Append(Ch)
+      else if Ch = ')' then
+        B.Append(Ch).Append(Silence(PAUSE_BRACKET))
+      else
+        B.Append(EscapeXml(Ch));
+      Inc(I);
+    end;
+    Result := B.ToString;
+  finally
+    B.Free;
+  end;
+end;
+
+function PrepareSpeech(const Text: string; Russian: Boolean): string;
+var
+  Lines: TArray<string>;
+  Line, Body: string;
+  B: TStringBuilder;
+  Paragraph: Boolean;
+begin
+  Body := StringReplace(Text, #13#10, #10, [rfReplaceAll]);
+  Body := StringReplace(Body, #13, #10, [rfReplaceAll]);
+  Body := StringReplace(Body, #9, ' ', [rfReplaceAll]);
+  if Russian then
+    Body := ExpandAbbreviations(Body);
+  // Markdown emphasis and code marks are not read.
+  Body := StringReplace(Body, '**', '', [rfReplaceAll]);
+  Body := StringReplace(Body, '__', '', [rfReplaceAll]);
+  Body := StringReplace(Body, '`', '', [rfReplaceAll]);
+  Lines := Body.Split([#10]);
+  B := TStringBuilder.Create;
+  try
+    Paragraph := False;
+    for Line in Lines do
+    begin
+      Body := Trim(Line);
+      // Headings and list markers: "# ", "- ", "* ", "• ".
+      Body := CollapseSpaces(StripLineMarker(Body));
+      if Body = '' then
+      begin
+        Paragraph := B.Length > 0;
+        Continue;
+      end;
+      if B.Length > 0 then
+      begin
+        if Paragraph then
+          B.Append(Silence(PAUSE_PARAGRAPH));
+        B.Append(' ');
+      end;
+      Paragraph := False;
+      // A line without a final mark (a heading, a list item) ends like a
+      // sentence: with a falling tone and a pause.
+      if not InChars(Body[Length(Body)], '.!?…:;,")»') then
+        Body := Body + '.';
+      B.Append(PrepareLine(Body));
+      if not B.ToString.EndsWith('/>') then
+        B.Append(Silence(PAUSE_LINE));
+    end;
+    Result := B.ToString;
+  finally
+    B.Free;
+  end;
 end;
 
 { TReadAloud }
@@ -263,7 +563,8 @@ begin
       FVoice := CreateOleObject('SAPI.SpVoice');
     PutRef(FVoice, 'Voice', FTokens[Index]);
     FVoice.Rate := Rate;
-    FVoice.Speak(Text, SVSF_ASYNC or SVSF_PURGE_BEFORE_SPEAK or SVSF_IS_NOT_XML);
+    FVoice.Speak(PrepareSpeech(Text, FVoices[Index].Language = $0419),
+      SVSF_ASYNC or SVSF_PURGE_BEFORE_SPEAK or SVSF_IS_XML);
     Result := True;
   except
     on E: Exception do

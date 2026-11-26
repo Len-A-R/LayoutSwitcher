@@ -21,6 +21,8 @@ type
     procedure Languages;
     [Test]
     procedure VoiceChoice;
+    [Test]
+    procedure Pauses;
   end;
 
 implementation
@@ -129,6 +131,29 @@ begin
   // en-GB only: still English.
   Assert.AreEqual(0, FindVoiceForLanguage([V('Hazel', $0809)], $0409));
   Assert.AreEqual(-1, FindVoiceForLanguage([V('Zira', $0409)], $0419));
+end;
+
+procedure TReadAloudTests.Pauses;
+var
+  X: string;
+begin
+  X := PrepareSpeech('Привет! Это тест, т. е. проверка.', True);
+  Assert.AreEqual('Привет!<silence msec="380"/> Это тест,<silence msec="140"/> то есть ' +
+    'проверка.<silence msec="380"/>', X);
+  // Initials and "г." do not end a sentence; a dash between words pauses.
+  X := PrepareSpeech('В 2024 г. у А. С. Пушкина — юбилей', True);
+  Assert.AreEqual('В 2024 г. у А. С. Пушкина <silence msec="200"/>— юбилей.<silence msec="380"/>', X);
+  // Lines without a final mark (a heading, list items) and paragraphs.
+  X := PrepareSpeech('Список' + sLineBreak + '- молоко' + sLineBreak + sLineBreak + 'Всё...', True);
+  Assert.AreEqual('Список.<silence msec="380"/> молоко.<silence msec="380"/><silence msec="750"/> ' +
+    'Всё…<silence msec="550"/>', X);
+  // XML characters are escaped; "и т. д." at the end keeps its full stop.
+  X := PrepareSpeech('If A < B & C, done', False);
+  Assert.AreEqual('If A &lt; B &amp; C,<silence msec="140"/> done.<silence msec="380"/>', X);
+  Assert.AreEqual('Яблоки и так далее.<silence msec="380"/> Да.<silence msec="380"/>',
+    PrepareSpeech('Яблоки и т. д. Да.', True));
+  // Markdown marks are not read.
+  Assert.AreEqual('Важно.<silence msec="380"/>', PrepareSpeech('**Важно**', True));
 end;
 
 initialization
