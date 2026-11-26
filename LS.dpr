@@ -41,6 +41,7 @@ uses
   uReadAloud in 'uReadAloud.pas',
   uNeuralVoice in 'uNeuralVoice.pas',
   uVoicePage in 'uVoicePage.pas',
+  uWindowWatch in 'uWindowWatch.pas',
   uDictationPage in 'uDictationPage.pas',
   uOperationWorker in 'uOperationWorker.pas',
   uMain in 'uMain.pas' {FormMain};

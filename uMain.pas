@@ -13,7 +13,7 @@ uses
   Vcl.StdCtrls, Vcl.ComCtrls, Vcl.Grids, uProgramList, uAiExplain, uExplainWindow, uModernUI,
   uSettings, uGestureDetector, uOperationWorker, uConversionChain,
   uLayoutIndicator, uUpdateCheck, uUpdateProgress, uLayoutConverter, uTextTools,
-  uDictation, uDictationPage, uAiText, uReadAloud, uVoicePage;
+  uDictation, uDictationPage, uAiText, uReadAloud, uVoicePage, uWindowWatch;
 
 const
   INSTANCE_WINDOW_PROP = 'LayoutSwitcher.Instance.v2';
@@ -285,6 +285,16 @@ type
     FMenuAutoCorrectOff: TMenuItem;
     FMenuNeverFixLast: TMenuItem;
     FMenuProgramRule: TMenuItem;
+    // Reading aloud what appears in a window (ChatGPT, Claude, a log).
+    FMenuWatch: TMenuItem;
+    FWatcher: TWindowWatcher;
+    FWatchQueue: TArray<string>;
+    FWatchTimer: TTimer;
+    FWatchMinimizedNotified: Boolean;
+    // The last window of another program in front: the tray menu offers to
+    // watch it (when the menu opens, the menu itself is in front).
+    FLastForeground: HWND;
+    FForegroundHook: THandle;
     // Exclusions table: programs found on the computer (read when the tab
     // is opened for the first time), all rows and the rows shown.
     FInstalledPrograms: TArray<TProgramEntry>;
@@ -382,7 +392,8 @@ type
     procedure CreateReadAloudControls;
     procedure VoicePageChange(Sender: TObject);
     procedure ReadAloudUnload(Sender: TObject);
-    procedure StartReadAloud(const Text: string);
+    // Source: the title of a watched window ('' for the selection).
+    procedure StartReadAloud(const Text: string; const Source: string = '');
     procedure StopReadAloud(const Reason: string);
     procedure ReadAloudTick(Sender: TObject);
     procedure DictationPageChange(Sender: TObject);
@@ -435,6 +446,15 @@ type
     procedure QuickAutoCorrectOffClick(Sender: TObject);
     procedure QuickNeverFixLastClick(Sender: TObject);
     procedure QuickProgramRuleClick(Sender: TObject);
+    procedure WatchMenuClick(Sender: TObject);
+    procedure StartWatching(Target: HWND);
+    procedure StopWatching(const Reason: string);
+    procedure WatchSentences(Sender: TObject; const Sentences: TArray<string>);
+    procedure WatchStopped(Sender: TObject; const Reason: string);
+    procedure WatchMinimized(Sender: TObject);
+    procedure WatchTimerTick(Sender: TObject);
+    procedure TryReadWatchQueue;
+    procedure ForegroundChanged(Wnd: HWND);
     procedure DownloadCancel(Sender: TObject);
     function DownloadRunning: Boolean;
   protected
@@ -526,6 +546,7 @@ const
   AI_PROVIDER_OPENAI = 2;
 
 function ShortActionName(Action: TLSAction): string; forward;
+function ShortTitle(const Title: string): string; forward;
 function ContainsDigit(const Text: string): Boolean; forward;
 function RemoveWord(const List: TArray<string>; const Word: string): TArray<string>; forward;
 
@@ -692,6 +713,9 @@ var
   I: Integer;
 begin
   DiagnosticsLog('form.destroy begin');
+  if FForegroundHook <> 0 then
+    UnhookWinEvent(FForegroundHook);
+  FreeAndNil(FWatcher);
   StopReadAloud('exit');
   FreeAndNil(FReadAloud);
   LSWTSUnRegisterSessionNotification(Handle);
@@ -3437,6 +3461,7 @@ begin
   FMenuAutoCorrectOff := AddItem(QuickAutoCorrectOffClick);
   FMenuNeverFixLast := AddItem(QuickNeverFixLastClick);
   FMenuProgramRule := AddItem(QuickProgramRuleClick);
+  FMenuWatch := AddItem(WatchMenuClick);
   PopupMenu.OnPopup := PopupMenuPopup;
 end;
 
@@ -3467,6 +3492,27 @@ begin
   FMenuProgramRule.Checked := FSettings.IsAutoCorrectDisabledFor(Program_);
   FMenuProgramRule.Caption := Format(T('Без автоисправлений в %s',
     'No automatic corrections in %s'), [Program_]);
+
+  // Reading aloud what appears in the window the user worked in.
+  if (FWatcher <> nil) and FWatcher.Watching then
+  begin
+    FMenuWatch.Visible := True;
+    FMenuWatch.Checked := True;
+    FMenuWatch.Caption := Format(T('Перестать читать вслух «%s»', 'Stop reading "%s" aloud'),
+      [ShortTitle(FWatcher.Title)]);
+  end
+  else
+  begin
+    FMenuWatch.Checked := False;
+    FMenuWatch.Visible := (FWatcher <> nil) and IsWindow(FLastForeground);
+    if FMenuWatch.Visible then
+    begin
+      SetLength(Program_, 256);
+      SetLength(Program_, GetWindowText(FLastForeground, PChar(Program_), 256));
+      FMenuWatch.Caption := Format(T('Читать вслух новое в «%s»', 'Read aloud what is new in "%s"'),
+        [ShortTitle(Program_)]);
+    end;
+  end;
 end;
 
 procedure TFormMain.QuickAutoCorrectOffClick(Sender: TObject);
@@ -3707,6 +3753,21 @@ begin
   FDictationPage.OnUnloadModel := DictationUnloadModel;
 end;
 
+procedure ForegroundEventProc(Hook: THandle; Event: DWORD; Wnd: HWND; ObjectId, ChildId: Longint;
+  EventThread, EventTime: DWORD); stdcall;
+begin
+  if Assigned(FormMain) then
+    FormMain.ForegroundChanged(Wnd);
+end;
+
+// A window title for the menu and the indicator.
+function ShortTitle(const Title: string): string;
+begin
+  Result := Trim(Title);
+  if Length(Result) > 40 then
+    Result := Copy(Result, 1, 39) + '…';
+end;
+
 procedure TFormMain.CreateReadAloudControls;
 begin
   FReadAloud := TReadAloud.Create;
@@ -3722,11 +3783,135 @@ begin
   // The engine build without text-to-speech of 2.5 is not needed any more
   // once a voice brought the current one (nothing is loaded yet).
   CleanupLegacySpeechEngine;
+  FWatcher := TWindowWatcher.Create;
+  FWatcher.OnSentences := WatchSentences;
+  FWatcher.OnStopped := WatchStopped;
+  FWatcher.OnMinimized := WatchMinimized;
+  FWatchTimer := TTimer.Create(Self);
+  FWatchTimer.Enabled := False;
+  FWatchTimer.Interval := 500;
+  FWatchTimer.OnTimer := WatchTimerTick;
+  FLastForeground := 0;
+  ForegroundChanged(GetForegroundWindow);
+  FForegroundHook := SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, 0,
+    @ForegroundEventProc, 0, 0, WINEVENT_OUTOFCONTEXT or WINEVENT_SKIPOWNPROCESS);
   tsReadAloud := TTabSheet.Create(Self);
   tsReadAloud.PageControl := pcMain;
   tsReadAloud.PageIndex := tsDictation.PageIndex + 1;
   FVoicePage := TVoicePage.CreatePage(Self, tsReadAloud, FReadAloud);
   FVoicePage.OnChange := VoicePageChange;
+end;
+
+procedure TFormMain.ForegroundChanged(Wnd: HWND);
+var
+  Root: HWND;
+  Process: DWORD;
+begin
+  if Wnd = 0 then
+    Exit;
+  Root := GetAncestor(Wnd, GA_ROOT);
+  if Root = 0 then
+    Root := Wnd;
+  GetWindowThreadProcessId(Root, Process);
+  if (Process <> GetCurrentProcessId) and IsWindowVisible(Root) and
+     (GetWindowTextLength(Root) > 0) then
+    FLastForeground := Root;
+end;
+
+procedure TFormMain.WatchMenuClick(Sender: TObject);
+begin
+  if FWatcher.Watching then
+    StopWatching('menu')
+  else if IsWindow(FLastForeground) then
+    StartWatching(FLastForeground);
+end;
+
+procedure TFormMain.StartWatching(Target: HWND);
+begin
+  FWatchQueue := nil;
+  FWatchMinimizedNotified := False;
+  FWatcher.Start(Target);
+  FWatchTimer.Enabled := True;
+  DiagnosticsLog('watch.start');
+  FBalloonUrl := '';
+  FBalloonInstall := False;
+  FNotificationTimes.Remove('watch');
+  ShowNotification('watch', Format(T('Слежу за «%s»: новый текст будет прочитан вслух. ' +
+    'Остановить — в меню значка в трее.', 'Watching "%s": new text is read aloud. ' +
+    'Stop it in the tray icon menu.'), [ShortTitle(FWatcher.Title)]));
+end;
+
+procedure TFormMain.StopWatching(const Reason: string);
+begin
+  FWatchTimer.Enabled := False;
+  FWatcher.Stop;
+  FWatchQueue := nil;
+  DiagnosticsLogFmt('watch.stop reason=%s', [Reason]);
+end;
+
+procedure TFormMain.WatchSentences(Sender: TObject; const Sentences: TArray<string>);
+begin
+  DiagnosticsLogFmt('watch.sentences count=%d', [Length(Sentences)]);
+  FWatchQueue := FWatchQueue + Sentences;
+  TryReadWatchQueue;
+end;
+
+procedure TFormMain.TryReadWatchQueue;
+var
+  Text: string;
+begin
+  // After the current reading, dictation or AI work.
+  if (Length(FWatchQueue) = 0) or FReadAloudActive or FDictation.WindowShown or
+     (FDictation.State <> dsIdle) or FDictation.Busy then
+    Exit;
+  Text := string.Join(' ', FWatchQueue);
+  FWatchQueue := nil;
+  StartReadAloud(Text, FWatcher.Title);
+end;
+
+procedure TFormMain.WatchTimerTick(Sender: TObject);
+begin
+  TryReadWatchQueue;
+end;
+
+procedure TFormMain.WatchStopped(Sender: TObject; const Reason: string);
+var
+  Title: string;
+begin
+  Title := FWatcher.Title;
+  DiagnosticsLogFmt('watch.ended reason="%s"', [Reason]);
+  // Not from inside an event of the watch thread.
+  TThread.ForceQueue(nil,
+    procedure
+    begin
+      StopWatching('ended');
+    end);
+  FDictation.ShowError(Format(T('Чтение «%s» остановлено: %s', 'Stopped reading "%s": %s'),
+    [ShortTitle(Title), Reason]));
+end;
+
+procedure TFormMain.WatchMinimized(Sender: TObject);
+var
+  Target: HWND;
+begin
+  // A minimized browser stops reporting changes: back on the screen, behind
+  // the other windows and without the focus.
+  Target := FWatcher.Target;
+  if not IsWindow(Target) or not IsIconic(Target) then
+    Exit;
+  ShowWindow(Target, SW_SHOWNOACTIVATE);
+  SetWindowPos(Target, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE or SWP_NOSIZE or SWP_NOACTIVATE);
+  DiagnosticsLog('watch.restored_behind');
+  if not FWatchMinimizedNotified then
+  begin
+    FWatchMinimizedNotified := True;
+    FBalloonUrl := '';
+    FBalloonInstall := False;
+    FNotificationTimes.Remove('watch_minimized');
+    ShowNotification('watch_minimized', Format(T('Окно «%s» развёрнуто позади других: ' +
+      'свёрнутое окно не сообщает о новом тексте.', 'The window "%s" is restored behind the ' +
+      'others: a minimized window does not report new text.'), [ShortTitle(FWatcher.Title)]));
+  end;
 end;
 
 procedure TFormMain.VoicePageChange(Sender: TObject);
@@ -3744,7 +3929,7 @@ begin
     FReadAloud.Unload;
 end;
 
-procedure TFormMain.StartReadAloud(const Text: string);
+procedure TFormMain.StartReadAloud(const Text, Source: string);
 var
   ErrorText, Hint: string;
   Gesture: TLSGesture;
@@ -3766,7 +3951,12 @@ begin
   else
     Hint := T('Esc — остановить', 'Esc — stop');
   // The speaker glyph instead of the pencil of AI work.
-  FDictation.ShowBusy(T('Читаю вслух', 'Reading aloud'), Hint, #$E767);
+  if Source <> '' then
+    FDictation.ShowBusy(Format(T('Новое в «%s»', 'New in "%s"'), [ShortTitle(Source)]),
+      T('Esc — пропустить · остановить слежение — в меню трея',
+        'Esc — skip · stop watching — in the tray menu'), #$E767)
+  else
+    FDictation.ShowBusy(T('Читаю вслух', 'Reading aloud'), Hint, #$E767);
   FReadAloudTimer.Enabled := True;
 end;
 
@@ -3791,6 +3981,13 @@ begin
   end;
   FReadAloudUnloadTimer.Enabled := False;
   FReadAloudUnloadTimer.Enabled := True;
+  // What a watched window added meanwhile.
+  if (Reason <> 'exit') and (FWatcher <> nil) and FWatcher.Watching then
+    TThread.ForceQueue(nil,
+      procedure
+      begin
+        TryReadWatchQueue;
+      end);
 end;
 
 procedure TFormMain.ReadAloudTick(Sender: TObject);

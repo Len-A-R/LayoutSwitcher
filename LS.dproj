@@ -176,6 +176,7 @@
         <DCCReference Include="uReadAloud.pas"/>
         <DCCReference Include="uNeuralVoice.pas"/>
         <DCCReference Include="uVoicePage.pas"/>
+        <DCCReference Include="uWindowWatch.pas"/>
         <DCCReference Include="uDictationPage.pas"/>
         <DCCReference Include="uOperationWorker.pas"/>
         <DCCReference Include="uMain.pas">
