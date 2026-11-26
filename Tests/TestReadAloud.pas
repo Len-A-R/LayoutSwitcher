@@ -29,6 +29,8 @@ type
     procedure NeuralCatalogue;
     [Test]
     procedure MixedLanguages;
+    [Test]
+    procedure TechnicalText;
   end;
 
 implementation
@@ -251,6 +253,31 @@ begin
   Ru := '';
   MigrateReadAloudVoice('HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Speech\Voices\Tokens\TTS_MS_RU-RU_IRINA_11.0', Ru, En);
   Assert.IsTrue(Ru.EndsWith('IRINA_11.0'));
+end;
+
+procedure TReadAloudTests.TechnicalText;
+
+  function N(const S: string): string;
+  begin
+    Result := NormalizeTechText(S, True);
+  end;
+
+begin
+  Assert.AreEqual('Откройте файл uMain точка pas.', N('Откройте C:\work\LayoutSwitcher\uMain.pas.'));
+  Assert.AreEqual('файл Button точка tsx', N('src/components/Button.tsx'));
+  Assert.AreEqual('файл main точка ts', N('./src/app/main.ts'));
+  Assert.AreEqual('(uMain точка pas, строка 3747)', N('(uMain.pas:3747)'));
+  Assert.AreEqual('uMain точка pas, строка 12', N('uMain.pas:12:5'));
+  Assert.AreEqual('В папка _speech лежит', N('В D:\work\_speech\ лежит'));
+  Assert.AreEqual('См. ссылка на github.com, там всё.', N('См. https://github.com/k2-fsa/sherpa-onnx/releases/download/x.tar.bz2, там всё.'));
+  Assert.AreEqual('ссылка на example.org', N('www.example.org/page'));
+  Assert.AreEqual('Сумма хеш верна', N('Сумма 1d2414ac8921f718ba3188782f80475f525a3d82 верна'));
+  Assert.AreEqual('идентификатор', N('{FF48DBA4-60EF-4201-AA87-54103EEF594E}'));
+  Assert.AreEqual('read aloud и Read Aloud Voice Ru', N('read_aloud и ReadAloudVoiceRu'));
+  // Ordinary text stays.
+  Assert.AreEqual('и/или 60 км/ч, 12/05, версия 2.5.0, iPhone.', N('и/или 60 км/ч, 12/05, версия 2.5.0, iPhone.'));
+  Assert.AreEqual('Привет, мир! Это обычный текст.', N('Привет, мир! Это обычный текст.'));
+  Assert.AreEqual('file main dot ts, line 7', NormalizeTechText('src/main.ts:7', False));
 end;
 
 initialization

@@ -85,6 +85,11 @@ function ReadAloudSpeedIndex(Value: Integer): Integer;
 function PrepareNeuralText(const Text: string; Russian: Boolean): TArray<string>;
 // The installed neural voice of a language, -1 if none.
 function InstalledNeuralVoiceFor(Language: Word): Integer;
+// Paths, links, hashes and identifiers the short way: "C:\work\uMain.pas"
+// - "файл uMain точка pas", "https://github.com/..." - "ссылка на
+// github.com", "uMain.pas:120" - "uMain точка pas, строка 120",
+// "read_aloud" - "read aloud".  Russian or English words by Russian.
+function NormalizeTechText(const Text: string; Russian: Boolean): string;
 // A paragraph cut where the alphabet changes: Cyrillic is Russian, Latin is
 // English.  In a mostly Russian sentence a Latin insert shorter than
 // MIN_ENGLISH_WORDS words stays in the Russian piece (a term, a program
@@ -538,6 +543,265 @@ begin
   Flush;
 end;
 
+// Technical tokens read the short human way.  Works on whitespace-separated
+// tokens; punctuation around a token (brackets, quotes, a final comma or
+// full stop) stays where it is.
+function NormalizeTechText(const Text: string; Russian: Boolean): string;
+
+  function W(const Ru, En: string): string;
+  begin
+    if Russian then
+      Result := Ru
+    else
+      Result := En;
+  end;
+
+  function IsHex(const S: string): Boolean;
+  var
+    Ch: Char;
+  begin
+    Result := S <> '';
+    for Ch in S do
+      if not CharInSet(Ch, ['0'..'9', 'a'..'f', 'A'..'F']) then
+        Exit(False);
+  end;
+
+  function IsLatinWord(const S: string): Boolean;
+  var
+    Ch: Char;
+  begin
+    Result := S <> '';
+    for Ch in S do
+      if not CharInSet(Ch, ['a'..'z', 'A'..'Z']) then
+        Exit(False);
+  end;
+
+  function IsIdentifier(const S: string): Boolean;
+  var
+    Ch: Char;
+  begin
+    Result := S <> '';
+    for Ch in S do
+      if not CharInSet(Ch, ['a'..'z', 'A'..'Z', '0'..'9', '_']) then
+        Exit(False);
+  end;
+
+  // "uMain.pas" - "uMain точка pas"; '' when Name has no file extension.
+  function SpokenFileName(const Name: string): string;
+  var
+    Dot: Integer;
+    Base, Ext: string;
+  begin
+    Result := '';
+    Dot := LastDelimiter('.', Name);
+    if (Dot <= 1) or (Dot = Length(Name)) then
+      Exit;
+    Base := Copy(Name, 1, Dot - 1);
+    Ext := Copy(Name, Dot + 1, MaxInt);
+    if (Length(Ext) > 5) or not IsLatinWord(Ext) then
+      Exit;
+    Result := Base + W(' точка ', ' dot ') + Ext;
+  end;
+
+  // "file.pas:120" or "file.pas:120:5": the name and the line ('' if none).
+  procedure SplitLine(const S: string; out Name, Line: string);
+  var
+    Parts: TArray<string>;
+    N: Integer;
+  begin
+    Name := S;
+    Line := '';
+    Parts := S.Split([':']);
+    if Length(Parts) < 2 then
+      Exit;
+    // "C:\..." keeps its drive colon.
+    if (Length(Parts) >= 2) and TryStrToInt(Parts[1], N) and (Parts[0] <> '') and
+       (Length(Parts[0]) > 1) then
+    begin
+      Name := Parts[0];
+      Line := Parts[1];
+    end
+    else if (Length(Parts) >= 3) and TryStrToInt(Parts[High(Parts) - 1], N) then
+    begin
+      Name := string.Join(':', Copy(Parts, 0, Length(Parts) - 2));
+      Line := Parts[High(Parts) - 1];
+    end
+    else if TryStrToInt(Parts[High(Parts)], N) then
+    begin
+      Name := string.Join(':', Copy(Parts, 0, Length(Parts) - 1));
+      Line := Parts[High(Parts)];
+    end;
+  end;
+
+  function WithLine(const Spoken, Line: string): string;
+  begin
+    Result := Spoken;
+    if Line <> '' then
+      Result := Result + W(', строка ', ', line ') + Line;
+  end;
+
+  function LooksLikePath(const S: string): Boolean;
+  var
+    Segments: TArray<string>;
+    Clean, LastName, Line: string;
+  begin
+    if (Length(S) >= 3) and CharInSet(S[1], ['A'..'Z', 'a'..'z']) and (S[2] = ':') and
+       CharInSet(S[3], ['\', '/']) then
+      Exit(True);
+    if S.StartsWith('\\') or S.StartsWith('./') or S.StartsWith('../') or S.StartsWith('~/') or
+       S.StartsWith('.\') or S.StartsWith('..\') then
+      Exit(True);
+    Clean := StringReplace(S, '\', '/', [rfReplaceAll]);
+    Segments := Clean.Split(['/'], TStringSplitOptions.ExcludeEmpty);
+    if Clean.StartsWith('/') and (Length(Segments) >= 2) then
+      Exit(True);
+    // "src/app/main.ts", "docs/" : two segments with a file name or a final
+    // slash ("и/или", "км/ч", "12/05" are not paths).
+    if Length(Segments) > 0 then
+      SplitLine(Segments[High(Segments)], LastName, Line);
+    Result := (Length(Segments) >= 2) and
+      ((SpokenFileName(LastName) <> '') or
+       (Clean.EndsWith('/') and (Length(Segments) >= 2)) or (Length(Segments) >= 3));
+    if Result then
+      Result := not IsHex(StringReplace(Clean, '/', '', [rfReplaceAll]));
+  end;
+
+  function Convert(const Token: string): string;
+  var
+    Lower, Host, Name, Line, Last, Spoken, Clean: string;
+    Segments: TArray<string>;
+    I, Humps: Integer;
+  begin
+    Result := Token;
+    Lower := LowerCase(Token);
+    // A link: its site.
+    if Lower.StartsWith('http://') or Lower.StartsWith('https://') or Lower.StartsWith('ftp://') or
+       Lower.StartsWith('www.') then
+    begin
+      Host := Token;
+      if Pos('://', Host) > 0 then
+        Host := Copy(Host, Pos('://', Host) + 3, MaxInt);
+      I := Pos('/', Host);
+      if I > 0 then
+        SetLength(Host, I - 1);
+      I := Pos(':', Host);
+      if I > 0 then
+        SetLength(Host, I - 1);
+      if LowerCase(Host).StartsWith('www.') then
+        Delete(Host, 1, 4);
+      Exit(W('ссылка на ', 'link to ') + Host);
+    end;
+    // {FF48DBA4-60EF-4201-AA87-54103EEF594E}
+    Clean := Token;
+    if (Clean <> '') and (Clean[1] = '{') and (Clean[Length(Clean)] = '}') then
+      Clean := Copy(Clean, 2, Length(Clean) - 2);
+    if (Length(Clean) = 36) and (Clean[9] = '-') and (Clean[14] = '-') and (Clean[19] = '-') and
+       (Clean[24] = '-') and IsHex(StringReplace(Clean, '-', '', [rfReplaceAll])) then
+      Exit(W('идентификатор', 'identifier'));
+    // A hash: long hex with digits and letters.
+    Clean := Token;
+    if Pos(':', Clean) > 0 then
+      Clean := Copy(Clean, Pos(':', Clean) + 1, MaxInt);
+    if (Length(Clean) >= 16) and IsHex(Clean) and (LastDelimiter('0123456789', Clean) > 0) and
+       (LastDelimiter('abcdefABCDEF', Clean) > 0) then
+      Exit(W('хеш', 'hash'));
+    // A path: the file or the folder at its end.
+    if LooksLikePath(Token) then
+    begin
+      Clean := StringReplace(Token, '\', '/', [rfReplaceAll]);
+      if Clean.EndsWith('/') then
+      begin
+        Segments := Clean.Split(['/'], TStringSplitOptions.ExcludeEmpty);
+        if Length(Segments) = 0 then
+          Exit;
+        Exit(W('папка ', 'folder ') + Segments[High(Segments)]);
+      end;
+      Segments := Clean.Split(['/'], TStringSplitOptions.ExcludeEmpty);
+      if Length(Segments) = 0 then
+        Exit;
+      SplitLine(Segments[High(Segments)], Last, Line);
+      Spoken := SpokenFileName(Last);
+      if Spoken = '' then
+        Exit(WithLine(W('папка ', 'folder ') + Last, Line));
+      Exit(WithLine(W('файл ', 'file ') + Spoken, Line));
+    end;
+    // A file name, maybe with a line: "uMain.pas:3747".
+    SplitLine(Token, Name, Line);
+    if IsIdentifier(StringReplace(Name, '.', '', [rfReplaceAll])) and (Pos('.', Name) > 0) then
+    begin
+      Spoken := SpokenFileName(Name);
+      if Spoken <> '' then
+        Exit(WithLine(Spoken, Line));
+    end;
+    // read_aloud - "read aloud"; ReadAloudVoiceRu - "Read Aloud Voice Ru".
+    if IsIdentifier(Token) and (Pos('_', Token) > 1) and (Pos('_', Token) < Length(Token)) then
+      Exit(Trim(StringReplace(Token, '_', ' ', [rfReplaceAll])));
+    if IsIdentifier(Token) then
+    begin
+      Humps := 0;
+      for I := 2 to Length(Token) do
+        if CharInSet(Token[I - 1], ['a'..'z']) and CharInSet(Token[I], ['A'..'Z']) then
+          Inc(Humps);
+      if (Humps >= 2) or ((Humps = 1) and (Length(Token) >= 8)) then
+      begin
+        Result := Token[1];
+        for I := 2 to Length(Token) do
+        begin
+          if CharInSet(Token[I - 1], ['a'..'z']) and CharInSet(Token[I], ['A'..'Z']) then
+            Result := Result + ' ';
+          Result := Result + Token[I];
+        end;
+      end;
+    end;
+  end;
+
+const
+  // Not braces: a GUID keeps them for its check.
+  Leading = '([«"''`';
+  Trailing = ')]»"''`,;!?';
+var
+  I, Start, Stop, Core1, Core2: Integer;
+  B: TStringBuilder;
+  Token, Core: string;
+begin
+  B := TStringBuilder.Create;
+  try
+    I := 1;
+    while I <= Length(Text) do
+    begin
+      if Text[I].IsWhiteSpace then
+      begin
+        B.Append(Text[I]);
+        Inc(I);
+        Continue;
+      end;
+      Start := I;
+      while (I <= Length(Text)) and not Text[I].IsWhiteSpace do
+        Inc(I);
+      Stop := I - 1;
+      Token := Copy(Text, Start, Stop - Start + 1);
+      // Wrapping punctuation; a final full stop or colon unless it ends a
+      // folder path ("C:\").
+      Core1 := 1;
+      Core2 := Length(Token);
+      while (Core1 <= Core2) and (Pos(Token[Core1], Leading) > 0) do
+        Inc(Core1);
+      while (Core2 >= Core1) and ((Pos(Token[Core2], Trailing) > 0) or
+        (((Token[Core2] = '.') or (Token[Core2] = ':')) and (Core2 > Core1) and
+         not CharInSet(Token[Core2 - 1], ['\', '/']))) do
+        Dec(Core2);
+      Core := Copy(Token, Core1, Core2 - Core1 + 1);
+      if Core = '' then
+        B.Append(Token)
+      else
+        B.Append(Copy(Token, 1, Core1 - 1)).Append(Convert(Core)).Append(Copy(Token, Core2 + 1, MaxInt));
+    end;
+    Result := B.ToString;
+  finally
+    B.Free;
+  end;
+end;
+
 function InstalledNeuralVoiceFor(Language: Word): Integer;
 var
   I: Integer;
@@ -818,7 +1082,8 @@ begin
   Stop;
   FSpeedIndex := ReadAloudSpeedIndex(SpeedIndex);
   Segments := nil;
-  for Paragraph in PrepareNeuralText(Text, True) do
+  // Paths and links are not read character by character.
+  for Paragraph in PrepareNeuralText(NormalizeTechText(Text, TextLanguage(Text) = $0419), True) do
   begin
     Part := SplitByLanguage(Paragraph);
     if Length(Part) > 0 then
