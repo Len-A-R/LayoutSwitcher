@@ -8,6 +8,11 @@
 // The indicator never takes the focus: the text must land in the window
 // the user dictates into.  A loaded model stays in memory for a few
 // minutes, so that the next phrase starts at once.
+//
+// Live dictation shows the dictation window instead: the current part of
+// the recording is recognized again and again while the user speaks, a part
+// ends at a pause (so that long dictation stays fast), and OK types the
+// text into the field the window took the focus from.
 
 interface
 
@@ -15,7 +20,7 @@ uses
   Winapi.Windows, Winapi.Messages,
   System.SysUtils, System.Classes, System.Types, System.UITypes,
   Vcl.Controls, Vcl.Forms, Vcl.Graphics, Vcl.ExtCtrls,
-  uModernUI, uAudioRecorder, uSpeechModels, uSpeechCloud, uSherpaOnnx;
+  uModernUI, uAudioRecorder, uSpeechModels, uSpeechCloud, uSherpaOnnx, uDictationWindow;
 
 type
   TDictationState = (dsIdle, dsRecording, dsRecognizing);
@@ -64,6 +69,23 @@ type
   private
     FRecorder: TAudioRecorder;
     FIndicator: TDictationIndicator;
+    FWindow: TDictationWindow;
+    // This recording uses the dictation window.
+    FLive: Boolean;
+    FPreviewTimer: TTimer;
+    FPreviewThread: TThread;
+    // The current part of the recording starts at this sample; the text of
+    // the parts before it is FCommitted.
+    FSegStart: Integer;
+    FCommitted: string;
+    FFinalSamples: TArray<Single>;
+    // The final recognition waits for the running preview (one recognizer).
+    FFinalPending: Boolean;
+    // OK pressed while recording or recognizing.
+    FInsertWhenReady: Boolean;
+    FDeliverTimer: TTimer;
+    FDeliverText: string;
+    FDeliverTicks: Integer;
     FState: TDictationState;
     FModel: TSpeechModel;
     FCloud: TSpeechCloudConfig;
@@ -76,6 +98,7 @@ type
     FMaxTimer: TTimer;
     FHideTimer: TTimer;
     FOnResult: TDictationResultEvent;
+    FOnWindowClosed: TNotifyEvent;
     FStopHint: string;
     FBusy: Boolean;
     procedure IndicatorCancel(Sender: TObject);
@@ -85,13 +108,33 @@ type
     procedure MaxCheck(Sender: TObject);
     procedure HideIndicator(Sender: TObject);
     procedure EnsureIndicator;
+    procedure EnsureWindow;
+    procedure TakeRecognizer(Thread: TThread);
+    procedure PreviewTick(Sender: TObject);
+    procedure PreviewDone(Sender: TObject);
+    procedure StartFinal;
+    procedure LiveFinished(const Text, ErrorText: string);
+    procedure Accept(const Text: string);
+    procedure DeliverTick(Sender: TObject);
+    procedure WindowOk(Sender: TObject);
+    procedure WindowCancel(Sender: TObject);
+    procedure WindowEdit(Sender: TObject);
   public
     constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
     // Starts recording with the model; False with ErrorText when it cannot.
-    // Title replaces "Speak..." (voice edit commands).
+    // Title replaces "Speak..." (voice edit commands).  Live: the dictation
+    // window with the text as it is spoken, OK delivers it to OnResult after
+    // the focus is back in the field.
     function Start(const Model: TSpeechModel; const Cloud: TSpeechCloudConfig;
-      const StopHint: string; out ErrorText: string; const Title: string = ''): Boolean;
+      const StopHint: string; out ErrorText: string; const Title: string = '';
+      Live: Boolean = False): Boolean;
+    // OK of the dictation window: stops the recording if needed and inserts.
+    procedure Confirm;
+    // The dictation window is open (recording, recognizing or editing).
+    function WindowShown: Boolean;
+    // ...and has the focus: its keys are its own (Esc, Enter).
+    function WindowFocused: Boolean;
     // Ends the recording and recognizes it.
     procedure Stop;
     procedure Cancel;
@@ -107,10 +150,21 @@ type
     // ShowBusy is showing (AI work); False after Cancel.
     property Busy: Boolean read FBusy;
     property OnResult: TDictationResultEvent read FOnResult write FOnResult;
+    // The dictation window closed (OK, Cancel, the gesture, Esc).
+    property OnWindowClosed: TNotifyEvent read FOnWindowClosed write FOnWindowClosed;
   end;
 
 const
   DICTATION_MAX_SECONDS = 120;
+
+// Circles and rounded rectangles with anti-aliasing (GDI+); Radius < 0 is
+// an ellipse.
+procedure FillSmooth(Canvas: TCanvas; const R: TRect; Color: TColor; Radius: Integer);
+// Two recognized parts: a space between them.
+function JoinDictation(const A, B: string): string;
+// The part of the recording ends here: its end is silent (a pause) and it
+// is long enough, or it is too long to recognize again and again.
+function IsPartEnd(const Samples: TArray<Single>): Boolean;
 
 implementation
 
@@ -162,6 +216,49 @@ const
   MIN_SECONDS = 0.4;
   // A peak below this (percent of the full scale) is silence.
   SILENCE_PEAK = 2;
+  PREVIEW_MS = 600;
+  PART_MIN_SECONDS = 3;
+  PART_MAX_SECONDS = 25;
+  PAUSE_SECONDS = 0.6;
+
+function PeakOf(const Samples: TArray<Single>; From, Count: Integer): Integer;
+var
+  I: Integer;
+  Value: Single;
+begin
+  Result := 0;
+  for I := Max(From, 0) to Min(From + Count, Length(Samples)) - 1 do
+  begin
+    Value := Abs(Samples[I]);
+    if Value * 100 > Result then
+      Result := Trunc(Value * 100);
+  end;
+end;
+
+function JoinDictation(const A, B: string): string;
+begin
+  if Trim(A) = '' then
+    Result := Trim(B)
+  else if Trim(B) = '' then
+    Result := Trim(A)
+  else
+    Result := Trim(A) + ' ' + Trim(B);
+end;
+
+function IsPartEnd(const Samples: TArray<Single>): Boolean;
+var
+  Len, Tail, Peak: Integer;
+begin
+  Len := Length(Samples);
+  if Len >= PART_MAX_SECONDS * RECORD_SAMPLE_RATE then
+    Exit(True);
+  if Len < PART_MIN_SECONDS * RECORD_SAMPLE_RATE then
+    Exit(False);
+  Tail := Round(PAUSE_SECONDS * RECORD_SAMPLE_RATE);
+  Peak := PeakOf(Samples, 0, Len - Tail);
+  // Quiet compared with the speech before it: a pause even with noise.
+  Result := PeakOf(Samples, Len - Tail, Tail) < Max(SILENCE_PEAK, Peak div 6);
+end;
 
 type
   TRecognitionThread = class(TThread)
@@ -174,12 +271,15 @@ type
     FText: string;
     FError: string;
     FRecognizer: TSpeechRecognizer;
+    // A preview of the part of a live recording ending at this sample.
+    FPartEnd: Integer;
   protected
     procedure Execute; override;
   public
     destructor Destroy; override;
     constructor Create(Owner: TDictation; const Model: TSpeechModel;
-      const Cloud: TSpeechCloudConfig; const Samples: TArray<Single>; Sequence: Integer);
+      const Cloud: TSpeechCloudConfig; const Samples: TArray<Single>; Sequence: Integer;
+      PartEnd: Integer = -1);
   end;
 
 { TRecognitionThread }
@@ -192,9 +292,11 @@ begin
 end;
 
 constructor TRecognitionThread.Create(Owner: TDictation; const Model: TSpeechModel;
-  const Cloud: TSpeechCloudConfig; const Samples: TArray<Single>; Sequence: Integer);
+  const Cloud: TSpeechCloudConfig; const Samples: TArray<Single>; Sequence: Integer;
+  PartEnd: Integer);
 begin
   FOwner := Owner;
+  FPartEnd := PartEnd;
   FRecognizer := Owner.FRecognizer;
   Owner.FRecognizer := nil;
   FModel := Model;
@@ -493,6 +595,14 @@ begin
   FHideTimer := TTimer.Create(Self);
   FHideTimer.Enabled := False;
   FHideTimer.OnTimer := HideIndicator;
+  FPreviewTimer := TTimer.Create(Self);
+  FPreviewTimer.Enabled := False;
+  FPreviewTimer.Interval := PREVIEW_MS;
+  FPreviewTimer.OnTimer := PreviewTick;
+  FDeliverTimer := TTimer.Create(Self);
+  FDeliverTimer.Enabled := False;
+  FDeliverTimer.Interval := 50;
+  FDeliverTimer.OnTimer := DeliverTick;
 end;
 
 destructor TDictation.Destroy;
@@ -500,6 +610,8 @@ begin
   // A running recognition thread frees its recognizer itself.
   if FThread <> nil then
     FThread.OnTerminate := nil;
+  if FPreviewThread <> nil then
+    FPreviewThread.OnTerminate := nil;
   FreeAndNil(FRecognizer);
   FreeAndNil(FRecorder);
   inherited;
@@ -515,12 +627,33 @@ begin
   end;
 end;
 
+procedure TDictation.EnsureWindow;
+begin
+  if FWindow = nil then
+  begin
+    FWindow := TDictationWindow.CreateWindow(Self, FRecorder);
+    FWindow.OnOk := WindowOk;
+    FWindow.OnCancel := WindowCancel;
+    FWindow.OnEdit := WindowEdit;
+  end;
+end;
+
+function TDictation.WindowShown: Boolean;
+begin
+  Result := (FWindow <> nil) and FWindow.Shown;
+end;
+
+function TDictation.WindowFocused: Boolean;
+begin
+  Result := (FWindow <> nil) and FWindow.HasFocus;
+end;
+
 function TDictation.Start(const Model: TSpeechModel; const Cloud: TSpeechCloudConfig;
-  const StopHint: string; out ErrorText: string; const Title: string): Boolean;
+  const StopHint: string; out ErrorText: string; const Title: string; Live: Boolean): Boolean;
 begin
   Result := False;
   ErrorText := '';
-  if FState <> dsIdle then
+  if (FState <> dsIdle) or WindowShown then
     Exit;
   FModel := Model;
   FCloud := Cloud;
@@ -529,10 +662,193 @@ begin
     Exit;
   FState := dsRecording;
   FHideTimer.Enabled := False;
-  EnsureIndicator;
-  FIndicator.ShowState(dsRecording, StopHint, Title);
+  FDeliverTimer.Enabled := False;
+  FLive := Live;
+  if Live then
+  begin
+    FSegStart := 0;
+    FCommitted := '';
+    FFinalSamples := nil;
+    FFinalPending := False;
+    FInsertWhenReady := False;
+    if FIndicator <> nil then
+      FIndicator.HideIndicator;
+    EnsureWindow;
+    FWindow.Open(StopHint, not Model.IsCloud);
+    // A cloud model is asked once, at the end.
+    FPreviewTimer.Enabled := not Model.IsCloud;
+  end
+  else
+  begin
+    EnsureIndicator;
+    FIndicator.ShowState(dsRecording, StopHint, Title);
+  end;
   FMaxTimer.Enabled := True;
   Result := True;
+end;
+
+procedure TDictation.TakeRecognizer(Thread: TThread);
+var
+  Recognition: TRecognitionThread;
+begin
+  Recognition := TRecognitionThread(Thread);
+  // The model stays loaded for the next phrase.
+  if (Recognition.FRecognizer <> nil) and (FRecognizer = nil) then
+  begin
+    FRecognizer := Recognition.FRecognizer;
+    Recognition.FRecognizer := nil;
+  end;
+  if not Recognition.FModel.IsCloud then
+  begin
+    FIdleTimer.Enabled := False;
+    FIdleTimer.Enabled := True;
+  end;
+end;
+
+procedure TDictation.PreviewTick(Sender: TObject);
+var
+  Samples: TArray<Single>;
+  Total: Integer;
+begin
+  if (FState <> dsRecording) or not FLive or (FPreviewThread <> nil) then
+    Exit;
+  Samples := FRecorder.Snapshot(FSegStart, Total);
+  if Length(Samples) < RECORD_SAMPLE_RATE div 2 then
+    Exit;
+  if PeakOf(Samples, 0, Length(Samples)) < SILENCE_PEAK then
+  begin
+    // Nothing said yet: the silence is not recognized again and again.
+    if Length(Samples) >= PART_MIN_SECONDS * RECORD_SAMPLE_RATE then
+      FSegStart := Total;
+    Exit;
+  end;
+  FIdleTimer.Enabled := False;
+  FPreviewThread := TRecognitionThread.Create(Self, FModel, FCloud, Samples, FSequence, Total);
+  FPreviewThread.OnTerminate := PreviewDone;
+end;
+
+procedure TDictation.PreviewDone(Sender: TObject);
+var
+  Thread: TRecognitionThread;
+  Part: string;
+begin
+  Thread := TRecognitionThread(Sender);
+  if FPreviewThread = Thread then
+    FPreviewThread := nil;
+  TakeRecognizer(Thread);
+  if (Thread.FSequence = FSequence) and FLive and (FState = dsRecording) and
+     (Thread.FError = '') and (FWindow <> nil) then
+  begin
+    Part := Trim(Thread.FText);
+    if IsPartEnd(Thread.FSamples) then
+    begin
+      // The part is done: the next previews recognize only what follows.
+      FCommitted := JoinDictation(FCommitted, Part);
+      FSegStart := Thread.FPartEnd;
+      Part := '';
+    end;
+    FWindow.SetText(JoinDictation(FCommitted, Part));
+  end;
+  if FFinalPending then
+  begin
+    FFinalPending := False;
+    StartFinal;
+  end;
+end;
+
+procedure TDictation.StartFinal;
+begin
+  if (Length(FFinalSamples) < MIN_SECONDS * RECORD_SAMPLE_RATE) or
+     (PeakOf(FFinalSamples, 0, Length(FFinalSamples)) < SILENCE_PEAK) then
+  begin
+    // The end was a pause: the text is complete.
+    LiveFinished(FCommitted, '');
+    Exit;
+  end;
+  FThread := TRecognitionThread.Create(Self, FModel, FCloud, FFinalSamples, FSequence);
+  FThread.OnTerminate := RecognitionDone;
+end;
+
+procedure TDictation.LiveFinished(const Text, ErrorText: string);
+begin
+  FState := dsIdle;
+  FFinalSamples := nil;
+  if FWindow = nil then
+    Exit;
+  FWindow.SetText(Text);
+  FWindow.SetState(dwEditing);
+  if ErrorText <> '' then
+    FWindow.SetStatus(T('Ошибка распознавания: ', 'Recognition error: ') + ErrorText)
+  else if Trim(Text) = '' then
+    FWindow.SetStatus(T('Речь не распознана — говорите ближе к микрофону',
+      'No speech recognized — speak closer to the microphone'))
+  else
+    FWindow.SetStatus('');
+  if FInsertWhenReady and (ErrorText = '') and (Trim(Text) <> '') then
+    Accept(Text);
+  FInsertWhenReady := False;
+end;
+
+procedure TDictation.Confirm;
+begin
+  if not WindowShown then
+    Exit;
+  case FState of
+    dsRecording:
+      begin
+        FInsertWhenReady := True;
+        Stop;
+      end;
+    dsRecognizing:
+      FInsertWhenReady := True;
+  else
+    Accept(FWindow.Text);
+  end;
+end;
+
+procedure TDictation.Accept(const Text: string);
+begin
+  FInsertWhenReady := False;
+  FWindow.CloseAndReturnFocus;
+  if Assigned(FOnWindowClosed) then
+    FOnWindowClosed(Self);
+  if Trim(Text) = '' then
+    Exit;
+  // Typed when the field has the focus again.
+  FDeliverText := Text;
+  FDeliverTicks := 0;
+  FDeliverTimer.Enabled := True;
+end;
+
+procedure TDictation.DeliverTick(Sender: TObject);
+begin
+  Inc(FDeliverTicks);
+  if (FDeliverTicks < 3) or
+     ((GetForegroundWindow <> FWindow.TargetWindow) and (FDeliverTicks < 20)) then
+    Exit;
+  FDeliverTimer.Enabled := False;
+  if Assigned(FOnResult) then
+    FOnResult(FDeliverText, '', FModel.Punctuation);
+end;
+
+procedure TDictation.WindowOk(Sender: TObject);
+begin
+  Confirm;
+end;
+
+procedure TDictation.WindowCancel(Sender: TObject);
+begin
+  Cancel;
+end;
+
+procedure TDictation.WindowEdit(Sender: TObject);
+begin
+  // The recording ends, the text stays in the window for corrections.
+  if FState = dsRecording then
+  begin
+    FInsertWhenReady := False;
+    Stop;
+  end;
 end;
 
 procedure TDictation.Stop;
@@ -544,6 +860,7 @@ begin
   if FState <> dsRecording then
     Exit;
   FMaxTimer.Enabled := False;
+  FPreviewTimer.Enabled := False;
   Samples := FRecorder.Stop;
   // Too short or silent: nothing to recognize.
   Peak := 0;
@@ -552,6 +869,28 @@ begin
     Value := Abs(Samples[I]);
     if Value * 100 > Peak then
       Peak := Trunc(Value * 100);
+  end;
+  if FLive and (Peak < SILENCE_PEAK) then
+  begin
+    FInsertWhenReady := False;
+    LiveFinished('', '');
+    FWindow.SetStatus(T('Не слышно речи — проверьте микрофон в Windows',
+      'No speech heard — check the microphone in Windows'));
+    Exit;
+  end;
+  if FLive then
+  begin
+    // The rest after the last finished part; a preview that still runs
+    // holds the recognizer.
+    FState := dsRecognizing;
+    Inc(FSequence);
+    FFinalSamples := Copy(Samples, FSegStart, MaxInt);
+    FWindow.SetState(dwRecognizing);
+    if FPreviewThread <> nil then
+      FFinalPending := True
+    else
+      StartFinal;
+    Exit;
   end;
   if (Length(Samples) < MIN_SECONDS * RECORD_SAMPLE_RATE) or (Peak < SILENCE_PEAK) then
   begin
@@ -573,11 +912,15 @@ end;
 
 procedure TDictation.Cancel;
 begin
+  FPreviewTimer.Enabled := False;
+  FFinalPending := False;
+  FInsertWhenReady := False;
   case FState of
     dsRecording:
       begin
         FMaxTimer.Enabled := False;
         FRecorder.Stop;
+        Inc(FSequence);
         FState := dsIdle;
       end;
     dsRecognizing:
@@ -589,6 +932,12 @@ begin
   end;
   FBusy := False;
   HideIndicator(nil);
+  if WindowShown then
+  begin
+    FWindow.CloseAndReturnFocus;
+    if Assigned(FOnWindowClosed) then
+      FOnWindowClosed(Self);
+  end;
 end;
 
 procedure TDictation.RecognitionDone(Sender: TObject);
@@ -598,17 +947,7 @@ begin
   Thread := TRecognitionThread(Sender);
   if FThread = Thread then
     FThread := nil;
-  // The model stays loaded for the next phrase.
-  if (Thread.FRecognizer <> nil) and (FRecognizer = nil) then
-  begin
-    FRecognizer := Thread.FRecognizer;
-    Thread.FRecognizer := nil;
-  end;
-  if not Thread.FModel.IsCloud then
-  begin
-    FIdleTimer.Enabled := False;
-    FIdleTimer.Enabled := True;
-  end;
+  TakeRecognizer(Thread);
   if Thread.FSequence <> FSequence then
   begin
     // Cancelled; a newer recording may run already.
@@ -617,6 +956,11 @@ begin
     Exit;
   end;
   FState := dsIdle;
+  if FLive then
+  begin
+    LiveFinished(JoinDictation(FCommitted, Thread.FText), Thread.FError);
+    Exit;
+  end;
   if Thread.FError <> '' then
     ShowError(T('Не удалось распознать речь: ', 'Speech recognition failed: ') + Thread.FError)
   else if Trim(Thread.FText) = '' then

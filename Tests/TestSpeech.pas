@@ -32,12 +32,14 @@ type
     procedure SettingsAndMigration;
     [Test]
     procedure ScrollLockGesture;
+    [Test]
+    procedure LiveParts;
   end;
 
 implementation
 
 uses
-  Winapi.Windows, System.SysUtils, System.IOUtils;
+  Winapi.Windows, System.SysUtils, System.IOUtils, uDictation;
 
 procedure TSpeechTests.SherpaStructuresMatchCHeader;
 var
@@ -261,6 +263,34 @@ begin
   finally
     D.Free;
   end;
+end;
+
+procedure TSpeechTests.LiveParts;
+
+  function Sound(Seconds, PauseSeconds: Double): TArray<Single>;
+  var
+    I, Speech: Integer;
+  begin
+    SetLength(Result, Round((Seconds + PauseSeconds) * RECORD_SAMPLE_RATE));
+    Speech := Round(Seconds * RECORD_SAMPLE_RATE);
+    for I := 0 to High(Result) do
+      if I < Speech then
+        Result[I] := 0.3 * Sin(I / 10)
+      else
+        Result[I] := 0.003 * Sin(I / 10);   // background noise
+  end;
+
+begin
+  Assert.AreEqual('Привет. Как дела?', JoinDictation(' Привет. ', 'Как дела?'));
+  Assert.AreEqual('Привет.', JoinDictation('Привет.', ' '));
+  Assert.AreEqual('Как дела?', JoinDictation('', 'Как дела?'));
+  // A pause after enough speech ends a part; speech to the end does not.
+  Assert.IsTrue(IsPartEnd(Sound(4, 0.8)));
+  Assert.IsFalse(IsPartEnd(Sound(4.8, 0)));
+  // Too short to end a part even with a pause.
+  Assert.IsFalse(IsPartEnd(Sound(1, 0.8)));
+  // Too long to recognize again and again.
+  Assert.IsTrue(IsPartEnd(Sound(26, 0)));
 end;
 
 initialization

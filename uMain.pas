@@ -301,6 +301,17 @@ type
     FAiInstructionNext: string;
     // The running recording is a voice edit command, not text to type.
     FDictationIsEdit: Boolean;
+    // The field the dictation window took the focus from and the text typed
+    // into it before: the buffer goes back to it when the text is inserted.
+    FDictationTarget: HWND;
+    FDictationTargetBuffer: string;
+    FDictationTargetOverflowed: Boolean;
+    // Scroll Lock presses while the dictation window is open, the one that
+    // opened it included: an odd count leaves Scroll Lock on when the window
+    // is closed with a button, Enter or Esc.
+    FDictationScrollPresses: Integer;
+    FDictationWatchScroll: Boolean;
+    FScrollLockDown: Boolean;
     // The last dictated text typed (for "удали последнее").
     FLastDictation: string;
     FDictationAiSequence: Cardinal;
@@ -358,6 +369,7 @@ type
     procedure DictationPageChange(Sender: TObject);
     procedure DictationUnloadModel(Sender: TObject);
     procedure ToggleDictation(VoiceEdit: Boolean);
+    procedure DictationWindowClosed(Sender: TObject);
     procedure StartVoiceEdit(const Command: string);
     procedure InsertDictatedText(const Text: string; Punctuation: Boolean);
     procedure RunVoiceCommand(Command: TVoiceCommand; const Insert: string);
@@ -599,6 +611,7 @@ begin
   FCapsOn := (GetKeyState(VK_CAPITAL) and 1) <> 0;
   FDictation := TDictation.Create(Self);
   FDictation.OnResult := DictationResult;
+  FDictation.OnWindowClosed := DictationWindowClosed;
   CreateDictationPage;
   // Before any window of the form exists: the layout is resized once.
   ModernizeSettingsWindow;
@@ -955,8 +968,17 @@ begin
   // pending double Alt nor drop the text typed so far.
   if not FPaused and not IsAltKey(VK) then
     CheckWindowChanged;
-  // Esc cancels a dictation (the key still reaches the application).
-  if (VK = VK_ESCAPE) and not IsKeyUp and ((FDictation.State <> dsIdle) or FDictation.Busy) then
+  // Held keys repeat their key-down: one press is counted once.
+  if VK = VK_SCROLL then
+  begin
+    if not IsKeyUp and not FScrollLockDown and FDictationWatchScroll then
+      Inc(FDictationScrollPresses);
+    FScrollLockDown := not IsKeyUp;
+  end;
+  // Esc cancels a dictation (the key still reaches the application); in
+  // the dictation window Esc is its own key.
+  if (VK = VK_ESCAPE) and not IsKeyUp and ((FDictation.State <> dsIdle) or FDictation.Busy) and
+     not FDictation.WindowFocused then
   begin
     DiagnosticsLog('dictation.cancel reason=escape');
     FDictation.Cancel;
@@ -3653,6 +3675,14 @@ var
   Gesture: TLSGesture;
   Hint, Title, ErrorText: string;
 begin
+  // The gesture again in the dictation window: OK.
+  if FDictation.WindowShown then
+  begin
+    if not VoiceEdit then
+      DiagnosticsLog('dictation.confirm reason=gesture');
+      FDictation.Confirm;
+    Exit;
+  end;
   case FDictation.State of
     dsRecording:
       begin
@@ -3727,19 +3757,48 @@ begin
   begin
     Gesture := FSettings.GestureForAction(laDictate);
     if Gesture <> lgNone then
-      Hint := Format(T('%s — вставить текст · Esc — отмена', '%s — insert the text · Esc — cancel'),
-        [GestureName(Gesture)])
+      Hint := Format(T('%s или Enter — вставить', '%s or Enter — insert'), [GestureName(Gesture)])
     else
-      Hint := T('Щелчок — вставить текст · Esc — отмена', 'Click to insert the text · Esc — cancel');
+      Hint := T('Enter — вставить · Esc — отмена', 'Enter — insert · Esc — cancel');
   end;
   FDictationIsEdit := VoiceEdit;
-  if FDictation.Start(Model, Cloud, Hint, ErrorText, Title) then
-    DiagnosticsLogFmt('dictation.start model=%s edit=%s', [Model.Id, BoolToStr(VoiceEdit, True)])
+  if not VoiceEdit then
+  begin
+    FDictationTarget := FLastWindow;
+    FDictationTargetBuffer := FBuffer;
+    FDictationTargetOverflowed := FBufferOverflowed;
+  end;
+  if FDictation.Start(Model, Cloud, Hint, ErrorText, Title, not VoiceEdit) then
+  begin
+    DiagnosticsLogFmt('dictation.start model=%s edit=%s', [Model.Id, BoolToStr(VoiceEdit, True)]);
+    if not VoiceEdit then
+      FDictationWatchScroll := True;
+      // The press that opened the window.
+      if FSettings.GestureForAction(laDictate) in [lgScrollLock, lgShiftScrollLock] then
+        FDictationScrollPresses := 1
+      else
+        FDictationScrollPresses := 0;
+  end
   else
   begin
     DiagnosticsLogFmt('dictation.start_failed error="%s"', [ErrorText]);
     FDictation.ShowError(ErrorText);
   end;
+end;
+
+procedure TFormMain.DictationWindowClosed(Sender: TObject);
+begin
+  if not FDictationWatchScroll then
+    Exit;
+  FDictationWatchScroll := False;
+  // Closed with a button, Enter or Esc after Scroll Lock opened it: Scroll
+  // Lock is switched back off (Excel and others scroll with it on).  The
+  // tap is our own input, the gesture detector ignores it.
+  if Odd(FDictationScrollPresses) then
+  begin
+    DiagnosticsLog('dictation.scroll_lock_restored');
+  end;
+  FDictationScrollPresses := 0;
 end;
 
 procedure TFormMain.DictationResult(const Text, ErrorText: string; Punctuation: Boolean);
@@ -3758,6 +3817,18 @@ begin
     StartVoiceEdit(Text);
     Exit;
   end;
+  // Back from the dictation window: the text typed into the field before it
+  // counts again (a capital letter, a space before the dictation).
+  if (FDictationTarget <> 0) and (GetFocusedWindow = FDictationTarget) then
+  begin
+    FLastWindow := 0;
+    CheckWindowChanged;
+    if not FDictationTargetOverflowed then
+      SetBufferText(FDictationTargetBuffer)
+    else
+      FBufferOverflowed := True;
+  end;
+  FDictationTarget := 0;
   // "Новая строка", "точка", "удали последнее" said alone: no AI needed.
   Command := ParseVoiceCommand(Text, Insert);
   if Command <> vcNone then

@@ -38,6 +38,9 @@ type
     function Start(MaxSeconds: Integer; out ErrorText: string): Boolean;
     // Ends the recording and returns what was recorded.
     function Stop: TArray<Single>;
+    // What was recorded from the sample From on, while recording goes on;
+    // Total is the number of samples recorded so far.
+    function Snapshot(From: Integer; out Total: Integer): TArray<Single>;
     function Recording: Boolean;
     property Level: Integer read GetLevel;
     property Seconds: Double read GetSeconds;
@@ -301,6 +304,21 @@ begin
     Exit;
   end;
   Result := True;
+end;
+
+function TAudioRecorder.Snapshot(From: Integer; out Total: Integer): TArray<Single>;
+begin
+  Result := nil;
+  FLock.Enter;
+  try
+    Total := FCount;
+    if From < 0 then
+      From := 0;
+    if From < FCount then
+      Result := SamplesToFloat(Copy(FSamples, From, FCount - From), FCount - From);
+  finally
+    FLock.Leave;
+  end;
 end;
 
 function TAudioRecorder.Stop: TArray<Single>;

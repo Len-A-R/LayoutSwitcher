@@ -37,6 +37,7 @@ uses
   uAudioRecorder in 'uAudioRecorder.pas',
   uSpeechCloud in 'uSpeechCloud.pas',
   uDictation in 'uDictation.pas',
+  uDictationWindow in 'uDictationWindow.pas',
   uDictationPage in 'uDictationPage.pas',
   uOperationWorker in 'uOperationWorker.pas',
   uMain in 'uMain.pas' {FormMain};
