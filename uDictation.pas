@@ -41,6 +41,7 @@ type
     FMessage: string;
     FHint: string;
     FTitle: string;          // replaces "Recognizing" (AI work)
+    FGlyph: Char;            // replaces the pencil of AI work (#0: pencil)
     FOnCancel: TNotifyEvent;
     FOnStop: TNotifyEvent;
     FCloseRect: TRect;
@@ -57,7 +58,7 @@ type
   public
     constructor CreateIndicator(AOwner: TComponent; Recorder: TAudioRecorder);
     procedure ShowState(State: TDictationState; const Hint: string;
-      const Title: string = '');
+      const Title: string = ''; Glyph: Char = #0);
     procedure ShowMessageText(const Text: string);
     procedure HideIndicator;
     function Shown: Boolean;
@@ -141,8 +142,8 @@ type
     // A message in the indicator for a few seconds.
     procedure ShowError(const Text: string);
     // The indicator with a running title (AI work after or without a
-    // recording) until HideBusy.
-    procedure ShowBusy(const Title, Hint: string);
+    // recording, reading aloud) until HideBusy.  Glyph: #0 is the pencil.
+    procedure ShowBusy(const Title, Hint: string; Glyph: Char = #0);
     procedure HideBusy;
     // Frees the loaded model (settings changed, low memory).
     procedure UnloadModel;
@@ -377,7 +378,7 @@ begin
 end;
 
 procedure TDictationIndicator.ShowState(State: TDictationState; const Hint: string;
-  const Title: string);
+  const Title: string; Glyph: Char);
 var
   Area: TRect;
   Monitor: TMonitor;
@@ -386,6 +387,7 @@ begin
   FState := State;
   FHint := Hint;
   FTitle := Title;
+  FGlyph := Glyph;
   FMessage := '';
   FillChar(FLevels, SizeOf(FLevels), 0);
   FTheme := CurrentUiTheme;
@@ -501,6 +503,8 @@ begin
   Canvas.Brush.Style := bsClear;
   if FMessage <> '' then
     Glyph := #$E7BA      // warning
+  else if (FState = dsRecognizing) and (FTitle <> '') and (FGlyph <> #0) then
+    Glyph := FGlyph
   else if (FState = dsRecognizing) and (FTitle <> '') then
     Glyph := #$E70F      // pencil: the AI works on text, not on the voice
   else
@@ -983,13 +987,13 @@ begin
   FHideTimer.Enabled := True;
 end;
 
-procedure TDictation.ShowBusy(const Title, Hint: string);
+procedure TDictation.ShowBusy(const Title, Hint: string; Glyph: Char);
 begin
   if FState <> dsIdle then
     Exit;
   FHideTimer.Enabled := False;
   EnsureIndicator;
-  FIndicator.ShowState(dsRecognizing, Hint, Title);
+  FIndicator.ShowState(dsRecognizing, Hint, Title, Glyph);
   FBusy := True;
 end;
 

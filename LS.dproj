@@ -173,6 +173,7 @@
         <DCCReference Include="uSpeechCloud.pas"/>
         <DCCReference Include="uDictation.pas"/>
         <DCCReference Include="uDictationWindow.pas"/>
+        <DCCReference Include="uReadAloud.pas"/>
         <DCCReference Include="uDictationPage.pas"/>
         <DCCReference Include="uOperationWorker.pas"/>
         <DCCReference Include="uMain.pas">

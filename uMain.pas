@@ -13,7 +13,7 @@ uses
   Vcl.StdCtrls, Vcl.ComCtrls, Vcl.Grids, uProgramList, uAiExplain, uExplainWindow, uModernUI,
   uSettings, uGestureDetector, uOperationWorker, uConversionChain,
   uLayoutIndicator, uUpdateCheck, uUpdateProgress, uLayoutConverter, uTextTools,
-  uDictation, uDictationPage, uAiText;
+  uDictation, uDictationPage, uAiText, uReadAloud;
 
 const
   INSTANCE_WINDOW_PROP = 'LayoutSwitcher.Instance.v2';
@@ -97,6 +97,8 @@ type
     cbVoiceEdit: TComboBox;
     lblAiFix: TLabel;
     cbAiFix: TComboBox;
+    lblReadAloud: TLabel;
+    cbReadAloud: TComboBox;
     tsServices: TTabSheet;
     lblAiHeader: TLabel;
     lblAiService: TLabel;
@@ -294,6 +296,18 @@ type
     // Dictation: recording and recognition, its settings page.
     FDictation: TDictation;
     FDictationPage: TDictationPage;
+    // Reading the selection aloud.
+    FReadAloud: TReadAloud;
+    FReadAloudTimer: TTimer;
+    FReadAloudActive: Boolean;
+    FReadAloudStarted: Cardinal;
+    // Alt+Scroll Lock toggled the Scroll Lock light: switched back when
+    // Scroll Lock is released.
+    FRestoreScrollOnUp: Boolean;
+    lblReadAloudVoice: TLabel;
+    cbReadAloudVoice: TComboBox;
+    cbReadAloudSpeed: TComboBox;
+    FReadAloudVoiceIds: TArray<string>;
     tsDictation: TTabSheet;
     // Recognized text waiting for a running operation to finish.
     FPendingDictation: string;
@@ -366,6 +380,12 @@ type
     procedure ProgramScanDone(Sender: TObject);
     procedure ModernizeSettingsWindow;
     procedure CreateDictationPage;
+    procedure CreateReadAloudControls;
+    procedure FillReadAloudControls;
+    procedure ReadAloudControlChange(Sender: TObject);
+    procedure StartReadAloud(const Text: string);
+    procedure StopReadAloud(const Reason: string);
+    procedure ReadAloudTick(Sender: TObject);
     procedure DictationPageChange(Sender: TObject);
     procedure DictationUnloadModel(Sender: TObject);
     procedure ToggleDictation(VoiceEdit: Boolean);
@@ -501,7 +521,7 @@ const
   ShortGestureNames: array[TLSGesture] of string = (
     '', 'Shift×2', 'LCtrl×2', 'RCtrl×2', 'Ctrl+Ctrl', 'Shift+Shift', 'Caps×2',
     'RAlt×2', 'LAlt×2', 'RCtrl+RAlt', 'Pause', 'ScrLk',
-    'Shift+ScrLk', 'Shift+Pause');
+    'Shift+ScrLk', 'Shift+Pause', 'Alt+ScrLk');
   AI_PROVIDER_FREE = 0;
   AI_PROVIDER_CLAUDE = 1;
   AI_PROVIDER_OPENAI = 2;
@@ -613,6 +633,7 @@ begin
   FDictation.OnResult := DictationResult;
   FDictation.OnWindowClosed := DictationWindowClosed;
   CreateDictationPage;
+  CreateReadAloudControls;
   // Before any window of the form exists: the layout is resized once.
   ModernizeSettingsWindow;
   ApplyLanguage;
@@ -672,6 +693,8 @@ var
   I: Integer;
 begin
   DiagnosticsLog('form.destroy begin');
+  StopReadAloud('exit');
+  FreeAndNil(FReadAloud);
   LSWTSUnRegisterSessionNotification(Handle);
   UnregisterRawInput;
   RestoreStickyKeysHotkey;
@@ -974,6 +997,12 @@ begin
     if not IsKeyUp and not FScrollLockDown and FDictationWatchScroll then
       Inc(FDictationScrollPresses);
     FScrollLockDown := not IsKeyUp;
+    if IsKeyUp and FRestoreScrollOnUp then
+    begin
+      FRestoreScrollOnUp := False;
+      // Our own input: the gesture detector ignores it.
+      SendKeyTap(VK_SCROLL);
+    end;
   end;
   // Esc cancels a dictation (the key still reaches the application); in
   // the dictation window Esc is its own key.
@@ -1231,6 +1260,22 @@ begin
     StartAiFix;
     Exit;
   end;
+  if Action = laReadAloud then
+  begin
+    // A Scroll Lock gesture would leave the Scroll Lock light on (the
+    // dictation window counts its presses itself).
+    if (FSettings.GestureForAction(laReadAloud) in [lgScrollLock, lgShiftScrollLock,
+       lgAltScrollLock]) and not FDictationWatchScroll then
+      FRestoreScrollOnUp := True;
+    // The gesture again: stop.
+    if FReadAloudActive then
+    begin
+      StopReadAloud('gesture');
+      Exit;
+    end;
+    if FDictation.WindowShown or (FDictation.State <> dsIdle) then
+      Exit;
+  end;
   if FBufferOverflowed or FFocusIsPassword then
     Plan := FChain.Plan(laNone, '')
   else if Action = laTranslateReplace then
@@ -1379,10 +1424,12 @@ begin
     if Res.Action in [laAiFix, laVoiceEdit] then
       FDictation.HideBusy;
 
-    if Res.Action in [laTranslate, laWebSearch, laExplain] then
+    if Res.Action in [laTranslate, laWebSearch, laExplain, laReadAloud] then
     begin
       if Res.Success and (Res.Action = laExplain) then
         StartExplain(Res.LookupText)
+      else if Res.Success and (Res.Action = laReadAloud) then
+        StartReadAloud(Res.LookupText)
       else if Res.Success then
       begin
         if Res.Action = laTranslate then
@@ -1767,6 +1814,8 @@ begin
     cbDictate.ItemIndex := Ord(FSettings.GestureForAction(laDictate));
     cbVoiceEdit.ItemIndex := Ord(FSettings.GestureForAction(laVoiceEdit));
     cbAiFix.ItemIndex := Ord(FSettings.GestureForAction(laAiFix));
+    cbReadAloud.ItemIndex := Ord(FSettings.GestureForAction(laReadAloud));
+    FillReadAloudControls;
     FDictationPage.Load(FSettings);
     edDeepLKey.Text := FSettings.DeepLApiKey;
     cbTranslator.ItemIndex := FSettings.Translator;
@@ -2603,6 +2652,7 @@ begin
     laDictate: Result := T('Диктовка', 'Dictation');
     laVoiceEdit: Result := T('Голосовая правка', 'Voice edit');
     laAiFix: Result := T('Исправление', 'Fix');
+    laReadAloud: Result := T('Чтение вслух', 'Read aloud');
     laTransliterate: Result := T('Транслит', 'Translit');
     laUndo: Result := T('Отмена', 'Undo');
   else
@@ -2613,7 +2663,7 @@ end;
 function TFormMain.GestureCombos: TArray<TComboBox>;
 begin
   Result := [cbConvert, cbUpper, cbLower, cbInvert, cbTranslit, cbUndo, cbTranslate,
-    cbWebSearch, cbTranslateReplace, cbExplain, cbDictate, cbVoiceEdit, cbAiFix];
+    cbWebSearch, cbTranslateReplace, cbExplain, cbDictate, cbVoiceEdit, cbAiFix, cbReadAloud];
 end;
 
 procedure TFormMain.ApplyLanguage;
@@ -2695,6 +2745,9 @@ begin
     lblDictate.Caption := ActionName(laDictate);
     lblVoiceEdit.Caption := ActionName(laVoiceEdit);
     lblAiFix.Caption := ActionName(laAiFix);
+    lblReadAloud.Caption := ActionName(laReadAloud);
+    lblReadAloudVoice.Caption := T('Голос для чтения вслух:', 'Voice for reading aloud:');
+    FillReadAloudControls;
     tsServices.Caption := T('Сервисы', 'Services');
     tsDictation.Caption := T('Диктовка', 'Dictation');
     FDictationPage.ApplyLanguage;
@@ -3654,6 +3707,133 @@ begin
   FDictationPage.OnUnloadModel := DictationUnloadModel;
 end;
 
+procedure TFormMain.CreateReadAloudControls;
+
+  function S(Value: Integer): Integer;
+  begin
+    Result := MulDiv(Value, Screen.PixelsPerInch, 96);
+  end;
+
+begin
+  FReadAloud := TReadAloud.Create;
+  FReadAloudTimer := TTimer.Create(Self);
+  FReadAloudTimer.Enabled := False;
+  FReadAloudTimer.Interval := 250;
+  FReadAloudTimer.OnTimer := ReadAloudTick;
+  // Under the AI settings on the Services page: the voice and the speed.
+  lblReadAloudVoice := TLabel.Create(Self);
+  lblReadAloudVoice.Parent := tsServices;
+  lblReadAloudVoice.SetBounds(S(12), S(369), S(220), S(13));
+  cbReadAloudVoice := TComboBox.Create(Self);
+  cbReadAloudVoice.Parent := tsServices;
+  cbReadAloudVoice.Style := csDropDownList;
+  cbReadAloudVoice.SetBounds(S(240), S(366), S(170), S(21));
+  cbReadAloudVoice.OnChange := ReadAloudControlChange;
+  cbReadAloudSpeed := TComboBox.Create(Self);
+  cbReadAloudSpeed.Parent := tsServices;
+  cbReadAloudSpeed.Style := csDropDownList;
+  cbReadAloudSpeed.SetBounds(S(416), S(366), S(76), S(21));
+  cbReadAloudSpeed.OnChange := ReadAloudControlChange;
+end;
+
+procedure TFormMain.FillReadAloudControls;
+var
+  Voice: TReadAloudVoice;
+  I, Index: Integer;
+  Saved: Boolean;
+begin
+  if cbReadAloudVoice = nil then
+    Exit;
+  Saved := FUpdatingControls;
+  FUpdatingControls := True;
+  try
+    cbReadAloudVoice.Items.BeginUpdate;
+    try
+      cbReadAloudVoice.Items.Clear;
+      cbReadAloudVoice.Items.Add(T('По языку текста', 'By the language of the text'));
+      FReadAloudVoiceIds := [''];
+      for Voice in FReadAloud.Voices do
+      begin
+        cbReadAloudVoice.Items.Add(Voice.Name);
+        FReadAloudVoiceIds := FReadAloudVoiceIds + [Voice.Id];
+      end;
+    finally
+      cbReadAloudVoice.Items.EndUpdate;
+    end;
+    Index := 0;
+    for I := 0 to High(FReadAloudVoiceIds) do
+      if SameText(FReadAloudVoiceIds[I], FSettings.ReadAloudVoice) then
+        Index := I;
+    cbReadAloudVoice.ItemIndex := Index;
+    cbReadAloudVoice.Hint := T('Голоса Windows: добавить можно в Параметрах → Время и язык → Речь.',
+      'Windows voices: add more in Settings → Time & language → Speech.');
+    cbReadAloudVoice.ShowHint := True;
+    cbReadAloudSpeed.Items.Clear;
+    for I := Low(READ_ALOUD_SPEED_NAMES) to High(READ_ALOUD_SPEED_NAMES) do
+      cbReadAloudSpeed.Items.Add(READ_ALOUD_SPEED_NAMES[I]);
+    cbReadAloudSpeed.ItemIndex := FSettings.ReadAloudSpeed;
+  finally
+    FUpdatingControls := Saved;
+  end;
+end;
+
+procedure TFormMain.ReadAloudControlChange(Sender: TObject);
+begin
+  if FUpdatingControls then
+    Exit;
+  if (cbReadAloudVoice.ItemIndex >= 0) and (cbReadAloudVoice.ItemIndex <= High(FReadAloudVoiceIds)) then
+    FSettings.ReadAloudVoice := FReadAloudVoiceIds[cbReadAloudVoice.ItemIndex];
+  if cbReadAloudSpeed.ItemIndex >= 0 then
+    FSettings.ReadAloudSpeed := cbReadAloudSpeed.ItemIndex;
+  ApplySettings;
+end;
+
+procedure TFormMain.StartReadAloud(const Text: string);
+var
+  ErrorText, Hint: string;
+  Gesture: TLSGesture;
+begin
+  if not FReadAloud.Speak(Text, FSettings.ReadAloudVoice,
+    READ_ALOUD_RATES[ReadAloudSpeedIndex(FSettings.ReadAloudSpeed)], ErrorText) then
+  begin
+    DiagnosticsLogFmt('read_aloud.failed error="%s"', [ErrorText]);
+    FDictation.ShowError(ErrorText);
+    Exit;
+  end;
+  DiagnosticsLogFmt('read_aloud.start length=%d', [Length(Text)]);
+  FReadAloudActive := True;
+  FReadAloudStarted := GetTickCount;
+  Gesture := FSettings.GestureForAction(laReadAloud);
+  if Gesture <> lgNone then
+    Hint := Format(T('%s или Esc — остановить', '%s or Esc — stop'), [GestureName(Gesture)])
+  else
+    Hint := T('Esc — остановить', 'Esc — stop');
+  // The speaker glyph instead of the pencil of AI work.
+  FDictation.ShowBusy(T('Читаю вслух', 'Reading aloud'), Hint, #$E767);
+  FReadAloudTimer.Enabled := True;
+end;
+
+procedure TFormMain.StopReadAloud(const Reason: string);
+begin
+  FReadAloudTimer.Enabled := False;
+  if not FReadAloudActive then
+    Exit;
+  FReadAloudActive := False;
+  FReadAloud.Stop;
+  FDictation.HideBusy;
+  DiagnosticsLogFmt('read_aloud.stop reason=%s', [Reason]);
+end;
+
+procedure TFormMain.ReadAloudTick(Sender: TObject);
+begin
+  // Esc or the close button of the indicator cancelled it.
+  if not FDictation.Busy then
+    StopReadAloud('cancel')
+  // SAPI needs a moment to report that it speaks.
+  else if (GetTickCount - FReadAloudStarted > 500) and not FReadAloud.Speaking then
+    StopReadAloud('done');
+end;
+
 procedure TFormMain.DictationPageChange(Sender: TObject);
 begin
   if FUpdatingControls then
@@ -3679,8 +3859,10 @@ begin
   if FDictation.WindowShown then
   begin
     if not VoiceEdit then
+    begin
       DiagnosticsLog('dictation.confirm reason=gesture');
       FDictation.Confirm;
+    end;
     Exit;
   end;
   case FDictation.State of
@@ -3772,12 +3954,14 @@ begin
   begin
     DiagnosticsLogFmt('dictation.start model=%s edit=%s', [Model.Id, BoolToStr(VoiceEdit, True)]);
     if not VoiceEdit then
+    begin
       FDictationWatchScroll := True;
       // The press that opened the window.
       if FSettings.GestureForAction(laDictate) in [lgScrollLock, lgShiftScrollLock] then
         FDictationScrollPresses := 1
       else
         FDictationScrollPresses := 0;
+    end;
   end
   else
   begin
@@ -3797,6 +3981,7 @@ begin
   if Odd(FDictationScrollPresses) then
   begin
     DiagnosticsLog('dictation.scroll_lock_restored');
+    SendKeyTap(VK_SCROLL);
   end;
   FDictationScrollPresses := 0;
 end;

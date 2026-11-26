@@ -849,6 +849,7 @@ procedure TOperationWorker.ProcessLookup(Request: TOperationRequest;
 const
   MAX_LOOKUP_LEN = 1000;
   MAX_EXPLAIN_LEN = 6000;
+  MAX_READ_ALOUD_LEN = 20000;
 var
   Text, Source: string;
   CaretText: WideString;
@@ -883,6 +884,9 @@ begin
     if Request.Action = laExplain then
       Notify(Res, 'lookup_empty', T('Выделите текст, который нужно объяснить.',
         'Select the text to explain.'))
+    else if Request.Action = laReadAloud then
+      Notify(Res, 'lookup_empty', T('Выделите текст, который нужно прочитать.',
+        'Select the text to read.'))
     else
       Notify(Res, 'lookup_empty', T('Выделите текст, который нужно перевести или найти.',
         'Select the text to translate or search for.'));
@@ -894,6 +898,13 @@ begin
     Text := Trim(Text);
     if Length(Text) > MAX_EXPLAIN_LEN then
       SetLength(Text, MAX_EXPLAIN_LEN);
+  end
+  else if Request.Action = laReadAloud then
+  begin
+    // Lines are pauses when read.
+    Text := Trim(Text);
+    if Length(Text) > MAX_READ_ALOUD_LEN then
+      SetLength(Text, MAX_READ_ALOUD_LEN);
   end
   else
   begin
@@ -964,7 +975,7 @@ begin
     Exit;
   end;
 
-  if Request.Action in [laTranslate, laWebSearch, laExplain] then
+  if Request.Action in [laTranslate, laWebSearch, laExplain, laReadAloud] then
   begin
     ProcessLookup(Request, Res, Focus);
     Exit;

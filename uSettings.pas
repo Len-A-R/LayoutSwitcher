@@ -15,13 +15,13 @@ type
   // in front of laAutoSwitch (the TLSActionGestures range).
   TLSAction = (laNone, laConvert, laUpperCase, laLowerCase, laInvertCase,
     laTransliterate, laUndo, laTranslate, laWebSearch, laTranslateReplace,
-    laExplain, laDictate, laVoiceEdit, laAiFix,
+    laExplain, laDictate, laVoiceEdit, laAiFix, laReadAloud,
     // Not bound to a gesture: started automatically after a space.
     laAutoSwitch);
   TLSGesture = (lgNone, lgDoubleShift, lgDoubleLCtrl, lgDoubleRCtrl, lgBothCtrl,
     lgBothShift, lgDoubleCapsLock, lgDoubleRAlt, lgDoubleLAlt, lgRCtrlRAlt, lgPause, lgScrollLock,
-    lgShiftScrollLock, lgShiftPause);
-  TLSActionGestures = array[laConvert..laAiFix] of TLSGesture;
+    lgShiftScrollLock, lgShiftPause, lgAltScrollLock);
+  TLSActionGestures = array[laConvert..laReadAloud] of TLSGesture;
 
   TLSSettings = record
     ActionGestures: TLSActionGestures;
@@ -85,6 +85,10 @@ type
     DictationCloudConsent: Boolean;
     // TDictationAiMode in uAiText: 0 = typed as recognized.
     DictationAiMode: Integer;
+    // Reading aloud: the voice (token id, '' = by the language of the text)
+    // and the speed (index of READ_ALOUD_RATES in uReadAloud, 1 = normal).
+    ReadAloudVoice: string;
+    ReadAloudSpeed: Integer;
     AutoSwitchExceptions: TArray<string>;
     // Programs where only the manual actions work (code editors, terminals).
     NoAutoCorrectProcesses: TArray<string>;
@@ -117,13 +121,14 @@ const
   // 6: "explain the selection (AI)" got Pause/Break.
   // 7: dictation got Scroll Lock.
   // 8: voice edit got Shift+Scroll Lock, "fix the text (AI)" Shift+Pause.
-  CURRENT_SETTINGS_VERSION = 8;
+  // 9: reading aloud got Alt+Scroll Lock.
+  CURRENT_SETTINGS_VERSION = 9;
   STARTUP_VALUE_NAME = 'LayoutSwitcher';
 
   ActionKeys: array[TLSAction] of string = (
     'none', 'convert_layout', 'uppercase', 'lowercase', 'invert_case',
     'transliterate', 'undo', 'translate', 'web_search', 'translate_replace',
-    'explain', 'dictate', 'voice_edit', 'ai_fix', 'auto_switch');
+    'explain', 'dictate', 'voice_edit', 'ai_fix', 'read_aloud', 'auto_switch');
 
   // Screenshot tools own full-screen overlays, use Shift/Ctrl themselves and
   // monitor the clipboard.  LayoutSwitcher must not inject input into them.
@@ -228,6 +233,8 @@ const
   VALUE_DICTATION_CLOUD_MODEL = 'DictationCloudModel';
   VALUE_DICTATION_CLOUD_CONSENT = 'DictationCloudConsent';
   VALUE_DICTATION_AI_MODE = 'DictationAiMode';
+  VALUE_READ_ALOUD_VOICE = 'ReadAloudVoice';
+  VALUE_READ_ALOUD_SPEED = 'ReadAloudSpeed';
   VALUE_CUSTOM_PROGRAMS = 'CustomPrograms';
   VALUE_AUTO_SWITCH_EXCEPTIONS = 'AutoSwitchExceptions';
   VALUE_NO_AUTOCORRECT = 'NoAutoCorrectProcesses';
@@ -301,12 +308,15 @@ begin
   Result.ActionGestures[laDictate] := lgScrollLock;
   Result.ActionGestures[laVoiceEdit] := lgShiftScrollLock;
   Result.ActionGestures[laAiFix] := lgShiftPause;
+  Result.ActionGestures[laReadAloud] := lgAltScrollLock;
   Result.DictationModel := DEFAULT_SPEECH_MODEL;
   Result.DictationCloudUrl := DEFAULT_SPEECH_CLOUD_URL;
   Result.DictationCloudKey := '';
   Result.DictationCloudModel := DEFAULT_SPEECH_CLOUD_MODEL;
   Result.DictationCloudConsent := False;
   Result.DictationAiMode := 0;
+  Result.ReadAloudVoice := '';
+  Result.ReadAloudSpeed := 1;
 end;
 
 function ActionName(Action: TLSAction): string;
@@ -325,6 +335,7 @@ begin
     laDictate: Result := T('Диктовка (голосовой ввод)', 'Dictation (voice typing)');
     laVoiceEdit: Result := T('Голосовая правка выделенного (ИИ)', 'Voice edit of the selection (AI)');
     laAiFix: Result := T('Исправить ошибки в тексте (ИИ)', 'Fix errors in the text (AI)');
+    laReadAloud: Result := T('Прочитать выделенное вслух', 'Read the selection aloud');
   else
     Result := T('Нет', 'None');
   end;
@@ -346,6 +357,7 @@ begin
     lgScrollLock: Result := 'Scroll Lock';
     lgShiftScrollLock: Result := 'Shift + Scroll Lock';
     lgShiftPause: Result := 'Shift + Pause/Break';
+    lgAltScrollLock: Result := 'Alt + Scroll Lock';
   else
     Result := T('Отключено', 'Disabled');
   end;
@@ -478,9 +490,9 @@ procedure MigrateActionGestures(var Gestures: TLSActionGestures;
   FromVersion: Integer);
 const
   // Actions that received a default gesture in the given settings version.
-  NewActions: array[0..8] of TLSAction = (laTransliterate, laUndo, laTranslate,
-    laWebSearch, laTranslateReplace, laExplain, laDictate, laVoiceEdit, laAiFix);
-  IntroducedIn: array[0..8] of Integer = (2, 2, 3, 3, 5, 6, 7, 8, 8);
+  NewActions: array[0..9] of TLSAction = (laTransliterate, laUndo, laTranslate,
+    laWebSearch, laTranslateReplace, laExplain, laDictate, laVoiceEdit, laAiFix, laReadAloud);
+  IntroducedIn: array[0..9] of Integer = (2, 2, 3, 3, 5, 6, 7, 8, 8, 9);
 var
   Defaults: TLSActionGestures;
   NewAction, Other: TLSAction;
@@ -651,6 +663,10 @@ begin
     Result.DictationAiMode := Store.ReadInteger(VALUE_DICTATION_AI_MODE, 0);
     if (Result.DictationAiMode < 0) or (Result.DictationAiMode > 3) then
       Result.DictationAiMode := 0;
+    Result.ReadAloudVoice := Trim(Store.ReadString(VALUE_READ_ALOUD_VOICE, ''));
+    Result.ReadAloudSpeed := Store.ReadInteger(VALUE_READ_ALOUD_SPEED, 1);
+    if (Result.ReadAloudSpeed < 0) or (Result.ReadAloudSpeed > 4) then
+      Result.ReadAloudSpeed := 1;
     Result.CustomPrograms := ParseProcessList(Store.ReadString(VALUE_CUSTOM_PROGRAMS, ''));
     if Store.ValueExists(VALUE_AUTO_SWITCH_EXCEPTIONS) then
       Result.AutoSwitchExceptions := ParseWordList(
@@ -725,6 +741,8 @@ begin
     Store.WriteString(VALUE_DICTATION_CLOUD_MODEL, Settings.DictationCloudModel);
     Store.WriteBool(VALUE_DICTATION_CLOUD_CONSENT, Settings.DictationCloudConsent);
     Store.WriteInteger(VALUE_DICTATION_AI_MODE, Settings.DictationAiMode);
+    Store.WriteString(VALUE_READ_ALOUD_VOICE, Settings.ReadAloudVoice);
+    Store.WriteInteger(VALUE_READ_ALOUD_SPEED, Settings.ReadAloudSpeed);
     Store.WriteString(VALUE_CUSTOM_PROGRAMS, ProcessListToText(Settings.CustomPrograms));
     Store.WriteString(VALUE_AUTO_SWITCH_EXCEPTIONS,
       string.Join('; ', Settings.AutoSwitchExceptions));

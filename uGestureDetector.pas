@@ -83,6 +83,7 @@ type
     function OtherKeysDown(ExceptA, ExceptB, ExceptC: Cardinal): Boolean;
     // Only Shift (one or both) is held besides the given keys.
     function OnlyShiftDownWith(KeyA, KeyB: Cardinal): Boolean;
+    function OnlyAltDownWith(Key: Cardinal): Boolean;
     function CompleteTap(var Pending: Boolean; var PendingTime: Cardinal;
       Time: Cardinal): Boolean;
     procedure CancelPending;
@@ -274,6 +275,21 @@ begin
       if IsShiftKey(I) then
         Result := True
       else if (I <> KeyA) and (I <> KeyB) then
+        Exit(False);
+    end;
+end;
+
+function TGestureDetector.OnlyAltDownWith(Key: Cardinal): Boolean;
+var
+  I: Cardinal;
+begin
+  Result := False;
+  for I := Low(FS.KeyDown) to High(FS.KeyDown) do
+    if FS.KeyDown[I] then
+    begin
+      if IsAltKey(I) then
+        Result := True
+      else if I <> Key then
         Exit(False);
     end;
 end;
@@ -494,7 +510,9 @@ begin
   if (VK = VK_SCROLL) and not OtherKeysDown(VK_SCROLL, VK_SCROLL, VK_SCROLL) then
     Result := lgScrollLock
   else if (VK = VK_SCROLL) and OnlyShiftDownWith(VK_SCROLL, VK_SCROLL) then
-    Result := lgShiftScrollLock;
+    Result := lgShiftScrollLock
+  else if (VK = VK_SCROLL) and OnlyAltDownWith(VK_SCROLL) then
+    Result := lgAltScrollLock;
   // Right Ctrl + Right Alt in either order.
   if ((VK = VK_RMENU) and FS.KeyDown[VK_RCONTROL]) or
      ((VK = VK_RCONTROL) and FS.KeyDown[VK_RMENU]) then

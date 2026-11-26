@@ -25,7 +25,8 @@ uses
   TestTranslate in 'TestTranslate.pas',
   TestAiExplain in 'TestAiExplain.pas',
   TestSpeech in 'TestSpeech.pas',
-  TestAiText in 'TestAiText.pas';
+  TestAiText in 'TestAiText.pas',
+  TestReadAloud in 'TestReadAloud.pas';
 
 var
   Runner: ITestRunner;

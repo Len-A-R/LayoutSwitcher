@@ -216,14 +216,14 @@ object FormMain: TFormMain
       end
       object lblUpper: TLabel
         Left = 12
-        Top = 43
+        Top = 41
         Width = 8
         Height = 13
         Caption = #1055#1088#1077#1086#1073#1088#1072#1079#1086#1074#1072#1090#1100' '#1074' '#1042#1045#1056#1061#1053#1048#1049' '#1088#1077#1075#1080#1089#1090#1088
       end
       object cbUpper: TComboBox
         Left = 240
-        Top = 40
+        Top = 38
         Width = 252
         Height = 21
         Style = csDropDownList
@@ -233,14 +233,14 @@ object FormMain: TFormMain
       end
       object lblLower: TLabel
         Left = 12
-        Top = 71
+        Top = 67
         Width = 8
         Height = 13
         Caption = #1055#1088#1077#1086#1073#1088#1072#1079#1086#1074#1072#1090#1100' '#1074' '#1085#1080#1078#1085#1080#1081' '#1088#1077#1075#1080#1089#1090#1088
       end
       object cbLower: TComboBox
         Left = 240
-        Top = 68
+        Top = 64
         Width = 252
         Height = 21
         Style = csDropDownList
@@ -250,14 +250,14 @@ object FormMain: TFormMain
       end
       object lblInvert: TLabel
         Left = 12
-        Top = 99
+        Top = 93
         Width = 8
         Height = 13
         Caption = #1048#1085#1074#1077#1088#1090#1080#1088#1086#1074#1072#1090#1100' '#1088#1077#1075#1080#1089#1090#1088
       end
       object cbInvert: TComboBox
         Left = 240
-        Top = 96
+        Top = 90
         Width = 252
         Height = 21
         Style = csDropDownList
@@ -267,14 +267,14 @@ object FormMain: TFormMain
       end
       object lblTranslit: TLabel
         Left = 12
-        Top = 127
+        Top = 119
         Width = 8
         Height = 13
         Caption = #1058#1088#1072#1085#1089#1083#1080#1090#1077#1088#1072#1094#1080#1103
       end
       object cbTranslit: TComboBox
         Left = 240
-        Top = 124
+        Top = 116
         Width = 252
         Height = 21
         Style = csDropDownList
@@ -284,14 +284,14 @@ object FormMain: TFormMain
       end
       object lblUndo: TLabel
         Left = 12
-        Top = 155
+        Top = 145
         Width = 8
         Height = 13
         Caption = #1054#1090#1084#1077#1085#1080#1090#1100' '#1087#1086#1089#1083#1077#1076#1085#1077#1077' '#1080#1089#1087#1088#1072#1074#1083#1077#1085#1080#1077
       end
       object cbUndo: TComboBox
         Left = 240
-        Top = 152
+        Top = 142
         Width = 252
         Height = 21
         Style = csDropDownList
@@ -301,14 +301,14 @@ object FormMain: TFormMain
       end
       object lblTranslate: TLabel
         Left = 12
-        Top = 183
+        Top = 171
         Width = 8
         Height = 13
         Caption = #1055#1077#1088#1077#1074#1077#1089#1090#1080' '#1074#1099#1076#1077#1083#1077#1085#1085#1086#1077
       end
       object cbTranslate: TComboBox
         Left = 240
-        Top = 180
+        Top = 168
         Width = 252
         Height = 21
         Style = csDropDownList
@@ -318,14 +318,14 @@ object FormMain: TFormMain
       end
       object lblWebSearch: TLabel
         Left = 12
-        Top = 211
+        Top = 197
         Width = 8
         Height = 13
         Caption = #1053#1072#1081#1090#1080' '#1074#1099#1076#1077#1083#1077#1085#1085#1086#1077' '#1074' '#1080#1085#1090#1077#1088#1085#1077#1090#1077
       end
       object cbWebSearch: TComboBox
         Left = 240
-        Top = 208
+        Top = 194
         Width = 252
         Height = 21
         Style = csDropDownList
@@ -335,14 +335,14 @@ object FormMain: TFormMain
       end
       object lblTranslateReplace: TLabel
         Left = 12
-        Top = 239
+        Top = 223
         Width = 8
         Height = 13
         Caption = #1053#1072#1081#1090#1080' '#1074#1099#1076#1077#1083#1077#1085#1085#1086#1077' '#1074' '#1080#1085#1090#1077#1088#1085#1077#1090#1077
       end
       object cbTranslateReplace: TComboBox
         Left = 240
-        Top = 236
+        Top = 220
         Width = 252
         Height = 21
         Style = csDropDownList
@@ -352,14 +352,14 @@ object FormMain: TFormMain
       end
       object lblExplain: TLabel
         Left = 12
-        Top = 267
+        Top = 249
         Width = 8
         Height = 13
         Caption = #1053#1072#1081#1090#1080' '#1074#1099#1076#1077#1083#1077#1085#1085#1086#1077' '#1074' '#1080#1085#1090#1077#1088#1085#1077#1090#1077
       end
       object cbExplain: TComboBox
         Left = 240
-        Top = 264
+        Top = 246
         Width = 252
         Height = 21
         Style = csDropDownList
@@ -369,14 +369,14 @@ object FormMain: TFormMain
       end
       object lblDictate: TLabel
         Left = 12
-        Top = 295
+        Top = 275
         Width = 8
         Height = 13
         Caption = 'Dictation'
       end
       object cbDictate: TComboBox
         Left = 240
-        Top = 292
+        Top = 272
         Width = 252
         Height = 21
         Style = csDropDownList
@@ -386,14 +386,14 @@ object FormMain: TFormMain
       end
       object lblVoiceEdit: TLabel
         Left = 12
-        Top = 323
+        Top = 301
         Width = 8
         Height = 13
         Caption = 'VoiceEdit'
       end
       object cbVoiceEdit: TComboBox
         Left = 240
-        Top = 320
+        Top = 298
         Width = 252
         Height = 21
         Style = csDropDownList
@@ -403,19 +403,36 @@ object FormMain: TFormMain
       end
       object lblAiFix: TLabel
         Left = 12
-        Top = 351
+        Top = 327
         Width = 8
         Height = 13
         Caption = 'AiFix'
       end
       object cbAiFix: TComboBox
         Left = 240
-        Top = 348
+        Top = 324
         Width = 252
         Height = 21
         Style = csDropDownList
         Tag = 13
         TabOrder = 12
+        OnChange = cbGestureChange
+      end
+      object lblReadAloud: TLabel
+        Left = 12
+        Top = 353
+        Width = 8
+        Height = 13
+        Caption = 'ReadAloud'
+      end
+      object cbReadAloud: TComboBox
+        Left = 240
+        Top = 350
+        Width = 252
+        Height = 21
+        Style = csDropDownList
+        Tag = 14
+        TabOrder = 13
         OnChange = cbGestureChange
       end
       object lblInterval: TLabel
@@ -431,7 +448,7 @@ object FormMain: TFormMain
         Width = 57
         Height = 21
         NumbersOnly = True
-        TabOrder = 13
+        TabOrder = 14
         Text = '500'
         OnChange = edIntervalChange
         OnExit = edIntervalExit
@@ -446,7 +463,7 @@ object FormMain: TFormMain
         Max = 1000
         Increment = 50
         Position = 500
-        TabOrder = 14
+        TabOrder = 15
         Thousands = False
       end
       object lblIntervalUnit: TLabel
