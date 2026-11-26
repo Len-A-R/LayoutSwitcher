@@ -30,6 +30,8 @@ type
     FOlePersistOnFlushFormat: UINT;
     FPngFormat: UINT;
     FHistoryExclusionFormat: UINT;
+    // The size a snapshot may take (an image needs more).
+    FMaxBytes: UInt64;
     function IsTransientFormat(FormatID: UINT): Boolean;
     function DuplicateData(FormatID: UINT; Source: THandle;
       out DataSize: NativeUInt): THandle;
@@ -40,8 +42,12 @@ type
     destructor Destroy; override;
     // Checks that touching the clipboard is safe and worthwhile.  It does not
     // open the clipboard and does not trigger delayed rendering.
+    // AllowImages: an action the user started (a key, the menu) may save and
+    // restore an image or files in the clipboard; automatic corrections may
+    // not (megabytes on every word, a "new screenshot" for clipboard
+    // watchers).
     function CanUseFallback(const IsExcludedOwner: TFunc<HWND, string, Boolean>;
-      out Reason: string): Boolean;
+      out Reason: string; AllowImages: Boolean = False): Boolean;
     function Save(Owner: HWND): Boolean;
     procedure Restore(Owner: HWND);
     procedure Discard;
@@ -52,6 +58,8 @@ const
   CLIPBOARD_OPEN_TIMEOUT = 1000;
   CLIPBOARD_RETRY_INTERVAL = 10;
   MAX_CLIPBOARD_SNAPSHOT_BYTES = 16 * 1024 * 1024;
+  // A screenshot in a few formats (DIB, DIBV5, PNG).
+  MAX_CLIPBOARD_IMAGE_SNAPSHOT_BYTES = 64 * 1024 * 1024;
 
 function OpenClipboardWithRetry(Owner: HWND; TimeoutMS: DWORD): Boolean;
 function WaitForClipboardChange(OldSequence, TimeoutMS: DWORD): Boolean;
@@ -165,6 +173,7 @@ begin
   FPngFormat := RegisterClipboardFormat('PNG');
   FHistoryExclusionFormat :=
     RegisterClipboardFormat('ExcludeClipboardContentFromMonitorProcessing');
+  FMaxBytes := MAX_CLIPBOARD_SNAPSHOT_BYTES;
 end;
 
 destructor TClipboardSnapshot.Destroy;
@@ -188,13 +197,14 @@ end;
 
 function TClipboardSnapshot.CanUseFallback(
   const IsExcludedOwner: TFunc<HWND, string, Boolean>;
-  out Reason: string): Boolean;
+  out Reason: string; AllowImages: Boolean): Boolean;
 var
   Owner: HWND;
   OwnerProcess: string;
 begin
   Result := False;
   Reason := '';
+  FMaxBytes := MAX_CLIPBOARD_SNAPSHOT_BYTES;
 
   // GetClipboardData on a delayed-rendered format sends a synchronous
   // WM_RENDERFORMAT to the owner while the clipboard is held open.
@@ -224,8 +234,13 @@ begin
      IsClipboardFormatAvailable(CF_HDROP) or
      ((FPngFormat <> 0) and IsClipboardFormatAvailable(FPngFormat)) then
   begin
-    Reason := 'clipboard_has_image_or_files';
-    Exit;
+    if not AllowImages then
+    begin
+      Reason := 'clipboard_has_image_or_files';
+      Exit;
+    end;
+    FMaxBytes := MAX_CLIPBOARD_IMAGE_SNAPSHOT_BYTES;
+    DiagnosticsLog('clipboard.fallback image_or_files=true');
   end;
 
   Result := True;
@@ -475,7 +490,7 @@ begin
 
         FFormats := FFormats + [Item];
         Inc(TotalBytes, Item.DataSize);
-        if TotalBytes > MAX_CLIPBOARD_SNAPSHOT_BYTES then
+        if TotalBytes > FMaxBytes then
         begin
           TooLarge := True;
           Break;

@@ -441,7 +441,7 @@ begin
          for Name in Excluded do
            if SameText(Name, ProcessName) then
              Exit(True);
-       end, FClipboardSkipReason) then
+       end, FClipboardSkipReason, not Request.Automatic) then
   begin
     DiagnosticsLogFmt('target.clipboard skipped reason=%s', [FClipboardSkipReason]);
     Exit;
@@ -844,6 +844,14 @@ begin
     DiagnosticsLog('autocorrect.skipped reason=typing_continued');
 end;
 
+function IsChromiumOrFirefoxWindow(Wnd: HWND): Boolean;
+var
+  ClassName: string;
+begin
+  ClassName := GetWindowClassName(Wnd);
+  Result := ClassName.StartsWith('Chrome_') or (ClassName = 'MozillaWindowClass');
+end;
+
 procedure TOperationWorker.ProcessLookup(Request: TOperationRequest;
   Res: TOperationResult; const Focus: TUIAFocusInfo);
 const
@@ -864,6 +872,11 @@ begin
     Text := Focus.SelectionText;
     Source := 'uia';
   end
+  // Browsers and Electron applications (ChatGPT, Claude, VS Code): the
+  // selection of the page, without the clipboard.
+  else if IsChromiumOrFirefoxWindow(Request.FocusWnd) and
+          UIAGetDocumentSelection(GetAncestor(Request.FocusWnd, GA_ROOT), Text) then
+    Source := 'uia_document'
   else if Trim(Request.Plan.Text) <> '' then
   begin
     Text := Trim(Request.Plan.Text);

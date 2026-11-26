@@ -28,6 +28,10 @@ function QueryUIAutomationFocus: TUIAFocusInfo;
 function UIAGetTextBeforeCaret(const Info: TUIAFocusInfo; MaxLength: Integer;
   out Text: WideString; out Range: IUnknown): Boolean;
 function UIASelectRange(const Range: IUnknown): Boolean;
+// The selected text of the document of the window (a page in a browser or an
+// Electron application), even when the focus is not in a text field.
+// Must be called from a thread that has initialised COM.
+function UIAGetDocumentSelection(Wnd: HWND; out Text: string): Boolean;
 
 implementation
 
@@ -193,6 +197,116 @@ type
     function Reserved13: HRESULT; stdcall;
     function Select: HRESULT; stdcall;
   end;
+
+type
+  ILSDocElement = interface;
+
+  // IUIAutomation: ElementFromHandle (slot 4) and CreatePropertyCondition
+  // (slot 21) only.
+  ILSDocAutomation = interface(IUnknown)
+  ['{30CBE57D-D9D0-452A-AB13-7AC5AC4825EE}']
+    function Reserved01: HRESULT; stdcall;
+    function Reserved02: HRESULT; stdcall;
+    function Reserved03: HRESULT; stdcall;
+    function ElementFromHandle(Wnd: HWND; out Element: ILSDocElement): HRESULT; stdcall;
+    function Reserved05: HRESULT; stdcall;
+    function Reserved06: HRESULT; stdcall;
+    function Reserved07: HRESULT; stdcall;
+    function Reserved08: HRESULT; stdcall;
+    function Reserved09: HRESULT; stdcall;
+    function Reserved10: HRESULT; stdcall;
+    function Reserved11: HRESULT; stdcall;
+    function Reserved12: HRESULT; stdcall;
+    function Reserved13: HRESULT; stdcall;
+    function Reserved14: HRESULT; stdcall;
+    function Reserved15: HRESULT; stdcall;
+    function Reserved16: HRESULT; stdcall;
+    function Reserved17: HRESULT; stdcall;
+    function Reserved18: HRESULT; stdcall;
+    function Reserved19: HRESULT; stdcall;
+    function Reserved20: HRESULT; stdcall;
+    function CreatePropertyCondition(PropertyId: Integer; Value: OleVariant;
+      out Condition: IUnknown): HRESULT; stdcall;
+  end;
+
+  // IUIAutomationElement: FindFirst (slot 3) and GetCurrentPattern (14).
+  ILSDocElement = interface(IUnknown)
+  ['{D22108AA-8AC5-49A5-837B-37BBB3D7591E}']
+    function Reserved01: HRESULT; stdcall;
+    function Reserved02: HRESULT; stdcall;
+    function FindFirst(Scope: Integer; const Condition: IUnknown;
+      out Found: ILSDocElement): HRESULT; stdcall;
+    function Reserved04: HRESULT; stdcall;
+    function Reserved05: HRESULT; stdcall;
+    function Reserved06: HRESULT; stdcall;
+    function Reserved07: HRESULT; stdcall;
+    function Reserved08: HRESULT; stdcall;
+    function Reserved09: HRESULT; stdcall;
+    function Reserved10: HRESULT; stdcall;
+    function Reserved11: HRESULT; stdcall;
+    function Reserved12: HRESULT; stdcall;
+    function Reserved13: HRESULT; stdcall;
+    function GetCurrentPattern(PatternId: Integer; out Pattern: IUnknown): HRESULT; stdcall;
+  end;
+
+function UIAGetDocumentSelection(Wnd: HWND; out Text: string): Boolean;
+const
+  UIA_CONTROL_TYPE_PROPERTY_ID = 30003;
+  UIA_DOCUMENT_CONTROL_TYPE_ID = 50030;
+  TREE_SCOPE_DESCENDANTS = 4;
+var
+  Automation: ILSDocAutomation;
+  Automation2: ILSUIAutomation2;
+  Root, Document: ILSDocElement;
+  Condition, PatternObject: IUnknown;
+  TextPattern: ILSUIAutomationTextPattern;
+  Ranges: ILSUIAutomationTextRangeArray;
+  Range: ILSUIAutomationTextRange;
+  Count, I: Integer;
+  Part: WideString;
+begin
+  Result := False;
+  Text := '';
+  if Wnd = 0 then
+    Exit;
+  try
+    if Failed(CoCreateInstance(CLASS_CUIAutomation, nil, CLSCTX_INPROC_SERVER,
+         ILSDocAutomation, Automation)) or (Automation = nil) then
+      Exit;
+    if Supports(Automation, ILSUIAutomation2, Automation2) then
+    begin
+      Automation2.PutConnectionTimeout(UIA_CONNECTION_TIMEOUT_MS);
+      Automation2.PutTransactionTimeout(UIA_TRANSACTION_TIMEOUT_MS);
+    end;
+    if Failed(Automation.ElementFromHandle(Wnd, Root)) or (Root = nil) then
+      Exit;
+    if Failed(Automation.CreatePropertyCondition(UIA_CONTROL_TYPE_PROPERTY_ID,
+         UIA_DOCUMENT_CONTROL_TYPE_ID, Condition)) then
+      Exit;
+    Document := nil;
+    if Failed(Root.FindFirst(TREE_SCOPE_DESCENDANTS, Condition, Document)) or (Document = nil) then
+      Exit;
+    if Failed(Document.GetCurrentPattern(UIA_TEXT_PATTERN_ID, PatternObject)) or
+       (PatternObject = nil) or not Supports(PatternObject, ILSUIAutomationTextPattern, TextPattern) then
+      Exit;
+    if Failed(TextPattern.GetSelection(Ranges)) or (Ranges = nil) or
+       Failed(Ranges.GetLength(Count)) then
+      Exit;
+    // Several ranges (a selection over table cells): one text.
+    for I := 0 to Count - 1 do
+      if Succeeded(Ranges.GetElement(I, Range)) and (Range <> nil) and
+         Succeeded(Range.GetText(MAX_UIA_SELECTION_LENGTH, Part)) and (Part <> '') then
+      begin
+        if Text <> '' then
+          Text := Text + sLineBreak;
+        Text := Text + Part;
+      end;
+    Result := Trim(Text) <> '';
+  except
+    Result := False;
+    Text := '';
+  end;
+end;
 
 function QueryUIAutomationFocus: TUIAFocusInfo;
 var
