@@ -263,21 +263,29 @@ procedure TReadAloudTests.TechnicalText;
   end;
 
 begin
-  Assert.AreEqual('Откройте файл uMain точка pas.', N('Откройте C:\work\LayoutSwitcher\uMain.pas.'));
-  Assert.AreEqual('файл Button точка tsx', N('src/components/Button.tsx'));
-  Assert.AreEqual('файл main точка ts', N('./src/app/main.ts'));
-  Assert.AreEqual('(uMain точка pas, строка 3747)', N('(uMain.pas:3747)'));
-  Assert.AreEqual('uMain точка pas, строка 12', N('uMain.pas:12:5'));
-  Assert.AreEqual('В папка _speech лежит', N('В D:\work\_speech\ лежит'));
-  Assert.AreEqual('См. ссылка на github.com, там всё.', N('См. https://github.com/k2-fsa/sherpa-onnx/releases/download/x.tar.bz2, там всё.'));
-  Assert.AreEqual('ссылка на example.org', N('www.example.org/page'));
+  // Paths, file names, links, sites: skipped with what they leave.
+  Assert.AreEqual('Откройте файл.', N('Откройте файл C:\work\LayoutSwitcher\uMain.pas.'));
+  Assert.AreEqual('', N('src/components/Button.tsx'));
+  Assert.AreEqual('', N('- ./src/app/main.ts'));
+  Assert.AreEqual('Ошибка здесь.', N('Ошибка здесь (uMain.pas:3747).'));
+  Assert.AreEqual('Изменены и тесты.', N('Изменены uMain.pas, uReadAloud.pas, README.md и тесты.'));
+  Assert.AreEqual('В лежит', N('В D:\work\_speech\ лежит'));
+  Assert.AreEqual('См. там всё.', N('См. https://github.com/k2-fsa/sherpa-onnx/releases/download/x.tar.bz2, там всё.'));
+  Assert.AreEqual('', N('www.example.org/page'));
+  Assert.AreEqual('Источник: документация.', N('Источник: learn.microsoft.com/ru-ru/windows/win32/api документация.'));
+  Assert.AreEqual('Поиск дал ответ.', N('Поиск https://www.google.com/search?q=delphi+uia&hl=ru дал ответ.'));
+  Assert.AreEqual('Пишите.', N('Пишите user@mail.ru.'));
+  Assert.AreEqual('Смотрите [документацию].', N('Смотрите [документацию](https://example.com/a_(b)).'));
+  Assert.AreEqual('Первая'#13#10#13#10'Вторая', N('Первая'#13#10'docs.github.com'#13#10'Вторая'));
+  // Program names and abbreviations are not files.
+  Assert.AreEqual('Node.js и ASP.NET, т.е. e.g. done.Now', N('Node.js и ASP.NET, т.е. e.g. done.Now'));
   Assert.AreEqual('Сумма хеш верна', N('Сумма 1d2414ac8921f718ba3188782f80475f525a3d82 верна'));
   Assert.AreEqual('идентификатор', N('{FF48DBA4-60EF-4201-AA87-54103EEF594E}'));
   Assert.AreEqual('read aloud и Read Aloud Voice Ru', N('read_aloud и ReadAloudVoiceRu'));
   // Ordinary text stays.
   Assert.AreEqual('и/или 60 км/ч, 12/05, версия 2.5.0, iPhone.', N('и/или 60 км/ч, 12/05, версия 2.5.0, iPhone.'));
   Assert.AreEqual('Привет, мир! Это обычный текст.', N('Привет, мир! Это обычный текст.'));
-  Assert.AreEqual('file main dot ts, line 7', NormalizeTechText('src/main.ts:7', False));
+  Assert.AreEqual('See for details.', NormalizeTechText('See src/main.ts:7 for details.', False));
 end;
 
 initialization

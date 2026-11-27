@@ -85,10 +85,12 @@ function ReadAloudSpeedIndex(Value: Integer): Integer;
 function PrepareNeuralText(const Text: string; Russian: Boolean): TArray<string>;
 // The installed neural voice of a language, -1 if none.
 function InstalledNeuralVoiceFor(Language: Word): Integer;
-// Paths, links, hashes and identifiers the short way: "C:\work\uMain.pas"
-// - "файл uMain точка pas", "https://github.com/..." - "ссылка на
-// github.com", "uMain.pas:120" - "uMain точка pas, строка 120",
-// "read_aloud" - "read aloud".  Russian or English words by Russian.
+// Technical tokens for the ear: paths, file names, links, site addresses and
+// e-mail addresses are skipped ("C:\work\uMain.pas", "uMain.pas:120",
+// "https://github.com/...", "learn.microsoft.com/..."), a hash is "хеш", a
+// GUID "идентификатор", "read_aloud" - "read aloud".  Punctuation left
+// hanging (empty brackets, a comma before a comma) goes with them; a line
+// with nothing left is empty.  Russian or English words by Russian.
 function NormalizeTechText(const Text: string; Russian: Boolean): string;
 // A paragraph cut where the alphabet changes: Cyrillic is Russian, Latin is
 // English.  In a mostly Russian sentence a Latin insert shorter than
@@ -116,7 +118,7 @@ implementation
 
 uses
   Winapi.Windows, Winapi.ActiveX, System.Win.ComObj,
-  System.Character, uLocale;
+  System.Character, System.StrUtils, uLocale;
 
 const
   SVSF_ASYNC = 1;
@@ -547,6 +549,13 @@ end;
 // tokens; punctuation around a token (brackets, quotes, a final comma or
 // full stop) stays where it is.
 function NormalizeTechText(const Text: string; Russian: Boolean): string;
+const
+  // Program names, not files or sites.
+  PROGRAM_NAMES: array[0..10] of string = ('Node.js', 'Vue.js', 'Next.js', 'Nuxt.js',
+    'Three.js', 'D3.js', 'Express.js', 'Chart.js', 'Ember.js', 'Socket.io', 'ASP.NET');
+var
+  // A token of the current line was skipped: the line needs tidying.
+  Removed: Boolean;
 
   function W(const Ru, En: string): string;
   begin
@@ -566,13 +575,13 @@ function NormalizeTechText(const Text: string; Russian: Boolean): string;
         Exit(False);
   end;
 
-  function IsLatinWord(const S: string): Boolean;
+  function IsLowerExtension(const S: string): Boolean;
   var
     Ch: Char;
   begin
     Result := S <> '';
     for Ch in S do
-      if not CharInSet(Ch, ['a'..'z', 'A'..'Z']) then
+      if not CharInSet(Ch, ['a'..'z', '0'..'9']) then
         Exit(False);
   end;
 
@@ -594,13 +603,57 @@ function NormalizeTechText(const Text: string; Russian: Boolean): string;
   begin
     Result := '';
     Dot := LastDelimiter('.', Name);
-    if (Dot <= 1) or (Dot = Length(Name)) then
+    if (Dot <= 2) or (Dot = Length(Name)) then
       Exit;
     Base := Copy(Name, 1, Dot - 1);
     Ext := Copy(Name, Dot + 1, MaxInt);
-    if (Length(Ext) > 5) or not IsLatinWord(Ext) then
+    if (Length(Ext) > 5) or not CharInSet(Ext[1], ['a'..'z']) or not IsLowerExtension(Ext) then
       Exit;
-    Result := Base + W(' точка ', ' dot ') + Ext;
+    // Program names, not files.
+    if MatchText(Name, PROGRAM_NAMES) then
+      Exit;
+    Result := Base + '.' + Ext;
+  end;
+
+  // "github.com/k2-fsa", "learn.microsoft.com", "user@mail.ru": a site.
+  function IsWebAddress(const S: string): Boolean;
+  const
+    Domains: array[0..35] of string = ('com', 'org', 'net', 'ru', 'su', 'io', 'ai', 'dev',
+      'app', 'gov', 'edu', 'info', 'co', 'uk', 'de', 'fr', 'eu', 'us', 'me', 'tv', 'xyz',
+      'site', 'online', 'tech', 'by', 'kz', 'ua', 'jp', 'cn', 'biz', 'pro', 'ly', 'gg',
+      'so', 'to', 'cc');
+  var
+    Host, Lower: string;
+    Labels: TArray<string>;
+    I: Integer;
+    Ch: Char;
+  begin
+    Result := False;
+    if MatchText(S, PROGRAM_NAMES) then
+      Exit;
+    Host := S;
+    I := Pos('@', Host);
+    if I > 0 then
+      Host := Copy(Host, I + 1, MaxInt);
+    I := Pos('/', Host);
+    if I > 0 then
+      SetLength(Host, I - 1);
+    I := Pos(':', Host);
+    if I > 0 then
+      SetLength(Host, I - 1);
+    Lower := LowerCase(Host);
+    Labels := Lower.Split(['.']);
+    if Length(Labels) < 2 then
+      Exit;
+    for I := 0 to High(Labels) do
+    begin
+      if Labels[I] = '' then
+        Exit;
+      for Ch in Labels[I] do
+        if not CharInSet(Ch, ['a'..'z', '0'..'9', '-']) then
+          Exit;
+    end;
+    Result := MatchText(Labels[High(Labels)], Domains);
   end;
 
   // "file.pas:120" or "file.pas:120:5": the name and the line ('' if none).
@@ -633,13 +686,6 @@ function NormalizeTechText(const Text: string; Russian: Boolean): string;
     end;
   end;
 
-  function WithLine(const Spoken, Line: string): string;
-  begin
-    Result := Spoken;
-    if Line <> '' then
-      Result := Result + W(', строка ', ', line ') + Line;
-  end;
-
   function LooksLikePath(const S: string): Boolean;
   var
     Segments: TArray<string>;
@@ -668,28 +714,18 @@ function NormalizeTechText(const Text: string; Russian: Boolean): string;
 
   function Convert(const Token: string): string;
   var
-    Lower, Host, Name, Line, Last, Spoken, Clean: string;
-    Segments: TArray<string>;
+    Lower, Name, Line, Clean: string;
     I, Humps: Integer;
   begin
     Result := Token;
     Lower := LowerCase(Token);
-    // A link: its site.
+    // A link, a site, an e-mail address: skipped.
     if Lower.StartsWith('http://') or Lower.StartsWith('https://') or Lower.StartsWith('ftp://') or
-       Lower.StartsWith('www.') then
+       Lower.StartsWith('file://') or Lower.StartsWith('mailto:') or Lower.StartsWith('www.') or
+       IsWebAddress(Token) then
     begin
-      Host := Token;
-      if Pos('://', Host) > 0 then
-        Host := Copy(Host, Pos('://', Host) + 3, MaxInt);
-      I := Pos('/', Host);
-      if I > 0 then
-        SetLength(Host, I - 1);
-      I := Pos(':', Host);
-      if I > 0 then
-        SetLength(Host, I - 1);
-      if LowerCase(Host).StartsWith('www.') then
-        Delete(Host, 1, 4);
-      Exit(W('ссылка на ', 'link to ') + Host);
+      Removed := True;
+      Exit('');
     end;
     // {FF48DBA4-60EF-4201-AA87-54103EEF594E}
     Clean := Token;
@@ -705,33 +741,14 @@ function NormalizeTechText(const Text: string; Russian: Boolean): string;
     if (Length(Clean) >= 16) and IsHex(Clean) and (LastDelimiter('0123456789', Clean) > 0) and
        (LastDelimiter('abcdefABCDEF', Clean) > 0) then
       Exit(W('хеш', 'hash'));
-    // A path: the file or the folder at its end.
-    if LooksLikePath(Token) then
-    begin
-      Clean := StringReplace(Token, '\', '/', [rfReplaceAll]);
-      if Clean.EndsWith('/') then
-      begin
-        Segments := Clean.Split(['/'], TStringSplitOptions.ExcludeEmpty);
-        if Length(Segments) = 0 then
-          Exit;
-        Exit(W('папка ', 'folder ') + Segments[High(Segments)]);
-      end;
-      Segments := Clean.Split(['/'], TStringSplitOptions.ExcludeEmpty);
-      if Length(Segments) = 0 then
-        Exit;
-      SplitLine(Segments[High(Segments)], Last, Line);
-      Spoken := SpokenFileName(Last);
-      if Spoken = '' then
-        Exit(WithLine(W('папка ', 'folder ') + Last, Line));
-      Exit(WithLine(W('файл ', 'file ') + Spoken, Line));
-    end;
-    // A file name, maybe with a line: "uMain.pas:3747".
+    // A path, a file name (maybe with a line, "uMain.pas:3747"): skipped.
     SplitLine(Token, Name, Line);
-    if IsIdentifier(StringReplace(Name, '.', '', [rfReplaceAll])) and (Pos('.', Name) > 0) then
+    if LooksLikePath(Token) or
+       (IsIdentifier(StringReplace(StringReplace(Name, '.', '', [rfReplaceAll]), '-', '', [rfReplaceAll])) and
+        (SpokenFileName(Name) <> '')) then
     begin
-      Spoken := SpokenFileName(Name);
-      if Spoken <> '' then
-        Exit(WithLine(Spoken, Line));
+      Removed := True;
+      Exit('');
     end;
     // read_aloud - "read aloud"; ReadAloudVoiceRu - "Read Aloud Voice Ru".
     if IsIdentifier(Token) and (Pos('_', Token) > 1) and (Pos('_', Token) < Length(Token)) then
@@ -755,15 +772,94 @@ function NormalizeTechText(const Text: string; Russian: Boolean): string;
     end;
   end;
 
-const
-  // Not braces: a GUID keeps them for its check.
-  Leading = '([«"''`';
-  Trailing = ')]»"''`,;!?';
-var
-  I, Start, Stop, Core1, Core2: Integer;
-  B: TStringBuilder;
-  Token, Core: string;
-begin
+  // "[текст](https://...)" - "[текст]".
+  function DropLinkTargets(const S: string): string;
+  var
+    At, Depth, I: Integer;
+  begin
+    Result := S;
+    At := Pos('](', Result);
+    while At > 0 do
+    begin
+      Depth := 0;
+      I := At + 1;
+      while I <= Length(Result) do
+      begin
+        if Result[I] = '(' then
+          Inc(Depth)
+        else if Result[I] = ')' then
+        begin
+          Dec(Depth);
+          if Depth = 0 then
+            Break;
+        end;
+        Inc(I);
+      end;
+      if I > Length(Result) then
+        Break;
+      Delete(Result, At + 1, I - At);
+      Removed := True;
+      At := Pos('](', Result);
+    end;
+  end;
+
+  // What a skipped token leaves: double spaces, a space before a mark,
+  // empty brackets and quotes, a comma after a comma or an opening bracket.
+  function Tidy(const S: string): string;
+  const
+    Empty: array[0..6] of string = ('()', '[]', '«»', '""', '''''', '``', '{}');
+  var
+    Before: string;
+    E: string;
+    Ch: Char;
+    HasWord: Boolean;
+  begin
+    Result := S;
+    repeat
+      Before := Result;
+      Result := StringReplace(Result, '  ', ' ', [rfReplaceAll]);
+      for E in Empty do
+      begin
+        Result := StringReplace(Result, E, '', [rfReplaceAll]);
+        Result := StringReplace(Result, E[1] + ' ' + E[2], '', [rfReplaceAll]);
+      end;
+      Result := StringReplace(Result, ' ,', ',', [rfReplaceAll]);
+      Result := StringReplace(Result, ' .', '.', [rfReplaceAll]);
+      Result := StringReplace(Result, ' ;', ';', [rfReplaceAll]);
+      Result := StringReplace(Result, ' :', ':', [rfReplaceAll]);
+      Result := StringReplace(Result, ' )', ')', [rfReplaceAll]);
+      Result := StringReplace(Result, ',,', ',', [rfReplaceAll]);
+      Result := StringReplace(Result, ',.', '.', [rfReplaceAll]);
+      Result := StringReplace(Result, ':.', '.', [rfReplaceAll]);
+      Result := StringReplace(Result, ':,', ',', [rfReplaceAll]);
+      Result := StringReplace(Result, '(,', '(', [rfReplaceAll]);
+      Result := StringReplace(Result, '( ', '(', [rfReplaceAll]);
+    until Result = Before;
+    HasWord := False;
+    for Ch in Result do
+      if Ch.IsLetterOrDigit then
+      begin
+        HasWord := True;
+        Break;
+      end;
+    if not HasWord then
+      Exit('');
+    // A comma or a colon at the start of a line.
+    Result := TrimRight(Result);
+    while (Result <> '') and InChars(TrimLeft(Result)[1], ',;:.') do
+      Result := TrimLeft(Copy(TrimLeft(Result), 2, MaxInt));
+  end;
+
+  function NormalizeLine(const Text: string): string;
+  const
+    // Not braces: a GUID keeps them for its check.
+    Leading = '([«"''`<';
+    Trailing = ')]»"''`,;!?>';
+  var
+    I, Start, Stop, Core1, Core2: Integer;
+    B: TStringBuilder;
+    Token, Core, Spoken, Tail: string;
+  begin
   B := TStringBuilder.Create;
   try
     I := 1;
@@ -794,12 +890,42 @@ begin
       if Core = '' then
         B.Append(Token)
       else
-        B.Append(Copy(Token, 1, Core1 - 1)).Append(Convert(Core)).Append(Copy(Token, Core2 + 1, MaxInt));
+      begin
+        Spoken := Convert(Core);
+        Tail := Copy(Token, Core2 + 1, MaxInt);
+        // The comma of a skipped list item goes with it.
+        if Spoken = '' then
+          Tail := StringReplace(StringReplace(Tail, ',', '', [rfReplaceAll]), ';', '', [rfReplaceAll]);
+        B.Append(Copy(Token, 1, Core1 - 1)).Append(Spoken).Append(Tail);
+      end;
     end;
     Result := B.ToString;
   finally
     B.Free;
   end;
+  end;
+
+var
+  Lines: TArray<string>;
+  I: Integer;
+  Line: string;
+begin
+  Lines := Text.Split([#10]);
+  for I := 0 to High(Lines) do
+  begin
+    Removed := False;
+    Line := NormalizeLine(DropLinkTargets(Lines[I]));
+    if Removed then
+    begin
+      // Keep a CR of a CRLF line.
+      if Line.EndsWith(#13) then
+        Line := Tidy(Copy(Line, 1, Length(Line) - 1)) + #13
+      else
+        Line := Tidy(Line);
+    end;
+    Lines[I] := Line;
+  end;
+  Result := string.Join(#10, Lines);
 end;
 
 function InstalledNeuralVoiceFor(Language: Word): Integer;
