@@ -97,6 +97,8 @@ type
     // The radial menu of the middle mouse button: RADIAL_* in uMouseHook
     // (0 off, 1 hold, 2 click, 3 Ctrl + click).
     RadialMenuMode: Integer;
+    // Three fingers held on a precision touchpad open the radial menu.
+    TouchpadRadialMenu: Boolean;
     AutoSwitchExceptions: TArray<string>;
     // Programs where only the manual actions work (code editors, terminals).
     NoAutoCorrectProcesses: TArray<string>;
@@ -251,6 +253,7 @@ const
   VALUE_READ_ALOUD_SPEED = 'ReadAloudSpeed';
   VALUE_READ_ALOUD_RESULTS = 'ReadAloudResults';
   VALUE_RADIAL_MENU_MODE = 'RadialMenuMode';
+  VALUE_TOUCHPAD_RADIAL_MENU = 'TouchpadRadialMenu';
   VALUE_CUSTOM_PROGRAMS = 'CustomPrograms';
   VALUE_AUTO_SWITCH_EXCEPTIONS = 'AutoSwitchExceptions';
   VALUE_NO_AUTOCORRECT = 'NoAutoCorrectProcesses';
@@ -336,6 +339,7 @@ begin
   Result.ReadAloudSpeed := 1;
   Result.ReadAloudResults := True;
   Result.RadialMenuMode := 1;
+  Result.TouchpadRadialMenu := True;
 end;
 
 function ActionName(Action: TLSAction): string;
@@ -711,6 +715,8 @@ begin
     Result.RadialMenuMode := Store.ReadInteger(VALUE_RADIAL_MENU_MODE, Result.RadialMenuMode);
     if (Result.RadialMenuMode < 0) or (Result.RadialMenuMode > 3) then
       Result.RadialMenuMode := 1;
+    Result.TouchpadRadialMenu := Store.ReadBool(VALUE_TOUCHPAD_RADIAL_MENU,
+      Result.TouchpadRadialMenu);
     Result.CustomPrograms := ParseProcessList(Store.ReadString(VALUE_CUSTOM_PROGRAMS, ''));
     if Store.ValueExists(VALUE_AUTO_SWITCH_EXCEPTIONS) then
       Result.AutoSwitchExceptions := ParseWordList(
@@ -790,6 +796,7 @@ begin
     Store.WriteInteger(VALUE_READ_ALOUD_SPEED, Settings.ReadAloudSpeed);
     Store.WriteBool(VALUE_READ_ALOUD_RESULTS, Settings.ReadAloudResults);
     Store.WriteInteger(VALUE_RADIAL_MENU_MODE, Settings.RadialMenuMode);
+    Store.WriteBool(VALUE_TOUCHPAD_RADIAL_MENU, Settings.TouchpadRadialMenu);
     Store.WriteString(VALUE_CUSTOM_PROGRAMS, ProcessListToText(Settings.CustomPrograms));
     Store.WriteString(VALUE_AUTO_SWITCH_EXCEPTIONS,
       string.Join('; ', Settings.AutoSwitchExceptions));

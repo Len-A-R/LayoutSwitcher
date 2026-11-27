@@ -14,7 +14,7 @@ uses
   uSettings, uGestureDetector, uOperationWorker, uConversionChain,
   uLayoutIndicator, uUpdateCheck, uUpdateProgress, uLayoutConverter, uTextTools, uTranslate,
   uDictation, uDictationPage, uAiText, uReadAloud, uVoicePage, uWindowWatch, uMouseHook,
-  uRadialMenu;
+  uRadialMenu, uTouchpad;
 
 const
   INSTANCE_WINDOW_PROP = 'LayoutSwitcher.Instance.v2';
@@ -299,6 +299,9 @@ type
     // The radial menu of the middle mouse button.
     FMouseHook: TMouseHookThread;
     FRadial: TRadialMenu;
+    // Three fingers held on the touchpad: the radial menu.
+    FTouchpad: TTouchpadReader;
+    chkTouchpadRadial: TCheckBox;
     // The running action comes from the radial menu, not from a key
     // gesture (no Scroll Lock press to undo).
     FActionFromMenu: Boolean;
@@ -472,6 +475,8 @@ type
     procedure ForegroundChanged(Wnd: HWND);
     procedure CreateRadialControls;
     procedure RadialModeChange(Sender: TObject);
+    procedure TouchpadRadialClick(Sender: TObject);
+    procedure TouchpadHold(Sender: TObject);
     procedure UpdateMouseHook;
     procedure UpdateRadialAllowed(Wnd: HWND);
     function RadialItems: TArray<TRadialItem>;
@@ -722,6 +727,15 @@ begin
   else
     DiagnosticsLog('raw_input.registered keyboard=true mouse=true');
 
+  // The radial menu from the start, not only after a change of settings:
+  // the hook of the middle button and the touchpad.
+  RadialMode := FSettings.RadialMenuMode;
+  UpdateMouseHook;
+  UpdateRadialAllowed(GetForegroundWindow);
+  DiagnosticsLogFmt('radial.ready mode=%d touchpad=%s hook=%s',
+    [FSettings.RadialMenuMode, BoolToStr(FTouchpad.Active, True),
+     BoolToStr(FMouseHook <> nil, True)]);
+
   // Lock/unlock notifications: key releases on the secure desktop are lost.
   if not LSWTSRegisterSessionNotification(Handle, NOTIFY_FOR_THIS_SESSION) then
     DiagnosticsLogFmt('session.notification_register_failed error=%d', [GetLastError]);
@@ -741,6 +755,7 @@ begin
   DiagnosticsLog('form.destroy begin');
   if FForegroundHook <> 0 then
     UnhookWinEvent(FForegroundHook);
+  FreeAndNil(FTouchpad);
   if FMouseHook <> nil then
   begin
     FMouseHook.Stop;
@@ -1912,6 +1927,8 @@ begin
     chkPauseFullscreen.Checked := FSettings.PauseInFullscreen;
     if cbRadial <> nil then
       cbRadial.ItemIndex := FSettings.RadialMenuMode;
+    if chkTouchpadRadial <> nil then
+      chkTouchpadRadial.Checked := FSettings.TouchpadRadialMenu;
     chkNotifications.Checked := FSettings.ShowNotifications;
     chkDisableStickyKeys.Checked := FSettings.DisableStickyKeysHotkey;
     chkLayoutIndicator.Checked := FSettings.ShowLayoutIndicator;
@@ -2777,6 +2794,13 @@ begin
         'колёсиком работает как обычно.', 'Hold the wheel, point at a command and release. A short ' +
         'wheel click works as usual.');
       cbRadial.ShowHint := True;
+      chkTouchpadRadial.Caption := T('Удержание тремя пальцами на сенсорной панели открывает меню',
+        'Holding three fingers on the touchpad opens the menu');
+      chkTouchpadRadial.Hint := T('Положите три пальца на сенсорную панель и подержите, не двигая. ' +
+        'Затем подведите указатель к команде одним пальцем и коснитесь панели.',
+        'Put three fingers on the touchpad and hold them still. Then move the pointer to a ' +
+        'command with one finger and tap.');
+      chkTouchpadRadial.ShowHint := True;
     end;
     tsHotkeys.Caption := T('Сочетания', 'Shortcuts');
     tsLayout.Caption := T('Раскладка', 'Layout');
@@ -3837,6 +3861,35 @@ begin
   cbRadial.Style := csDropDownList;
   cbRadial.SetBounds(S(240), S(326), S(252), S(21));
   cbRadial.OnChange := RadialModeChange;
+  chkTouchpadRadial := TCheckBox.Create(Self);
+  chkTouchpadRadial.Parent := tsGeneral;
+  chkTouchpadRadial.SetBounds(S(12), S(356), S(480), S(17));
+  chkTouchpadRadial.OnClick := TouchpadRadialClick;
+  FTouchpad := TTouchpadReader.Create;
+  FTouchpad.OnHold := TouchpadHold;
+end;
+
+procedure TFormMain.TouchpadRadialClick(Sender: TObject);
+begin
+  if FUpdatingControls then
+    Exit;
+  FSettings.TouchpadRadialMenu := chkTouchpadRadial.Checked;
+  ApplySettings;
+end;
+
+procedure TFormMain.TouchpadHold(Sender: TObject);
+var
+  P: TPoint;
+begin
+  if FPaused or not RadialAllowed or (FRadial = nil) or FRadial.Shown or (FMouseHook = nil) then
+    Exit;
+  // At the pointer, open until a tap (a left click) on a command or
+  // anywhere else; the hook gives the clicks to the menu.
+  GetCursorPos(P);
+  RadialMenuOpen := True;
+  FRadial.Popup(RadialItems, P, 'LayoutSwitcher',
+    T('Наведите и коснитесь · мимо — закрыть', 'Point and tap · elsewhere closes'));
+  DiagnosticsLog('radial.open source=touchpad');
 end;
 
 procedure TFormMain.RadialModeChange(Sender: TObject);
@@ -3848,16 +3901,23 @@ begin
 end;
 
 procedure TFormMain.UpdateMouseHook;
+var
+  Wanted: Boolean;
 begin
-  // The hook only while the menu is on: every mouse event passes it.
-  if (FSettings.RadialMenuMode <> RADIAL_OFF) and (FMouseHook = nil) then
+  // The hook only while the menu is on: every mouse event passes it.  The
+  // touchpad menu needs it too (the taps choose the command); with the
+  // wheel off the middle button passes it untouched.
+  Wanted := (FSettings.RadialMenuMode <> RADIAL_OFF) or FSettings.TouchpadRadialMenu;
+  if Wanted and (FMouseHook = nil) then
     FMouseHook := TMouseHookThread.Create(Handle, WM_LS_RADIAL)
-  else if (FSettings.RadialMenuMode = RADIAL_OFF) and (FMouseHook <> nil) then
+  else if not Wanted and (FMouseHook <> nil) then
   begin
     FMouseHook.Stop;
     FreeAndNil(FMouseHook);
     CloseRadial;
   end;
+  if FTouchpad <> nil then
+    FTouchpad.Active := FSettings.TouchpadRadialMenu;
 end;
 
 procedure TFormMain.UpdateRadialAllowed(Wnd: HWND);
@@ -3866,9 +3926,11 @@ var
 begin
   // Paused, an excluded program, an administrator window (the replayed
   // click would not reach it) or a full-screen game: the wheel is theirs.
-  if FPaused or (FSettings.RadialMenuMode = RADIAL_OFF) or (Wnd = 0) then
+  if FPaused or ((FSettings.RadialMenuMode = RADIAL_OFF) and not FSettings.TouchpadRadialMenu) or
+     (Wnd = 0) then
   begin
-    RadialAllowed := not FPaused and (FSettings.RadialMenuMode <> RADIAL_OFF);
+    RadialAllowed := not FPaused and
+      ((FSettings.RadialMenuMode <> RADIAL_OFF) or FSettings.TouchpadRadialMenu);
     Exit;
   end;
   ProcessName := GetWindowProcessFileName(Wnd);

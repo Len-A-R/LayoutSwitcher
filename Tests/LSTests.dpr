@@ -28,7 +28,8 @@ uses
   TestAiText in 'TestAiText.pas',
   TestReadAloud in 'TestReadAloud.pas',
   TestWindowWatch in 'TestWindowWatch.pas',
-  TestRadial in 'TestRadial.pas';
+  TestRadial in 'TestRadial.pas',
+  uTouchpad in '..\uTouchpad.pas';
 
 var
   Runner: ITestRunner;

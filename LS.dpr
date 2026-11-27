@@ -43,6 +43,7 @@ uses
   uVoicePage in 'uVoicePage.pas',
   uWindowWatch in 'uWindowWatch.pas',
   uMouseHook in 'uMouseHook.pas',
+  uTouchpad in 'uTouchpad.pas',
   uRadialMenu in 'uRadialMenu.pas',
   uDictationPage in 'uDictationPage.pas',
   uOperationWorker in 'uOperationWorker.pas',
