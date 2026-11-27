@@ -82,6 +82,7 @@ begin
   Assert.AreEqual(Ord(lgAltScrollLock), Ord(S.GestureForAction(laReadAloud)));
   Assert.AreEqual('read_aloud', ActionKeys[laReadAloud]);
   Assert.AreEqual(1, S.ReadAloudSpeed);
+  Assert.IsTrue(S.ReadAloudResults);
   // Settings of 2.5 (version 8) get the new gesture...
   G := S.ActionGestures;
   G[laReadAloud] := lgNone;
@@ -102,11 +103,13 @@ begin
     S.ReadAloudVoiceRu := 'piper:ru-ruslan';
     S.ReadAloudVoiceEn := 'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Speech\Voices\Tokens\X';
     S.ReadAloudSpeed := 3;
+    S.ReadAloudResults := False;
     Assert.IsTrue(ExportSettings(S, FileName, False));
     Assert.IsTrue(ImportSettings(FileName, Loaded, Diagnostics));
     Assert.AreEqual(S.ReadAloudVoiceRu, Loaded.ReadAloudVoiceRu);
     Assert.AreEqual(S.ReadAloudVoiceEn, Loaded.ReadAloudVoiceEn);
     Assert.AreEqual(3, Loaded.ReadAloudSpeed);
+    Assert.IsFalse(Loaded.ReadAloudResults);
   finally
     System.SysUtils.DeleteFile(FileName);
   end;

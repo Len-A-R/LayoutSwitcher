@@ -62,6 +62,8 @@ type
     procedure StartQuestion(const Text, Service: string);
     procedure ShowAnswer(const Answer: string; ElapsedMS: Cardinal);
     procedure ShowError(const Text: string);
+    // The answer without Markdown ('' while waiting or after an error).
+    property PlainAnswer: string read FPlainAnswer;
   end;
 
 implementation

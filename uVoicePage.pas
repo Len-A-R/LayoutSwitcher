@@ -55,6 +55,7 @@ type
     lblSpeed: TLabel;
     cbSpeed: TComboBox;
     btnListen: TButton;
+    cbResults: TCheckBox;
     function S(Value: Integer): Integer;
     function MakeLabel(X, Y, W, H: Integer; WordWrap: Boolean): TLabel;
     function MakeButton(X, Y, W: Integer; OnClick: TNotifyEvent): TButton;
@@ -150,6 +151,10 @@ begin
     cbSpeed.Items.Add(READ_ALOUD_SPEED_NAMES[I]);
   cbSpeed.OnChange := SpeedChange;
   btnListen := MakeButton(392, 324, 100, ListenClick);
+  cbResults := TCheckBox.Create(Self);
+  cbResults.Parent := FPage;
+  cbResults.SetBounds(S(12), S(360), S(480), S(17));
+  cbResults.OnClick := SpeedChange;
   ApplyLanguage;
 end;
 
@@ -270,6 +275,8 @@ begin
   cbLanguage.Items.Add(T('английском', 'English'));
   cbLanguage.ItemIndex := I;
   btnListen.Caption := T('Прослушать', 'Listen');
+  cbResults.Caption := T('Читать вслух ответ «Объяснить» и результат «Перевести»',
+    'Read aloud the answer of Explain and the result of Translate');
   btnDelete.Caption := T('Удалить', 'Delete');
   lbVoices.Invalidate;
   UpdateDetails;
@@ -285,6 +292,7 @@ begin
     FillItems;
     SelectVoice(CurrentVoice);
     cbSpeed.ItemIndex := ReadAloudSpeedIndex(Settings.ReadAloudSpeed);
+    cbResults.Checked := Settings.ReadAloudResults;
   finally
     FLoading := False;
   end;
@@ -317,6 +325,7 @@ begin
   Settings.ReadAloudVoiceEn := FVoiceEn;
   if cbSpeed.ItemIndex >= 0 then
     Settings.ReadAloudSpeed := cbSpeed.ItemIndex;
+  Settings.ReadAloudResults := cbResults.Checked;
 end;
 
 procedure TVoicePage.Changed;

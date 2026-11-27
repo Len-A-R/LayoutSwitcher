@@ -12,7 +12,7 @@ uses
   Vcl.Graphics, Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.ExtCtrls, Vcl.Menus,
   Vcl.StdCtrls, Vcl.ComCtrls, Vcl.Grids, uProgramList, uAiExplain, uExplainWindow, uModernUI,
   uSettings, uGestureDetector, uOperationWorker, uConversionChain,
-  uLayoutIndicator, uUpdateCheck, uUpdateProgress, uLayoutConverter, uTextTools,
+  uLayoutIndicator, uUpdateCheck, uUpdateProgress, uLayoutConverter, uTextTools, uTranslate,
   uDictation, uDictationPage, uAiText, uReadAloud, uVoicePage, uWindowWatch, uMouseHook,
   uRadialMenu;
 
@@ -319,6 +319,10 @@ type
     FReadAloud: TReadAloud;
     FReadAloudTimer: TTimer;
     FReadAloudActive: Boolean;
+    // What is read: the answer in the explain window (closing it stops).
+    FReadAloudExplain: Boolean;
+    // A newer translation makes a translation still on its way obsolete.
+    FSpeakTranslationSequence: Cardinal;
     FReadAloudStarted: Cardinal;
     // Alt+Scroll Lock toggled the Scroll Lock light: switched back when
     // Scroll Lock is released.
@@ -425,6 +429,8 @@ type
     procedure ApplyAiFromEdit;
     procedure StartExplain(const Text: string);
     procedure ExplainDone(Sender: TObject);
+    procedure ExplainHidden(Sender: TObject);
+    procedure SpeakTranslation(const Text: string);
     procedure SyncAutorunPath;
     procedure UpdateAutorunControls;
     procedure ShowSettingsWindow;
@@ -1489,8 +1495,12 @@ begin
       else if Res.Success then
       begin
         if Res.Action = laTranslate then
+        begin
           ShellExecute(0, 'open', PChar(BuildTranslateUrl(FSettings.Translator,
-            Res.LookupText)), nil, nil, SW_SHOWNORMAL)
+            Res.LookupText)), nil, nil, SW_SHOWNORMAL);
+          if FSettings.ReadAloudResults then
+            SpeakTranslation(Res.LookupText);
+        end
         else
           ShellExecute(0, 'open', PChar(BuildSearchUrl(FSettings.SearchEngine,
             Res.LookupText)), nil, nil, SW_SHOWNORMAL);
@@ -4164,6 +4174,7 @@ begin
   end;
   DiagnosticsLogFmt('read_aloud.start length=%d', [Length(Text)]);
   FReadAloudActive := True;
+  FReadAloudExplain := False;
   FReadAloudStarted := GetTickCount;
   Gesture := FSettings.GestureForAction(laReadAloud);
   if Gesture <> lgNone then
@@ -4634,7 +4645,13 @@ begin
   if not EnsureAiConsent then
     Exit;
   if FExplainWindow = nil then
+  begin
     FExplainWindow := TExplainWindow.Create(Self);
+    FExplainWindow.OnHide := ExplainHidden;
+  end;
+  // The previous answer is not read over the new question.
+  if FReadAloudActive and FReadAloudExplain then
+    StopReadAloud('new_question');
   FExplainWindow.StartQuestion(Text, Service + ' · ' + EffectiveAiModel(Config));
   Inc(FExplainSequence);
   if FExplainSequence = 0 then
@@ -4661,9 +4678,59 @@ begin
      not FExplainWindow.Visible then
     Exit;
   if Thread.Success then
-    FExplainWindow.ShowAnswer(Thread.Answer, Thread.ElapsedMS)
+  begin
+    FExplainWindow.ShowAnswer(Thread.Answer, Thread.ElapsedMS);
+    if FSettings.ReadAloudResults and (Trim(FExplainWindow.PlainAnswer) <> '') then
+    begin
+      StartReadAloud(FExplainWindow.PlainAnswer);
+      FReadAloudExplain := FReadAloudActive;
+    end;
+  end
   else
     FExplainWindow.ShowError(Thread.ErrorText);
+end;
+
+procedure TFormMain.ExplainHidden(Sender: TObject);
+begin
+  // The window closed (Esc, the button): its answer is not read any more.
+  if FReadAloudActive and FReadAloudExplain then
+    StopReadAloud('explain_closed');
+end;
+
+procedure TFormMain.SpeakTranslation(const Text: string);
+var
+  Sequence: Cardinal;
+  Key: string;
+begin
+  // The browser shows the translation; the voice reads it from the same
+  // translator as "Replace text with translation" (DeepL with a key,
+  // otherwise Google).  Only the length and the outcome are logged.
+  Inc(FSpeakTranslationSequence);
+  Sequence := FSpeakTranslationSequence;
+  Key := FSettings.DeepLApiKey;
+  TThread.CreateAnonymousThread(
+    procedure
+    var
+      Translated, Service, Error, Target: string;
+      Ok: Boolean;
+      Started: DWORD;
+    begin
+      Target := ChooseTranslationTarget(Text);
+      Started := GetTickCount;
+      Ok := TranslateOnline(Text, Target, Key, Translated, Service, Error);
+      TThread.Queue(nil,
+        procedure
+        begin
+          DiagnosticsLogFmt('translate.speak service=%s target=%s length=%d ms=%d ok=%s error=%s',
+            [Service, Target, Length(Text), GetTickCount - Started, BoolToStr(Ok, True), Error]);
+          if (Sequence <> FSpeakTranslationSequence) or not Ok or (Trim(Translated) = '') then
+            Exit;
+          // Reading something else (the gesture, a watched window): it goes on.
+          if FReadAloudActive then
+            Exit;
+          StartReadAloud(Translated);
+        end);
+    end).Start;
 end;
 
 procedure TFormMain.cbServiceChange(Sender: TObject);

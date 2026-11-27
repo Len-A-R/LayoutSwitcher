@@ -92,6 +92,8 @@ type
     ReadAloudVoiceRu: string;
     ReadAloudVoiceEn: string;
     ReadAloudSpeed: Integer;
+    // The answer of "Explain" and the translation of "Translate" read aloud.
+    ReadAloudResults: Boolean;
     // The radial menu of the middle mouse button: RADIAL_* in uMouseHook
     // (0 off, 1 hold, 2 click, 3 Ctrl + click).
     RadialMenuMode: Integer;
@@ -247,6 +249,7 @@ const
   VALUE_READ_ALOUD_VOICE_RU = 'ReadAloudVoiceRu';
   VALUE_READ_ALOUD_VOICE_EN = 'ReadAloudVoiceEn';
   VALUE_READ_ALOUD_SPEED = 'ReadAloudSpeed';
+  VALUE_READ_ALOUD_RESULTS = 'ReadAloudResults';
   VALUE_RADIAL_MENU_MODE = 'RadialMenuMode';
   VALUE_CUSTOM_PROGRAMS = 'CustomPrograms';
   VALUE_AUTO_SWITCH_EXCEPTIONS = 'AutoSwitchExceptions';
@@ -331,6 +334,7 @@ begin
   Result.ReadAloudVoiceRu := '';
   Result.ReadAloudVoiceEn := '';
   Result.ReadAloudSpeed := 1;
+  Result.ReadAloudResults := True;
   Result.RadialMenuMode := 1;
 end;
 
@@ -703,6 +707,7 @@ begin
     Result.ReadAloudSpeed := Store.ReadInteger(VALUE_READ_ALOUD_SPEED, 1);
     if (Result.ReadAloudSpeed < 0) or (Result.ReadAloudSpeed > 4) then
       Result.ReadAloudSpeed := 1;
+    Result.ReadAloudResults := Store.ReadBool(VALUE_READ_ALOUD_RESULTS, Result.ReadAloudResults);
     Result.RadialMenuMode := Store.ReadInteger(VALUE_RADIAL_MENU_MODE, Result.RadialMenuMode);
     if (Result.RadialMenuMode < 0) or (Result.RadialMenuMode > 3) then
       Result.RadialMenuMode := 1;
@@ -783,6 +788,7 @@ begin
     Store.WriteString(VALUE_READ_ALOUD_VOICE_RU, Settings.ReadAloudVoiceRu);
     Store.WriteString(VALUE_READ_ALOUD_VOICE_EN, Settings.ReadAloudVoiceEn);
     Store.WriteInteger(VALUE_READ_ALOUD_SPEED, Settings.ReadAloudSpeed);
+    Store.WriteBool(VALUE_READ_ALOUD_RESULTS, Settings.ReadAloudResults);
     Store.WriteInteger(VALUE_RADIAL_MENU_MODE, Settings.RadialMenuMode);
     Store.WriteString(VALUE_CUSTOM_PROGRAMS, ProcessListToText(Settings.CustomPrograms));
     Store.WriteString(VALUE_AUTO_SWITCH_EXCEPTIONS,
