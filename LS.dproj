@@ -73,9 +73,9 @@
         <UWP_DelphiLogo150>$(BDS)\bin\Artwork\Windows\UWP\delphi_UwpDefault_150.png</UWP_DelphiLogo150>
         <SanitizedProjectName>LS</SanitizedProjectName>
         <VerInfo_Locale>1049</VerInfo_Locale>
-        <VerInfo_Keys>CompanyName=Len-A-R Soft;FileDescription=LayoutSwitcher;FileVersion=2.5.0.0;InternalName=LayoutSwitcher;LegalCopyright=Copyright (c) 2026 Len-A-R, MIT License;LegalTrademarks=;OriginalFilename=LS.exe;ProgramID=com.embarcadero.$(MSBuildProjectName);ProductName=LayoutSwitcher;ProductVersion=2.5.0.0;Comments=LayoutSwitcher</VerInfo_Keys>
+        <VerInfo_Keys>CompanyName=Len-A-R Soft;FileDescription=LayoutSwitcher;FileVersion=2.6.0.0;InternalName=LayoutSwitcher;LegalCopyright=Copyright (c) 2026 Len-A-R, MIT License;LegalTrademarks=;OriginalFilename=LS.exe;ProgramID=com.embarcadero.$(MSBuildProjectName);ProductName=LayoutSwitcher;ProductVersion=2.6.0.0;Comments=LayoutSwitcher</VerInfo_Keys>
         <VerInfo_MajorVer>2</VerInfo_MajorVer>
-        <VerInfo_MinorVer>5</VerInfo_MinorVer>
+        <VerInfo_MinorVer>6</VerInfo_MinorVer>
         <VerInfo_Release>0</VerInfo_Release>
         <VerInfo_Build>0</VerInfo_Build>
         <VerInfo_IncludeVerInfo>true</VerInfo_IncludeVerInfo>
